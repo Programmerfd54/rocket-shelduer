@@ -1,0 +1,452 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  username  String?  @unique
+  password  String
+  name      String?
+  role      Role     @default(USER)
+  isActive  Boolean  @default(true)
+  theme       String?   @default("system")
+  lastLoginAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // SUPER: ограничения по функциям (ключи: sendAs, activityView, ...)
+  restrictedFeatures String[] @default([])
+
+  // VOL: период доступа и блокировка
+  volunteerExpiresAt DateTime?
+  volunteerIntensive String?   // e.g. "feb-26", "mar-26"
+  isBlocked         Boolean  @default(false)
+  blockedAt         DateTime?
+  blockedReason     String?  @db.Text
+  blockedById       String?
+
+  workspaces               WorkspaceConnection[]
+  scheduledMessages        ScheduledMessage[]
+  scheduledByMessages     ScheduledMessage[]     @relation("ScheduledByUser")
+  assignedWorkspaces        WorkspaceAdminAssignment[] @relation("AssignedWorkspaceUser")
+  assignedByWorkspaces      WorkspaceAdminAssignment[] @relation("AssignedByUser")
+  officialTemplateOverrides OfficialTemplateOverride[]
+  blockedChannels           BlockedChannel[]
+  favoriteChannels          FavoriteChannel[]
+  activityLogs      ActivityLog[]
+  workspaceGroups   WorkspaceGroup[]
+  adminNotesAbout   AdminNote[]         @relation("AdminNoteTarget")
+  adminNotesWritten AdminNote[]         @relation("AdminNoteAuthor")
+  workspaceActions  WorkspaceActionLog[]
+  userTemplates     UserTemplate[]
+  inviteTokensCreated InviteToken[]     @relation("InviteTokenCreator")
+  avatarUrl         String?             // URL или путь к фото пользователя
+  sessionDurationMinutes Int?           // Длительность сессии в минутах (null = 7 дней). После истечения нужна повторная авторизация.
+  sessions          Session[]
+}
+
+// Сессии пользователя: одна запись на каждое устройство/вход. Используется для списка активных сессий и «Выйти на всех».
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  userAgent String?  @db.Text
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+enum Role {
+  USER    // обычный пользователь (по умолчанию)
+  SUPPORT // Support — полный доступ
+  ADMIN   // Admin — все права, настройки для SUPPORT/ADM, видит кто от кого отправляет, может ограничивать функции
+  ADM     // Administrator — без истории и админки, без импорта эмодзи/добавления пользователей в пространствах
+  VOL     // Volunteer — только 1 пространство по префиксу, период доступа, без удаления/редактирования пространства
+}
+
+// Приглашение на регистрацию: SUPPORT/ADMIN генерируют ссылку с ролью, активна 1 час
+model InviteToken {
+  id          String   @id @default(cuid())
+  token       String   @unique
+  createdById String
+  role        Role     @default(USER)
+  email       String?  // опционально: для кого приглашение (подсказка на странице регистрации)
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+
+  createdBy   User     @relation("InviteTokenCreator", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@index([expiresAt])
+}
+
+model WorkspaceGroup {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  color     String   @default("#ef4444")
+  icon      String?
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user       User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspaces WorkspaceInGroup[]
+
+  @@unique([userId, name])
+}
+
+model WorkspaceInGroup {
+  id          String   @id @default(cuid())
+  groupId     String
+  workspaceId String
+  order       Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  group     WorkspaceGroup      @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  workspace WorkspaceConnection @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, workspaceId])
+}
+
+model WorkspaceConnection {
+  id                String    @id @default(cuid())
+  userId            String
+  workspaceName     String
+  workspaceUrl      String
+  username          String
+  encryptedPassword String
+  has2FA            Boolean   @default(false)
+  authToken         String?
+  userId_RC         String?
+  isActive          Boolean   @default(true)
+  lastConnected     DateTime?
+  color             String?   @default("#ef4444")
+
+  // NEW: Даты интенсива
+  startDate DateTime? // Дата начала интенсива
+  endDate   DateTime? // Дата окончания интенсива
+
+  // NEW: Архивирование
+  isArchived      Boolean   @default(false)
+  archivedAt      DateTime? // Когда заархивирован
+  archiveDeleteAt DateTime? // Когда удалить (через 2 недели после архивации)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user              User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  scheduledMessages ScheduledMessage[]
+  groups            WorkspaceInGroup[]
+  addedUsers        WorkspaceAddedUser[]
+  favoriteChannels  FavoriteChannel[]
+  actionLogs        WorkspaceActionLog[]
+  adminAssignments  WorkspaceAdminAssignment[]
+
+  @@unique([userId, workspaceUrl])
+  @@index([isArchived, archiveDeleteAt])
+}
+
+// Назначение пространства администратору (ADM): SUP/SUPER может «привязать» ADM к чужому пространству
+model WorkspaceAdminAssignment {
+  id           String   @id @default(cuid())
+  userId       String   // ADM, которому назначено пространство
+  workspaceId  String
+  assignedById String  // SUP или SUPER
+  createdAt    DateTime @default(now())
+
+  user        User                 @relation("AssignedWorkspaceUser", fields: [userId], references: [id], onDelete: Cascade)
+  workspace   WorkspaceConnection   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  assignedBy  User                 @relation("AssignedByUser", fields: [assignedById], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId])
+  @@index([userId])
+  @@index([workspaceId])
+}
+
+model WorkspaceActionLog {
+  id          String   @id @default(cuid())
+  workspaceId String
+  userId      String
+  action      String   // "emoji_import" | "users_add"
+  createdAt   DateTime @default(now())
+
+  workspace WorkspaceConnection @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([userId])
+}
+
+model AdminNote {
+  id        String   @id @default(cuid())
+  userId    String
+  authorId  String
+  text      String   @db.Text
+  important Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user   User @relation("AdminNoteTarget", fields: [userId], references: [id], onDelete: Cascade)
+  author User @relation("AdminNoteAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model WorkspaceAddedUser {
+  id             String    @id @default(cuid())
+  workspaceId    String
+  rcUserId       String?
+  username       String
+  email          String
+  addedAt        DateTime  @default(now())
+  lastLoginAt    DateTime?
+  status         String    @default("ADDED") // ADDED | ERROR
+  errorMessage   String?   @db.Text
+
+  workspace WorkspaceConnection @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([workspaceId, username])
+}
+
+model ScheduledMessage {
+  id              String        @id @default(cuid())
+  userId          String        // автор сообщения (от чьего имени уйдёт в RC)
+  scheduledById   String?       // кто создал расписание (при «отправить от имени»)
+  workspaceId     String
+  channelId       String
+  channelName     String
+  message         String        @db.Text
+  scheduledFor    DateTime
+  status          MessageStatus @default(PENDING)
+  sentAt          DateTime?
+  error           String?
+  messageId_RC    String? // ID сообщения в Rocket.Chat (для редактирования)
+  isRecurring     Boolean       @default(false)
+  recurringConfig String?       @db.Text
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  scheduledBy  User?               @relation("ScheduledByUser", fields: [scheduledById], references: [id], onDelete: SetNull)
+  workspace    WorkspaceConnection @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([scheduledFor, status])
+  @@index([userId, status])
+  @@index([workspaceId, status]) // NEW: для фильтрации по workspace
+  @@index([messageId_RC]) // Для поиска по messageId из Rocket.Chat
+}
+
+enum MessageStatus {
+  PENDING
+  SENT
+  FAILED
+  CANCELLED
+}
+
+model BlockedChannel {
+  id          String   @id @default(cuid())
+  userId      String
+  workspaceId String
+  channelId   String
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId, channelId])
+}
+
+model FavoriteChannel {
+  id          String   @id @default(cuid())
+  userId      String
+  workspaceId String
+  channelId   String
+  channelName String?
+  createdAt   DateTime @default(now())
+
+  user      User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace WorkspaceConnection   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId, channelId])
+  @@index([userId, workspaceId])
+}
+
+model ActivityLog {
+  id         String       @id @default(cuid())
+  userId     String
+  action     ActivityType
+  entityType String?
+  entityId   String?
+  details    String?      @db.Text
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime     @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+}
+
+// События безопасности: попытки входа, подозрительные запросы, блокировки (только для главного администратора)
+model SecurityEvent {
+  id        String   @id @default(cuid())
+  type      String   // LOGIN_FAILED, LOGIN_RATE_LIMIT, INVALID_TOKEN, SUSPICIOUS_INPUT, UNAUTHORIZED_ACCESS, etc.
+  path      String?  // путь/эндпоинт (например /api/auth/login)
+  method   String?  // GET, POST, ...
+  ipAddress String?
+  userAgent String? @db.Text
+  details   String?  @db.Text // что пытались сделать, без паролей и секретов
+  blocked   Boolean  @default(true) // защита сработала / атака отражена
+  userId    String?  // если известен пользователь (опционально)
+  createdAt DateTime @default(now())
+
+  @@index([type, createdAt])
+  @@index([ipAddress, createdAt])
+  @@index([createdAt])
+}
+
+model UserTemplate {
+  id           String   @id @default(cuid())
+  userId       String
+  channel      String   // adm, announcements или свой канал
+  intensiveDay Int?     // 1–14, опционально
+  time         String   // HH:mm
+  title        String?
+  body         String   @db.Text
+  tags         String[] @default([]) // теги: экзамен, групповой проект и т.д.
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user     User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  versions UserTemplateVersion[]
+
+  @@index([userId])
+}
+
+model UserTemplateVersion {
+  id           String       @id @default(cuid())
+  userTemplateId String
+  body         String       @db.Text
+  title        String?
+  channel      String
+  time         String
+  intensiveDay Int?
+  createdAt    DateTime     @default(now())
+
+  userTemplate UserTemplate @relation(fields: [userTemplateId], references: [id], onDelete: Cascade)
+
+  @@index([userTemplateId])
+}
+
+// Переопределения официальных шаблонов (SUPER): правка body/title для SUP или ADM
+model OfficialTemplateOverride {
+  id         String   @id @default(cuid())
+  templateId String  // id из lib/templates-data (например d1-09)
+  scope      String  // "SUP" | "ADM"
+  body       String  @db.Text
+  title      String?
+  updatedById String
+  updatedAt  DateTime @updatedAt
+
+  updatedBy User @relation(fields: [updatedById], references: [id], onDelete: Cascade)
+
+  @@unique([templateId, scope])
+  @@index([templateId])
+  @@index([scope])
+}
+
+// Настройки системы (SUPER): ключ-значение для включения/отключения возможностей SUP/ADM
+model SystemSetting {
+  id    String   @id @default(cuid())
+  key   String   @unique  // например: sendAsEnabledSup, templatesTabVisible, helpMainVisible, helpAdminVisible
+  value String   @db.Text // "true" | "false" или JSON
+  updatedAt DateTime @updatedAt
+}
+
+// Справка: основной контент вкладки «Основные моменты» (один блок, если нет разделов)
+model HelpMainContent {
+  id        String   @id @default(cuid())
+  content   String   @db.Text // Markdown или HTML
+  updatedAt DateTime @updatedAt
+}
+
+// Справка: разделы (вкладки) внутри «Основные моменты» — при наличии отображаются как подвкладки
+model HelpMainSection {
+  id        String   @id @default(cuid())
+  title    String   // заголовок вкладки
+  order    Int      @default(0)
+  content  String   @db.Text // HTML из TipTap
+  updatedAt DateTime @updatedAt
+}
+
+// Справка: каталог (папка по шагам) во вкладке «От Администратора». roles пустой = для всех ролей.
+model HelpCatalog {
+  id          String   @id @default(cuid())
+  title       String
+  order       Int      @default(0)
+  roles      String[] @default([]) // пустой = все, иначе только перечисленные (SUPPORT, ADM, VOL)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  instructions HelpInstruction[]
+  faqs         HelpFAQ[]
+}
+
+// Справка: инструкция внутри каталога (HTML из TipTap). roles пустой = для всех ролей.
+model HelpInstruction {
+  id         String   @id @default(cuid())
+  catalogId  String
+  title      String
+  content    String   @db.Text
+  order      Int      @default(0)
+  roles      String[] @default([]) // пустой = все, иначе только перечисленные (SUPPORT, ADM, VOL)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  catalog    HelpCatalog @relation(fields: [catalogId], references: [id], onDelete: Cascade)
+}
+
+// Справка: FAQ (в каталоге или глобальный). roles пустой = для всех ролей.
+model HelpFAQ {
+  id        String   @id @default(cuid())
+  catalogId String?  // null = глобальный FAQ раздела «От Администратора»
+  question  String   @db.Text
+  answer    String   @db.Text
+  order     Int      @default(0)
+  roles     String[] @default([]) // пустой = все, иначе только перечисленные (SUPPORT, ADM, VOL)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  catalog   HelpCatalog? @relation(fields: [catalogId], references: [id], onDelete: Cascade)
+}
+
+enum ActivityType {
+  USER_LOGIN
+  USER_LOGOUT
+  USER_REGISTER
+  USER_BLOCKED
+  USER_UNBLOCKED
+  USER_ROLE_CHANGED
+  USER_CREATED_BY_ADMIN
+  WORKSPACE_CREATED
+  WORKSPACE_UPDATED
+  WORKSPACE_DELETED
+  WORKSPACE_CONNECTED
+  WORKSPACE_ARCHIVED
+  WORKSPACE_UNARCHIVED
+  MESSAGE_CREATED
+  MESSAGE_UPDATED
+  MESSAGE_DELETED
+  MESSAGE_SENT
+  MESSAGE_FAILED
+  SETTINGS_UPDATED
+  PASSWORD_CHANGED
+  ADMIN_ACTION
+}
