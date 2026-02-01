@@ -7,7 +7,7 @@ import { logSecurityEvent, getClientIp, isSuspiciousInput, SecurityEventType } f
 
 /**
  * POST — подтвердить назначение: войти в Rocket.Chat (логин/пароль LDAP)
- * и создать своё подключение к пространству. Доступно только назначенным (ADM/VOL/SUPPORT).
+ * и создать своё подключение к пространству. Доступно только назначенным (ADM/SUP/VOL).
  * Body: { username, password }
  */
 export async function POST(
@@ -67,14 +67,14 @@ export async function POST(
       );
     }
 
-    // VOL и SUPPORT могут иметь только одно активное пространство
-    if (user.role === 'VOL' || user.role === 'SUPPORT') {
+    // VOL может иметь только одно активное пространство (ADM/SUP - неограниченно)
+    if (user.role === 'VOL') {
       const count = await prisma.workspaceConnection.count({
         where: { userId: user.id, isArchived: false },
       });
       if (count >= 1) {
         return NextResponse.json(
-          { error: user.role === 'VOL' ? 'Волонтёр может подключить только одно пространство.' : 'Поддержка может подключить только одно пространство.' },
+          { error: 'Волонтёр может подключить только одно пространство.' },
           { status: 400 }
         );
       }

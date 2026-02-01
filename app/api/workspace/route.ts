@@ -58,7 +58,7 @@ export async function GET(request: Request) {
     });
 
     // ADM и VOL: свои пространства + назначенные SUP/ADMIN
-    if (user.role === 'ADM' || user.role === 'VOL') {
+    if (user.role === 'ADM' || user.role === 'VOL' || user.role === 'ADMIN' || user.role === 'SUPPORT') {
       try {
         const assignments = await prisma.workspaceAdminAssignment.findMany({
           where: { userId: user.id },
