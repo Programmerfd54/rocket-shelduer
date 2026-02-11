@@ -73,6 +73,8 @@ import { EmptyState } from '@/components/common/EmptyState'
 import { VirtualList } from '@/components/_components/VirtualList'
 import { Trash2, RotateCcw, ChevronDown, ChevronRight, ChevronUp, Copy, FileText } from 'lucide-react'
 import { Calendar, ExternalLink } from 'lucide-react'
+import { ResetAccountTab } from '@/components/_components/workspace/ResetAccountTab'
+import { UserAccessTab } from '@/components/_components/workspace/UserAccessTab'
 
 export default function WorkspaceDetailPage() {
   const params = useParams()
@@ -249,6 +251,7 @@ export default function WorkspaceDetailPage() {
   const [pendingAddLogins, setPendingAddLogins] = useState<string[] | null>(null)
   const addUsersAbortRef = useRef<AbortController | null>(null)
 
+
   useEffect(() => {
     fetch('/api/auth/me')
       .then((r) => r.json())
@@ -276,13 +279,14 @@ export default function WorkspaceDetailPage() {
   }, [currentUserRole])
 
   const allowedTabsList = useMemo(() => {
-    if (currentUserRole === 'ADMIN') return ['channels', 'messages', 'templates', 'emoji-import', 'users-add']
+    if (currentUserRole === 'ADMIN') return ['channels', 'messages', 'templates', 'emoji-import', 'users-add', 'reset-account', 'user-access']
     if (currentUserRole === 'SUPPORT') {
-      if (!tabRestrictions) return ['channels', 'messages', 'templates', 'emoji-import', 'users-add']
+      if (!tabRestrictions) return ['channels', 'messages', 'templates', 'emoji-import', 'users-add', 'reset-account', 'user-access']
       const t = ['channels', 'messages']
       if (tabRestrictions.templates) t.push('templates')
       if (tabRestrictions.emojiImport) t.push('emoji-import')
       if (tabRestrictions.usersAdd) t.push('users-add')
+      t.push('reset-account', 'user-access')
       return t
     }
     if (currentUserRole === 'ADM') {
@@ -375,7 +379,7 @@ export default function WorkspaceDetailPage() {
     if (savedTab && allowedTabsList.includes(savedTab)) {
       setActiveTab(savedTab)
     } else if (currentUserRole === 'VOL' || currentUserRole === 'USER') {
-      setActiveTab((prev) => (prev === 'emoji-import' || prev === 'users-add' || prev === 'templates' ? 'channels' : prev))
+      setActiveTab((prev) => (['emoji-import', 'users-add', 'templates', 'reset-account', 'user-access'].includes(prev) ? 'channels' : prev))
     }
   }, [currentUserRole, workspaceId, allowedTabsList])
   
@@ -2173,61 +2177,124 @@ export default function WorkspaceDetailPage() {
             <p className="text-sm text-muted-foreground mt-0.5">Управление каналами, планирование сообщений и настройки пространства</p>
           </div>
           <div className="p-6">
-        <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-6">
-          <div className="rounded-xl bg-muted/30 p-1.5 border border-border/60">
-            <TabsList className="bg-transparent h-auto p-0 gap-1.5 flex flex-wrap w-full">
-              <TabsTrigger 
-                value="channels"
-                className="flex-1 min-w-0 sm:flex-initial data-[state=active]:bg-background data-[state=active]:shadow-sm data-[state=active]:text-foreground rounded-lg border-0 px-4 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+        <div className="flex flex-col lg:flex-row gap-6">
+          {/* Сайдбар навигации (как в справке) */}
+          <aside className="lg:w-52 shrink-0">
+            <nav className="rounded-xl bg-muted/30 border border-border/60 p-1.5 space-y-0.5 lg:sticky lg:top-24">
+              <button
+                type="button"
+                onClick={() => handleTabChange('channels')}
+                className={cn(
+                  'w-full flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
+                  activeTab === 'channels'
+                    ? 'bg-background shadow-sm text-foreground'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                )}
               >
-                <Hash className="w-4 h-4 mr-2 shrink-0" />
+                <Hash className="w-4 h-4 shrink-0" />
                 <span className="truncate">Каналы</span>
-                <Badge variant="secondary" className="ml-2 text-[10px] h-5 px-1.5 shrink-0">
+                <Badge variant="secondary" className="ml-auto text-[10px] h-5 px-1.5 shrink-0">
                   {channels.length}
                 </Badge>
-              </TabsTrigger>
-              <TabsTrigger 
-                value="messages"
-                className="flex-1 min-w-0 sm:flex-initial data-[state=active]:bg-background data-[state=active]:shadow-sm data-[state=active]:text-foreground rounded-lg border-0 px-4 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+              </button>
+              <button
+                type="button"
+                onClick={() => handleTabChange('messages')}
+                className={cn(
+                  'w-full flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
+                  activeTab === 'messages'
+                    ? 'bg-background shadow-sm text-foreground'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                )}
               >
-                <MessageSquare className="w-4 h-4 mr-2 shrink-0" />
+                <MessageSquare className="w-4 h-4 shrink-0" />
                 <span className="truncate">Сообщения</span>
-                <Badge variant="secondary" className="ml-2 text-[10px] h-5 px-1.5 shrink-0">
+                <Badge variant="secondary" className="ml-auto text-[10px] h-5 px-1.5 shrink-0">
                   {messages.length}
                 </Badge>
-              </TabsTrigger>
+              </button>
               {(currentUserRole === 'ADM' || currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && (currentUserRole === 'ADMIN' || tabRestrictions === null || tabRestrictions.templates) && (
-              <TabsTrigger 
-                value="templates"
-                className="flex-1 min-w-0 sm:flex-initial data-[state=active]:bg-background data-[state=active]:shadow-sm data-[state=active]:text-foreground rounded-lg border-0 px-4 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
-              >
-                <FileText className="w-4 h-4 mr-2 shrink-0" />
-                <span className="truncate">Шаблоны</span>
-              </TabsTrigger>
+                <button
+                  type="button"
+                  onClick={() => handleTabChange('templates')}
+                  className={cn(
+                    'w-full flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
+                    activeTab === 'templates'
+                      ? 'bg-background shadow-sm text-foreground'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                  )}
+                >
+                  <FileText className="w-4 h-4 shrink-0" />
+                  <span className="truncate">Шаблоны</span>
+                </button>
               )}
               {(currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && (currentUserRole === 'ADMIN' || tabRestrictions === null || tabRestrictions.emojiImport) && (
-              <TabsTrigger 
-                value="emoji-import"
-                className="flex-1 min-w-0 sm:flex-initial data-[state=active]:bg-background data-[state=active]:shadow-sm data-[state=active]:text-foreground rounded-lg border-0 px-4 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
-              >
-                <Smile className="w-4 h-4 mr-2 shrink-0" />
-                <span className="truncate">Импорт эмодзи</span>
-              </TabsTrigger>
+                <button
+                  type="button"
+                  onClick={() => handleTabChange('emoji-import')}
+                  className={cn(
+                    'w-full flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
+                    activeTab === 'emoji-import'
+                      ? 'bg-background shadow-sm text-foreground'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                  )}
+                >
+                  <Smile className="w-4 h-4 shrink-0" />
+                  <span className="truncate">Импорт эмодзи</span>
+                </button>
               )}
               {(currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && (currentUserRole === 'ADMIN' || tabRestrictions === null || tabRestrictions.usersAdd) && (
-              <TabsTrigger 
-                value="users-add"
-                className="flex-1 min-w-0 sm:flex-initial data-[state=active]:bg-background data-[state=active]:shadow-sm data-[state=active]:text-foreground rounded-lg border-0 px-4 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
-              >
-                <Users className="w-4 h-4 mr-2 shrink-0" />
-                <span className="truncate">Добавление пользователей</span>
-              </TabsTrigger>
+                <button
+                  type="button"
+                  onClick={() => handleTabChange('users-add')}
+                  className={cn(
+                    'w-full flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
+                    activeTab === 'users-add'
+                      ? 'bg-background shadow-sm text-foreground'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                  )}
+                >
+                  <Users className="w-4 h-4 shrink-0" />
+                  <span className="truncate">Добавление пользователей</span>
+                </button>
               )}
-            </TabsList>
-          </div>
+              {(currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => handleTabChange('reset-account')}
+                    className={cn(
+                      'w-full flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
+                      activeTab === 'reset-account'
+                        ? 'bg-background shadow-sm text-foreground'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                    )}
+                  >
+                    <RotateCcw className="w-4 h-4 shrink-0" />
+                    <span className="truncate">Сброс учётки</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleTabChange('user-access')}
+                    className={cn(
+                      'w-full flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
+                      activeTab === 'user-access'
+                        ? 'bg-background shadow-sm text-foreground'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                    )}
+                  >
+                    <LogIn className="w-4 h-4 shrink-0" />
+                    <span className="truncate">Состояние входа</span>
+                  </button>
+                </>
+              )}
+            </nav>
+          </aside>
 
+          <div className="flex-1 min-w-0">
+        <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-6">
           {/* Channels Tab */}
-          <TabsContent value="channels" className="space-y-5 mt-6">
+          <TabsContent value="channels" className="space-y-5 mt-0">
             <div className="flex flex-col gap-3">
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
                 <div className="relative flex-1">
@@ -2394,7 +2461,7 @@ export default function WorkspaceDetailPage() {
           </TabsContent>
 
           {/* Messages Tab */}
-          <TabsContent value="messages" className="space-y-5 mt-6">
+          <TabsContent value="messages" className="space-y-5 mt-0">
             {currentUserRole === 'VOL' && messages.length > 0 && (
               <p className="text-sm text-muted-foreground">
                 Показаны только ваши запланированные сообщения
@@ -2557,7 +2624,7 @@ export default function WorkspaceDetailPage() {
 
           {/* Шаблоны анонсов (ADM/SUP/ADMIN) — в стиле result-ai.tech: табы по дням, канал выделен, сворачиваемые дни */}
           {(currentUserRole === 'ADM' || currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && (
-          <TabsContent value="templates" className="space-y-6 mt-6">
+          <TabsContent value="templates" className="space-y-6 mt-0">
             <Card className="rounded-2xl border border-border/80 bg-card shadow-[0_1px_3px_rgba(0,0,0,0.06)] overflow-hidden">
               <div className="px-6 py-4 bg-gradient-to-b from-muted/20 to-transparent border-b border-border/60">
                 <p className="text-sm text-muted-foreground">
@@ -2893,7 +2960,7 @@ export default function WorkspaceDetailPage() {
 
           {/* Emoji Import Tab — в стиле result-ai.tech */}
           {(currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && (
-          <TabsContent value="emoji-import" className="space-y-5 mt-6">
+          <TabsContent value="emoji-import" className="space-y-5 mt-0">
             <Card className="rounded-2xl border border-border/80 bg-card shadow-[0_1px_3px_rgba(0,0,0,0.06)] overflow-hidden">
               <div className="px-6 py-5 bg-gradient-to-b from-muted/20 to-transparent border-b border-border/60">
                 <h3 className="text-base font-semibold text-foreground tracking-tight">Массовый импорт кастомных эмодзи</h3>
@@ -3170,7 +3237,7 @@ export default function WorkspaceDetailPage() {
 
           {/* Добавление пользователей Tab — в стиле result-ai.tech */}
           {(currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && (
-          <TabsContent value="users-add" className="space-y-5 mt-6">
+          <TabsContent value="users-add" className="space-y-5 mt-0">
             <Card className="rounded-2xl border border-border/80 bg-card shadow-[0_1px_3px_rgba(0,0,0,0.06)] overflow-hidden">
               <div className="px-6 py-5 bg-gradient-to-b from-muted/20 to-transparent border-b border-border/60">
                 <h3 className="text-base font-semibold text-foreground tracking-tight">Добавление пользователей в Rocket.Chat</h3>
@@ -3522,7 +3589,23 @@ export default function WorkspaceDetailPage() {
             </Card>
           </TabsContent>
           )}
+
+          {/* Сброс учётки (SUP/ADMIN) — вынесен в отдельный компонент для уменьшения перерисовок */}
+          {(currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && (
+          <TabsContent value="reset-account" className="space-y-5 mt-0">
+            <ResetAccountTab workspaceId={workspaceId} />
+          </TabsContent>
+          )}
+
+          {/* Состояние входа (SUP/ADMIN) — вынесен в отдельный компонент для уменьшения перерисовок */}
+          {(currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && (
+          <TabsContent value="user-access" className="space-y-5 mt-0">
+            <UserAccessTab workspaceId={workspaceId} />
+          </TabsContent>
+          )}
         </Tabs>
+          </div>
+        </div>
           </div>
         </Card>
 

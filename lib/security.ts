@@ -48,6 +48,32 @@ export async function logSecurityEvent(params: LogSecurityEventParams): Promise<
   }
 }
 
+/**
+ * Проверка на path traversal (.., абсолютные пути).
+ * Использовать для любых id/параметров, которые подставляются в пути или запросы.
+ */
+export function isPathTraversal(value: string | null | undefined): boolean {
+  if (value == null || typeof value !== 'string') return false;
+  const s = value.trim();
+  if (s.includes('..') || s.startsWith('/') || /^[a-zA-Z]:\\/.test(s)) return true;
+  return false;
+}
+
+/**
+ * Безопасная проверка строки для использования как id (cuid, uuid и т.д.).
+ * Отклоняет path traversal и слишком длинные/неожиданные значения.
+ */
+const SAFE_ID_MAX_LENGTH = 100;
+export function isUnsafeId(value: string | null | undefined): boolean {
+  if (value == null || typeof value !== 'string') return true;
+  const s = value.trim();
+  if (s.length === 0 || s.length > SAFE_ID_MAX_LENGTH) return true;
+  if (isPathTraversal(s)) return true;
+  if (/[\s<>"']/.test(s)) return true;
+  return false;
+}
+
+
 /** Подозрительные паттерны: SQL-подобные конструкции, теги скриптов, опасные символы. */
 const SUSPICIOUS_PATTERNS = [
   /(\b(SELECT|INSERT|UPDATE|DELETE|DROP|UNION|ALTER|EXEC|EXECUTE|SCRIPT|JAVASCRIPT|ON\s*ERROR)\b)/i,

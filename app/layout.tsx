@@ -4,6 +4,7 @@ import ImprovedToaster from "@/components/_components/common/ImprovedToaster";
 import OfflineDetector from "@/components/_components/common/OfflineDetector";
 import GlobalFetchHandler from "@/components/_components/common/GlobalFetchHandler";
 import { ThemeProvider } from "@/components/theme-provider";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 export const metadata: Metadata = {
   title: "Rocket.Chat Scheduler",
@@ -27,10 +28,12 @@ export default function RootLayout({
       </head>
       <body className="antialiased">
         <ThemeProvider>
-          <GlobalFetchHandler />
-          {children}
-          <ImprovedToaster />
-          <OfflineDetector />
+          <TooltipProvider delayDuration={300}>
+            <GlobalFetchHandler />
+            {children}
+            <ImprovedToaster />
+            <OfflineDetector />
+          </TooltipProvider>
         </ThemeProvider>
       </body>
     </html>

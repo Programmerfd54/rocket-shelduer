@@ -1,36 +1,124 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Rocket.Chat Scheduler
 
-## Getting Started
+Веб-приложение для планирования отложенных сообщений в [Rocket.Chat](https://rocketchat.com). Позволяет подключать рабочие пространства (серверы Rocket.Chat), выбирать каналы и назначать время отправки сообщений.
 
-First, run the development server:
+## Стек
+
+- **Next.js 16** (App Router), **React 19**, **TypeScript**
+- **Prisma** + **PostgreSQL**
+- **Tailwind CSS**, **Radix UI**, **TipTap** (редактор сообщений)
+
+## Требования
+
+- Node.js 20+
+- PostgreSQL
+
+## Быстрый старт
+
+### 1. Клонирование и зависимости
+
+```bash
+git clone <repo-url>
+cd rocketchat-scheduler
+npm install
+```
+
+### 2. Переменные окружения
+
+Скопируйте пример и заполните значения:
+
+```bash
+cp .env.example .env
+```
+
+**Обязательные переменные:**
+
+| Переменная      | Описание |
+|-----------------|----------|
+| `DATABASE_URL`  | Строка подключения PostgreSQL, например `postgresql://user:password@localhost:5432/rocketchat_scheduler` |
+| `JWT_SECRET`    | Секрет для подписи JWT (в проде — длинная случайная строка, не оставляйте значение из примера) |
+
+**Опциональные:**
+
+| Переменная            | Описание |
+|-----------------------|----------|
+| `ENCRYPTION_KEY`      | Ключ шифрования паролей пространств (минимум 32 символа). Если не задан, в dev может использоваться JWT_SECRET (в проде не рекомендуется). |
+| `CRON_SECRET`         | Секрет для вызова cron-эндпоинтов (`/api/cron/send-messages`, `/api/cron/cleanup-archives`). Если задан, запросы должны содержать заголовок `Authorization: Bearer <CRON_SECRET>`. |
+| `NEXT_PUBLIC_APP_URL` или `APP_URL` | Базовый URL приложения (для CORS и ссылок приглашений). |
+| `NEXT_PUBLIC_SENTRY_DSN` или `SENTRY_DSN` | См. раздел «Опционально: Sentry» ниже. |
+
+### 3. База данных
+
+```bash
+npx prisma generate
+npx prisma migrate deploy
+```
+
+### 4. Запуск
+
+**Разработка:**
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Приложение: [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+В режиме разработки cron для отправки сообщений запускается автоматически (каждую минуту вызывается `GET http://localhost:3000/api/cron/send-messages`). Для продакшена настройте внешний cron (Vercel Cron, GitHub Actions, системный cron) с вызовом этого URL и, при необходимости, `CRON_SECRET`.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+**Сборка и продакшен:**
 
-## Learn More
+```bash
+npm run build
+npm start
+```
 
-To learn more about Next.js, take a look at the following resources:
+## Docker
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+docker compose up --build
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Сервис будет доступен на порту 3000. Убедитесь, что в `.env` указаны корректные `DATABASE_URL` и `JWT_SECRET` (файл `.env` подхватывается через `env_file` в `docker-compose.yml`).
 
-## Deploy on Vercel
+## Полезные команды
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+| Команда | Описание |
+|---------|----------|
+| `npm run dev` | Запуск dev-сервера |
+| `npm run build` | Сборка для продакшена |
+| `npm start` | Запуск собранного приложения |
+| `npm run lint` | Проверка кода (ESLint) |
+| `npm run test` | Запуск тестов (Vitest) |
+| `npm run create-superuser` | Создание суперпользователя (интерактивно) |
+| `npx prisma migrate dev` | Создание и применение миграций в разработке |
+| `npx prisma migrate deploy` | Применение миграций (продакшен) |
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Health-check
+
+- **GET** `/api/health` — для мониторинга (Docker, K8s). Проверка приложения и БД: `200` и `{ status, db, latencyMs }` или `503`. Если в `.env` задан `HEALTH_CHECK_SECRET`, запрос должен содержать `?secret=HEALTH_CHECK_SECRET`, иначе вернётся `401`.
+- **Для ADMIN:** вкладка **Health** в сайдбаре ведёт на `/dashboard/admin/health` — расширенная проверка (БД, задержка, наличие env-переменных без раскрытия значений, NODE_ENV). Данные берутся из **GET** `/api/admin/health` (только для роли ADMIN).
+
+## Cron (продакшен)
+
+- **Отправка сообщений:** вызывайте **GET** или **POST** `/api/cron/send-messages` каждую минуту (например, через Vercel Cron Jobs или системный cron). Если задан `CRON_SECRET`, передавайте заголовок `Authorization: Bearer <CRON_SECRET>`.
+- **Очистка архивов:** вызывайте **GET** `/api/cron/cleanup-archives` раз в день (удаляются пространства, у которых истёк срок хранения после архивации). Аналогично при необходимости передавайте `CRON_SECRET`.
+
+## Опционально: Sentry
+
+По умолчанию Sentry не подключён (чтобы сборка проходила без дополнительных зависимостей). Чтобы отправлять ошибки в Sentry:
+
+1. Установите пакет (для Next 16 может понадобиться флаг):
+   ```bash
+   npm install @sentry/nextjs --save-dev --legacy-peer-deps
+   ```
+2. Задайте в `.env`: `NEXT_PUBLIC_SENTRY_DSN` или `SENTRY_DSN` (DSN из проекта в sentry.io).
+3. Добавьте инициализацию и отправку ошибок по [документации Sentry для Next.js](https://docs.sentry.io/platforms/javascript/guides/nextjs/) (файлы `instrumentation.ts`, `sentry.server.config.ts`, вызов `captureException` в `app/error.tsx` и `app/global-error.tsx`).
+
+## Документация
+
+Идеи и планы развития — в папке `docs/` (например, `IDEAS_EXTENDED.md`, `ADMIN_IDEAS.md`).
+
+## Лицензия
+
+Private.

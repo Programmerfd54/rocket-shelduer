@@ -24,6 +24,7 @@ import {
   Sun,
   LogOut,
   BookOpen,
+  Activity,
 } from 'lucide-react'
 import { getInitials, generateAvatarColor } from '@/lib/utils'
 import { useTheme } from 'next-themes'
@@ -111,8 +112,18 @@ export default function Sidebar({ user, workspaces = [], groups = [], pendingCou
             name: 'Админ панель',
             href: '/dashboard/admin',
             icon: Users,
-            active: pathname.startsWith('/dashboard/admin'),
+            active: pathname.startsWith('/dashboard/admin') && !pathname.startsWith('/dashboard/admin/health'),
           },
+          ...(role === 'ADMIN'
+            ? [
+                {
+                  name: 'Health',
+                  href: '/dashboard/admin/health',
+                  icon: Activity,
+                  active: pathname.startsWith('/dashboard/admin/health'),
+                },
+              ]
+            : []),
           ...(showTemplatesTab
             ? [
                 {

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { requireAuth, hashPassword } from '@/lib/auth';
 import { createActivityLog } from '@/app/api/activity/route';
+import { isUnsafeId } from '@/lib/security';
 
 /** Редактирование профиля пользователя администратором: имя, логин (email), username, пароль */
 export async function PATCH(
@@ -11,6 +12,7 @@ export async function PATCH(
   try {
     const currentUser = await requireAuth();
     const { id } = await params;
+    if (isUnsafeId(id)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
 
     if (currentUser.role !== 'SUPPORT' && currentUser.role !== 'ADMIN') {
       return NextResponse.json(
@@ -134,6 +136,7 @@ export async function DELETE(
   try {
     const currentUser = await requireAuth();
     const { id } = await params;
+    if (isUnsafeId(id)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
 
     if (currentUser.role !== 'SUPPORT' && currentUser.role !== 'ADMIN') {
       return NextResponse.json(

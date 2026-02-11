@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { requireAuth } from '@/lib/auth';
+import { isUnsafeId } from '@/lib/security';
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -12,6 +13,7 @@ export async function POST(_request: Request, { params }: Params) {
   try {
     const user = await requireAuth();
     const { id } = await params;
+    if (isUnsafeId(id)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
 
     const message = await prisma.scheduledMessage.findUnique({
       where: { id },

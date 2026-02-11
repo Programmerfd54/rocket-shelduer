@@ -34,6 +34,11 @@ export default function LoginPage() {
         throw new Error(data.error || 'Ошибка входа')
       }
 
+      if (data.requirePasswordChange) {
+        router.push('/dashboard/change-password')
+        return
+      }
+
       toast.success('Добро пожаловать!', {
         description: 'Вход выполнен успешно'
       })
@@ -115,7 +120,9 @@ export default function LoginPage() {
                   />
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Пароль можно сбросить через администратора либо в настройках.
+                  <a href="/forgot-password" className="text-primary hover:underline">Забыли пароль?</a>
+                  {' · '}
+                  Сброс через администратора или в настройках.
                 </p>
               </div>
 

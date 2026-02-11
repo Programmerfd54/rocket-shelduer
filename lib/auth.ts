@@ -79,6 +79,7 @@ export type CurrentUser = {
   blockedReason: string | null;
   sessionId?: string;
   sessionDurationMinutes?: number | null;
+  requirePasswordChange?: boolean;
 };
 
 export async function getCurrentUser(): Promise<CurrentUser | null> {
@@ -139,6 +140,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
         blockedAt: true,
         blockedReason: true,
         sessionDurationMinutes: true,
+        requirePasswordChange: true,
       },
     });
 

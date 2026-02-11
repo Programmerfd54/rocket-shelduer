@@ -78,11 +78,17 @@ export async function POST(request: Request) {
       );
     }
 
-    const user = await prisma.user.findUnique({
-      where: { email: login.toLowerCase() },
+    const user = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { email: login.toLowerCase() },
+          { username: { equals: login, mode: 'insensitive' } },
+        ],
+      },
       select: {
         id: true,
         email: true,
+        username: true,
         name: true,
         role: true,
         password: true,
@@ -91,6 +97,7 @@ export async function POST(request: Request) {
         avatarUrl: true,
         restrictedFeatures: true,
         sessionDurationMinutes: true,
+        requirePasswordChange: true,
       },
     });
 
@@ -191,10 +198,12 @@ export async function POST(request: Request) {
       user: {
         id: user.id,
         email: user.email,
+        username: user.username,
         name: user.name,
         role: user.role,
       },
       token,
+      requirePasswordChange: user.requirePasswordChange === true,
     });
   } catch {
     return NextResponse.json(

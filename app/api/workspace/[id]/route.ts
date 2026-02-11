@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { requireAuth } from '@/lib/auth';
 import { encryptPassword } from '@/lib/encryption';
-import { logSecurityEvent, getClientIp, isSuspiciousInput, SecurityEventType } from '@/lib/security';
+import { logSecurityEvent, getClientIp, isSuspiciousInput, isUnsafeId, SecurityEventType } from '@/lib/security';
 
 // GET - получить workspace по ID (владелец или ADM с назначением)
 export async function GET(
@@ -12,6 +12,17 @@ export async function GET(
   try {
     const user = await requireAuth();
     const { id } = await params;
+    if (isUnsafeId(id)) {
+      await logSecurityEvent({
+        type: SecurityEventType.PATH_TRAVERSAL_ATTEMPT,
+        path: request.url,
+        method: 'GET',
+        ipAddress: getClientIp(request),
+        details: 'Invalid workspace id',
+        userId: user.id,
+      });
+      return NextResponse.json({ error: 'Bad request' }, { status: 400 });
+    }
 
     const workspace = await prisma.workspaceConnection.findUnique({
       where: { id },
@@ -96,6 +107,7 @@ export async function PATCH(
       );
     }
     const { id } = await params;
+    if (isUnsafeId(id)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
     const body = await request.json();
 
     const workspace = await prisma.workspaceConnection.findFirst({
@@ -229,6 +241,7 @@ export async function DELETE(
       );
     }
     const { id } = await params;
+    if (isUnsafeId(id)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
 
     const workspace = await prisma.workspaceConnection.findFirst({
       where: {

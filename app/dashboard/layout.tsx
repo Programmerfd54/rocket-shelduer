@@ -46,6 +46,13 @@ export default function DashboardLayoutClient({
     }
   }, [user?.blocked, pathname, router])
 
+  // Редирект при необходимости смены пароля (после сброса на логин=пароль)
+  useEffect(() => {
+    if (user?.requirePasswordChange && pathname !== '/dashboard/change-password') {
+      router.replace('/dashboard/change-password')
+    }
+  }, [user?.requirePasswordChange, pathname, router])
+
   const loadData = async () => {
     try {
       // Load user

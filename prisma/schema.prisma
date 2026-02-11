@@ -46,8 +46,10 @@ model User {
   workspaceActions  WorkspaceActionLog[]
   userTemplates     UserTemplate[]
   inviteTokensCreated InviteToken[]     @relation("InviteTokenCreator")
+  passwordResetTokens PasswordResetToken[]
   avatarUrl         String?             // URL или путь к фото пользователя
   sessionDurationMinutes Int?           // Длительность сессии в минутах (null = 7 дней). После истечения нужна повторная авторизация.
+  requirePasswordChange Boolean @default(false) // После сброса пароля (логин=пароль) — при первом входе показать форму смены пароля
   sessions          Session[]
 }
 
@@ -84,6 +86,20 @@ model InviteToken {
   createdAt   DateTime @default(now())
 
   createdBy   User     @relation("InviteTokenCreator", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@index([expiresAt])
+}
+
+// Токен сброса пароля (забыли пароль): пользователь запрашивает по email, ссылка действительна 1 час
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([token])
   @@index([expiresAt])

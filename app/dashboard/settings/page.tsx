@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
 import { toast } from 'sonner'
-import { Loader2, ArrowLeft, User, Lock, CheckCircle2, Shield, Camera, Trash2, Monitor, LogOut } from 'lucide-react'
+import { Loader2, ArrowLeft, User, Lock, CheckCircle2, Shield, Camera, Trash2, Monitor, LogOut, Download } from 'lucide-react'
 import Link from 'next/link'
 import { checkPasswordStrength, getInitials, generateAvatarColor } from '@/lib/utils'
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar'
@@ -47,6 +47,7 @@ export default function SettingsPage() {
   const [sessionsLoading, setSessionsLoading] = useState(false)
   const [sessionsSaving, setSessionsSaving] = useState(false)
   const [logoutAllLoading, setLogoutAllLoading] = useState(false)
+  const [exportLoading, setExportLoading] = useState(false)
 
   useEffect(() => {
     loadUser()
@@ -235,6 +236,28 @@ export default function SettingsPage() {
     }
   }
 
+  const handleExportBackup = async () => {
+    setExportLoading(true)
+    try {
+      const res = await fetch('/api/user/export')
+      if (!res.ok) throw new Error('Ошибка экспорта')
+      const blob = await res.blob()
+      const disposition = res.headers.get('Content-Disposition')
+      const match = disposition?.match(/filename="?([^";]+)"?/)
+      const filename = match?.[1] || `rc-scheduler-backup-${new Date().toISOString().slice(0, 10)}.json`
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = filename
+      a.click()
+      URL.revokeObjectURL(a.href)
+      toast.success('Резервная копия скачана', { description: 'Файл сохранён в папку загрузок' })
+    } catch {
+      toast.error('Ошибка экспорта данных')
+    } finally {
+      setExportLoading(false)
+    }
+  }
+
   const handleEndSession = async (sessionId: string) => {
     if (!confirm('Завершить эту сессию?')) return
     try {
@@ -419,6 +442,24 @@ export default function SettingsPage() {
                   </form>
                 </CardContent>
               </Card>
+
+              <Card className="rounded-2xl border border-border/80 bg-card shadow-sm">
+                <CardHeader className="pb-4">
+                  <CardTitle className="flex items-center gap-2">
+                    <Download className="w-5 h-5 text-primary" />
+                    Резервная копия
+                  </CardTitle>
+                  <CardDescription>
+                    Скачайте ваши данные (профиль, пространства, сообщения, шаблоны) в виде JSON-файла. Пароли и секреты не включаются.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Button variant="outline" onClick={handleExportBackup} disabled={exportLoading}>
+                    {exportLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
+                    Скачать резервную копию
+                  </Button>
+                </CardContent>
+              </Card>
             </TabsContent>
 
             <TabsContent value="password" className="space-y-4">
@@ -525,6 +566,9 @@ export default function SettingsPage() {
                         </>
                       )}
                     </Button>
+                    <p className="text-xs text-muted-foreground mt-3">
+                      После смены пароля все сессии будут завершены — потребуется войти снова на всех устройствах.
+                    </p>
                   </form>
                 </CardContent>
               </Card>

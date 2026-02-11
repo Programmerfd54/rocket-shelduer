@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { requireAuth } from '@/lib/auth';
 import { RocketChatClient } from '@/lib/rocketchat';
+import { isUnsafeId } from '@/lib/security';
 
 type ExternalStatus = 'SYNCHRONIZED' | 'EDITED_IN_RC' | 'DELETED_IN_RC' | 'UNKNOWN';
 
@@ -12,6 +13,9 @@ export async function GET(
   try {
     const user = await requireAuth();
     const { id } = await params;
+    if (isUnsafeId(id)) {
+      return NextResponse.json({ error: 'Bad request' }, { status: 400 });
+    }
 
     const message = await prisma.scheduledMessage.findUnique({
       where: { id },

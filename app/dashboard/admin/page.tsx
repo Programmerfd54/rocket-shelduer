@@ -52,6 +52,7 @@ import {
 } from "@/components/ui/select"
 import { toast } from 'sonner'
 import { Loader2, ArrowLeft, MoreVertical, Shield, ShieldOff, Key, Ban, Users, Activity, UserPlus, Pencil, CalendarPlus, Search, ClipboardCopy, FileText, Server, Archive, ShieldCheck } from 'lucide-react'
+import { CopyButton } from '@/components/common/CopyButton'
 import Link from 'next/link'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -1108,7 +1109,10 @@ export default function AdminPage() {
               <p className="text-sm text-amber-600 dark:text-amber-500 font-medium">
                 Сгенерированную ссылку нельзя никому передавать. Если по ссылке уже зарегистрировались, повторный переход по ней приведёт к ошибке.
               </p>
-              <div className="rounded-lg border bg-muted/50 p-3 break-all text-sm">{createInviteLink}</div>
+              <div className="flex items-center gap-2 rounded-lg border bg-muted/50 p-3 break-all text-sm">
+                <span className="flex-1 min-w-0">{createInviteLink}</span>
+                <CopyButton text={createInviteLink} successMessage="Ссылка скопирована" variant="outline" size="icon" aria-label="Копировать ссылку" />
+              </div>
               <div className="flex gap-2">
                 <Button type="button" onClick={copyInviteLink} className="flex-1">
                   <ClipboardCopy className="mr-2 h-4 w-4" />

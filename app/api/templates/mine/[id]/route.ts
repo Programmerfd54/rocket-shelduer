@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getCurrentUser } from '@/lib/auth';
 import prisma from '@/lib/prisma';
+import { isUnsafeId } from '@/lib/security';
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -20,6 +21,7 @@ export async function PATCH(request: Request, { params }: Params) {
       );
     }
     const { id } = await params;
+    if (isUnsafeId(id)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
     const existing = await prisma.userTemplate.findFirst({
       where: { id, userId: user.id },
     });

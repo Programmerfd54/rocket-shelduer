@@ -6,9 +6,9 @@ import prisma from '@/lib/prisma';
 
 export async function GET(request: Request) {
   try {
-    // Проверяем секретный ключ (для безопасности)
+    // Проверяем секретный ключ (если задан — иначе разрешаем для dev)
     const authHeader = request.headers.get('authorization');
-    if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+    if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 

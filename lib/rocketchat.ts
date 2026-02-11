@@ -518,4 +518,65 @@ interface RocketChatLoginResponse {
         return { success: false, error: error?.message || 'Add role failed' };
       }
     }
+
+    /** Список пользователей RC (users.list). Требуются права админа / view-full-other-user-info. */
+    async listUsers(
+      authToken: string,
+      userId: string,
+      options?: { count?: number; offset?: number }
+    ): Promise<{ users: Array<{ _id: string; username?: string; name?: string; emails?: Array<{ address: string }>; lastLogin?: string }>; total: number }> {
+      const count = options?.count ?? 100;
+      const offset = options?.offset ?? 0;
+      const response = await fetch(
+        `${this.baseUrl}/api/v1/users.list?count=${count}&offset=${offset}`,
+        {
+          method: 'GET',
+          headers: {
+            'X-Auth-Token': authToken,
+            'X-User-Id': userId,
+          },
+        }
+      );
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.error || err.message || `users.list ${response.status}`);
+      }
+      const data = await response.json().catch(() => ({}));
+      const users = (data.users ?? []).map((u: any) => ({
+        _id: u._id ?? '',
+        username: u.username ?? u.name,
+        name: u.name,
+        emails: u.emails,
+        lastLogin: u.lastLogin ?? undefined,
+      }));
+      return { users, total: data.total ?? users.length };
+    }
+
+    /** Обновить пароль пользователя в RC (users.update). Требуется право edit-other-user-password. */
+    async updateUserPassword(
+      authToken: string,
+      userId: string,
+      targetRcUserId: string,
+      newPassword: string,
+      requirePasswordChange?: boolean
+    ): Promise<{ success: boolean; error?: string }> {
+      const response = await fetch(`${this.baseUrl}/api/v1/users.update`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Auth-Token': authToken,
+          'X-User-Id': userId,
+        },
+        body: JSON.stringify({
+          userId: targetRcUserId,
+          data: {
+            password: newPassword,
+            ...(requirePasswordChange !== undefined && { requirePasswordChange }),
+          },
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) return { success: false, error: data.error || data.message || response.statusText };
+      return { success: data.success === true, error: data.error };
+    }
   }
