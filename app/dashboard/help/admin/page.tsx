@@ -155,14 +155,12 @@ export default function HelpAdminPage() {
       })
       if (!res.ok) throw new Error('Failed')
       toast.success('Основные моменты сохранены')
-      router.refresh()
     } catch {
       toast.error('Ошибка сохранения')
     } finally {
       setSaving(false)
     }
   }
-
 
   const addMainSection = async () => {
     setMainSectionDialogMode('create')

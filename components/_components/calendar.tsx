@@ -43,6 +43,8 @@ import { Breadcrumbs } from '@/components/common/Breadcrumbs'
 const MONTHS = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
 
 export default function CalendarPage() {
+  const [externalStatuses, setExternalStatuses] = useState<Record<string, 'SYNCHRONIZED' | 'EDITED_IN_RC' | 'DELETED_IN_RC' | 'UNKNOWN'>>({})
+
   const router = useRouter()
   const searchParams = useSearchParams()
   const workspaceIdFromUrl = searchParams.get('workspaceId')
@@ -117,6 +119,66 @@ export default function CalendarPage() {
     })
   }, [messages, filterRole, filterWorkspaceId, filterStatus])
 
+
+
+  console.log(filteredMessages) 
+
+
+
+  
+  const checkExternalMessageStatuses = async (messages: any[]) => {
+    // Берём только отправленные сообщения, у которых есть messageId_RC
+    const toCheck = messages.filter(
+      (m) => m.status === 'SENT' && m.messageId_RC
+    ) as { id: string; status: string; messageId_RC?: string | null }[]
+
+    if (toCheck.length === 0) return
+
+    const newStatuses: Record<string, 'SYNCHRONIZED' | 'EDITED_IN_RC' | 'DELETED_IN_RC' | 'UNKNOWN'> = {}
+
+    await Promise.all(
+      toCheck.map(async (msg) => {
+        try {
+          const res = await fetch(`/api/messages/${msg.id}`)
+          if (!res.ok) {
+            newStatuses[msg.id] = 'UNKNOWN'
+            return
+          }
+          const data = await res.json()
+          newStatuses[msg.id] = data.externalStatus || 'UNKNOWN'
+        } catch {
+          newStatuses[msg.id] = 'UNKNOWN'
+        }
+      })
+    )
+
+    setExternalStatuses((prev) => ({ ...prev, ...newStatuses }))
+  }
+
+
+  const getExternalStatusBadge = (messageId: string) => {
+    const status = externalStatuses[messageId]
+    if (!status) return null
+
+    if (status === 'DELETED_IN_RC') {
+      return (
+        <Badge variant="destructive" className="text-xs">
+          Удалено в Rocket.Chat
+        </Badge>
+      )
+    }
+
+    if (status === 'EDITED_IN_RC') {
+      return (
+        <Badge variant="outline" className="text-xs border-blue-400 text-blue-700 dark:text-blue-200 dark:border-blue-500">
+          Изменено в Rocket.Chat
+        </Badge>
+      )
+    }
+
+    // Для SYNCHRONIZED / UNKNOWN ничего не показываем, чтобы не перегружать UI
+    return null
+  }
   // Calendar helpers
   const getDaysInMonth = (date: Date) => {
     const year = date.getFullYear()

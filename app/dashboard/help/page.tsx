@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { Card, CardContent } from '@/components/ui/card'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
 import { Breadcrumbs } from '@/components/common/Breadcrumbs'
@@ -39,7 +39,7 @@ export default function HelpPage() {
 
   const load = async () => {
     try {
-      const res = await fetch('/api/help', { cache: 'no-store' })
+      const res = await fetch('/api/help')
       if (!res.ok) {
         if (res.status === 401) {
           router.push('/login')
@@ -55,26 +55,6 @@ export default function HelpPage() {
       setLoading(false)
     }
   }
-
-  useEffect(() => {
-    load()
-
-    const onFocus = () => {
-      // обновляем при возврате в окно/вкладку
-      setLoading(true)
-      load()
-    }
-
-    window.addEventListener('focus', onFocus)
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') onFocus()
-    })
-
-    return () => {
-      window.removeEventListener('focus', onFocus)
-    }
-  }, [])
-
 
   if (loading) {
     return (
@@ -152,39 +132,31 @@ export default function HelpPage() {
 
           {showMain && (
             <TabsContent value="main" className="mt-8">
-              {/* ИСПРАВЛЕНИЕ: Теперь основной текст ВСЕГДА показывается */}
-              {data.mainContent && (
-                <article className="prose prose-neutral dark:prose-invert max-w-none mb-8">
-                  <HelpHtmlContent html={data.mainContent} className="text-[15px] leading-relaxed" />
-                </article>
-              )}
-
-              {/* Если есть разделы - показываем их как подвкладки */}
-              {(data.mainSections ?? []).length > 0 && (
-                <div className="mt-8">
-                  <h2 className="text-lg font-semibold mb-4 text-muted-foreground">Разделы</h2>
-                  <Tabs defaultValue={(data.mainSections ?? [])[0].id} className="space-y-6">
-                    <TabsList className="inline-flex h-10 flex-wrap gap-1 items-center justify-start rounded-lg bg-muted/50 p-1 border border-border/60">
-                      {(data.mainSections ?? []).map((sec) => (
-                        <TabsTrigger key={sec.id} value={sec.id} className="rounded-md px-3 data-[state=active]:bg-background data-[state=active]:shadow-sm">
-                          {sec.title}
-                        </TabsTrigger>
-                      ))}
-                    </TabsList>
+              {(data.mainSections ?? []).length > 0 ? (
+                <Tabs defaultValue={(data.mainSections ?? [])[0].id} className="space-y-6">
+                  <TabsList className="inline-flex h-10 flex-wrap gap-1 items-center justify-start rounded-lg bg-muted/50 p-1 border border-border/60">
                     {(data.mainSections ?? []).map((sec) => (
-                      <TabsContent key={sec.id} value={sec.id} className="mt-4">
-                        <article className="prose prose-neutral dark:prose-invert max-w-none">
-                          <HelpHtmlContent html={sec.content} className="text-[15px] leading-relaxed" />
-                        </article>
-                      </TabsContent>
+                      <TabsTrigger key={sec.id} value={sec.id} className="rounded-md px-3 data-[state=active]:bg-background data-[state=active]:shadow-sm">
+                        {sec.title}
+                      </TabsTrigger>
                     ))}
-                  </Tabs>
-                </div>
-              )}
-
-              {/* Если НЕТ ни контента, ни разделов */}
-              {!data.mainContent && (data.mainSections ?? []).length === 0 && (
-                <p className="text-muted-foreground">Пока нет контента.</p>
+                  </TabsList>
+                  {(data.mainSections ?? []).map((sec) => (
+                    <TabsContent key={sec.id} value={sec.id} className="mt-4">
+                      <article className="prose prose-neutral dark:prose-invert max-w-none">
+                        <HelpHtmlContent html={sec.content} className="text-[15px] leading-relaxed" />
+                      </article>
+                    </TabsContent>
+                  ))}
+                </Tabs>
+              ) : (
+                <article className="prose prose-neutral dark:prose-invert max-w-none">
+                  {data.mainContent ? (
+                    <HelpHtmlContent html={data.mainContent} className="text-[15px] leading-relaxed" />
+                  ) : (
+                    <p className="text-muted-foreground">Пока нет контента.</p>
+                  )}
+                </article>
               )}
             </TabsContent>
           )}

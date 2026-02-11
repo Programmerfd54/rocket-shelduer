@@ -4,7 +4,7 @@ import { requireAuth } from '@/lib/auth';
 import { encryptPassword } from '@/lib/encryption';
 import { logSecurityEvent, getClientIp, isSuspiciousInput, SecurityEventType } from '@/lib/security';
 
-// GET - получить workspace по ID (владелец или ADM/SUP с назначением)
+// GET - получить workspace по ID (владелец или ADM с назначением)
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -48,8 +48,8 @@ export async function GET(
       return NextResponse.json({ workspace: rest });
     }
 
-    // ADM, SUP или VOL с назначением на это пространство
-    if (user.role === 'ADM' || user.role === 'SUPPORT' || user.role === 'VOL') {
+    // ADM или VOL с назначением на это пространство
+    if (user.role === 'ADM' || user.role === 'VOL') {
       const assignment = await prisma.workspaceAdminAssignment.findFirst({
         where: { userId: user.id, workspaceId: id },
       });

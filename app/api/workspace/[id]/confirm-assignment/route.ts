@@ -7,7 +7,7 @@ import { logSecurityEvent, getClientIp, isSuspiciousInput, SecurityEventType } f
 
 /**
  * POST — подтвердить назначение: войти в Rocket.Chat (логин/пароль LDAP)
- * и создать своё подключение к пространству. Доступно только назначенным (ADM/SUP/VOL).
+ * и создать своё подключение к пространству. Доступно только назначенным (ADM/VOL).
  * Body: { username, password }
  */
 export async function POST(
@@ -67,7 +67,7 @@ export async function POST(
       );
     }
 
-    // VOL может иметь только одно активное пространство (ADM/SUP - неограниченно)
+    // VOL может иметь только одно активное пространство
     if (user.role === 'VOL') {
       const count = await prisma.workspaceConnection.count({
         where: { userId: user.id, isArchived: false },
