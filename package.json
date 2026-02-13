@@ -55,15 +55,13 @@
     "react-dom": "19.2.3",
     "react-hook-form": "^7.71.1",
     "react-select": "^5.10.2",
-    "sharp": "^0.34.5",
+    "sharp": "0.32.6",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.4.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
-    "node-addon-api": "^8.0.0",
-    "node-gyp": "^11.0.0",
     "vitest": "^3",
     "@types/bcryptjs": "^2.4.6",
     "@types/js-yaml": "^4.0.9",
