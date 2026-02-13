@@ -3,7 +3,6 @@ import { requireAuth } from '@/lib/auth';
 import prisma from '@/lib/prisma';
 import { writeFile, mkdir } from 'fs/promises';
 import path from 'path';
-import sharp from 'sharp';
 
 const MAX_SIZE = 5 * 1024 * 1024; // 5 MB
 const AVATAR_SIZE = 256;
@@ -39,6 +38,7 @@ export async function POST(request: Request) {
     }
 
     const buffer = Buffer.from(await file.arrayBuffer());
+    const sharp = (await import('sharp')).default;
     const resized = await sharp(buffer)
       .resize(AVATAR_SIZE, AVATAR_SIZE, { fit: 'cover' })
       .webp({ quality: 85 })

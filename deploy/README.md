@@ -98,8 +98,7 @@ docker compose -f deploy/docker-compose.yml down
 
 ```bash
 COMPOSE_PROJECT_NAME=deploy docker compose -f deploy/docker-compose.yml build app
-docker tag deploy-app:latest rocketchat-scheduler-app:latest
-docker save -o app-image.tar rocketchat-scheduler-app:latest
+docker save -o app-image.tar deploy-app:latest
 ```
 
 Перенесите `app-image.tar` на сервер (scp, флешка и т.п.).
@@ -108,11 +107,10 @@ docker save -o app-image.tar rocketchat-scheduler-app:latest
 
 ```bash
 docker load -i app-image.tar
-docker tag rocketchat-scheduler-app:latest deploy-app:latest
 COMPOSE_PROJECT_NAME=deploy docker compose -f deploy/docker-compose.yml up -d
 ```
 
-Compose подхватит уже загруженный образ и не будет запускать сборку.
+Compose подхватит загруженный образ `deploy-app:latest` и не будет запускать сборку.
 
 ---
 

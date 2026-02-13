@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import sharp from 'sharp';
 import prisma from '@/lib/prisma';
 import { requireAuth } from '@/lib/auth';
 
@@ -150,6 +149,7 @@ export async function GET(
         .replace(/\bstroke\s*=\s*["']currentColor["']/gi, 'stroke="#333333"')
       const svgBuffer = Buffer.from(svgText, 'utf-8')
       try {
+        const sharp = (await import('sharp')).default
         const pngBuffer = await sharp(svgBuffer)
           .resize(64, 64, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
           .png()
