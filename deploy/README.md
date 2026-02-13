@@ -1,6 +1,6 @@
 # Деплой на 10.76.52.21
 
-Развёртывание в контейнерах: **PostgreSQL** + **Node.js (Next.js)**. Ссылки приглашений и `PUBLIC_APP` указывают на `http://10.76.52.21:3000`.
+Развёртывание в контейнерах: **PostgreSQL** + **Node.js (Next.js)**. Ссылки приглашений и `PUBLIC_APP` указывают на `http://10.76.52.21` (порт 80, в адресе не отображается).
 
 ## 1. Генерация .env
 
@@ -14,7 +14,7 @@
 - `JWT_SECRET`, `ENCRYPTION_KEY` — случайные строки
 - `CRON_SECRET=""`, `HEALTH_CHECK_SECRET=""`
 - `DATABASE_URL=postgresql://postgres:password@postgres:5432/rocketchat_scheduler` (хост `postgres` — имя сервиса в docker-compose)
-- `NEXT_PUBLIC_APP_URL` и `APP_URL` = `http://10.76.52.21:3000`
+- `NEXT_PUBLIC_APP_URL` и `APP_URL` = `http://10.76.52.21`
 - `COOKIE_SECURE=false` (для входа по HTTP)
 
 При необходимости поменять хост приложения:
@@ -45,7 +45,7 @@ docker compose -f deploy/docker-compose.yml up -d --build
   - `npm run create-superuser` (логин `admin`, пароль `admin` — сменить после входа)
   - `npm start`
 
-Приложение доступно по адресу: **http://10.76.52.21:3000**.
+Приложение доступно по адресу: **http://10.76.52.21** (без порта в адресе).
 
 ## 3. Проверка
 

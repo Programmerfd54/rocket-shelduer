@@ -14,4 +14,4 @@ fi
 echo "Запуск контейнеров..."
 docker compose -f deploy/docker-compose.yml up -d --build
 
-echo "Готово. Приложение: http://10.76.52.21:3000 (логин admin / admin)."
+echo "Готово. Приложение: http://10.76.52.21 (логин admin / admin)."

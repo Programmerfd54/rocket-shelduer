@@ -8,8 +8,9 @@
 set -e
 DB_HOST="${1:-postgres}"
 APP_HOST="${APP_HOST:-10.76.52.21}"
-APP_PORT="${APP_PORT:-3000}"
-BASE_URL="http://${APP_HOST}:${APP_PORT}"
+APP_PORT="${APP_PORT:-80}"
+# Порт 80 в URL не указываем (стандартный для HTTP)
+BASE_URL="http://${APP_HOST}$([ "${APP_PORT}" = "80" ] || echo ":${APP_PORT}")"
 
 # Случайные секреты (openssl есть в Alpine и Debian)
 JWT_SECRET="$(openssl rand -base64 32)"
