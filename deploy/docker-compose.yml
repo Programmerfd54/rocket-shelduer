@@ -1,8 +1,3 @@
-# Деплой: Postgres + приложение на 10.76.52.21
-# Перед запуском: сгенерировать .env в корне репо:
-#   ./deploy/generate-env.sh > .env
-# Запуск из корня репо: docker compose -f deploy/docker-compose.yml up -d --build
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -12,27 +7,46 @@ services:
       POSTGRES_DB: rocketchat_scheduler
     volumes:
       - pgdata:/var/lib/postgresql/data
-    # Порт не публикуем — приложение ходит в postgres по внутренней сети. Если нужен доступ с хоста (psql), раскомментируйте: "5433:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d rocketchat_scheduler"]
       interval: 3s
       timeout: 3s
       retries: 5
+    networks:
+      - app-network
+    restart: unless-stopped
 
   app:
     build:
       context: ..
       dockerfile: Dockerfile
+      args:
+        - NODE_ENV=production
+        - NPM_CONFIG_REGISTRY=https://registry.npmjs.org/
     env_file:
       - ../.env
     environment:
       DATABASE_URL: postgresql://postgres:password@postgres:5432/rocketchat_scheduler
+      HOSTNAME: "0.0.0.0"
+      NODE_ENV: production
+      NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
     depends_on:
       postgres:
         condition: service_healthy
     ports:
       - "80:3000"
     command: sh -c "npx prisma migrate deploy && npm run create-superuser && exec npm start"
+    networks:
+      - app-network
+    restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+      - 1.1.1.1
 
 volumes:
   pgdata: {}
+
+networks:
+  app-network:
+    driver: bridge
