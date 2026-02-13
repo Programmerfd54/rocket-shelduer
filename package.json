@@ -63,6 +63,7 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "node-addon-api": "^8.0.0",
+    "node-gyp": "^11.0.0",
     "vitest": "^3",
     "@types/bcryptjs": "^2.4.6",
     "@types/js-yaml": "^4.0.9",

@@ -14,7 +14,9 @@ RUN npm install --include=optional
 # Копируем исходники
 COPY . .
 
-# Удаляем пребилд linux-x64 (несовместим со старыми CPU) и собираем sharp из исходников через системный libvips
+# Удаляем пребилды sharp для linux-x64: на части серверов они требуют «v2 microarchitecture»
+# (новый CPU), и при сборке Next вылетает «Could not load the sharp module». Удаление заставляет
+# sharp собраться из исходников через системный libvips (см. выше apt-get libvips-dev).
 RUN rm -rf node_modules/@img/sharp-linux-x64 node_modules/@img/sharp-libvips-linux-x64 2>/dev/null; \
     SHARP_FORCE_GLOBAL_LIBVIPS=1 npm rebuild sharp
 
