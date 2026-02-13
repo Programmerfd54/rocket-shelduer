@@ -64,6 +64,11 @@ export interface Workspace {
   isArchived?: boolean
   isAssigned?: boolean
   isMultiUser?: boolean
+  todayIntensiveDay?: number
+  totalIntensiveDays?: number
+  messageDueToday?: boolean
+  nextAnnouncementDay?: number
+  nextAnnouncementChannels?: string[]
 }
 
 interface WorkspaceFormProps {
@@ -400,6 +405,23 @@ export default function WorkspaceForm({
                           </Tooltip>
                         </TooltipProvider>
                       </div>
+                      {(workspace.todayIntensiveDay != null && workspace.totalIntensiveDays != null) && (
+                        <div className="mt-1 space-y-0.5 text-[11px] text-muted-foreground">
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                            <span>День {workspace.todayIntensiveDay} из {workspace.totalIntensiveDays}</span>
+                            {workspace.messageDueToday !== undefined && (
+                              <span className={workspace.messageDueToday ? 'text-primary font-medium' : ''}>
+                                {workspace.messageDueToday ? 'Отправить по шаблонам' : 'По шаблонам нет'}
+                              </span>
+                            )}
+                          </div>
+                          {workspace.nextAnnouncementDay != null && workspace.nextAnnouncementChannels && workspace.nextAnnouncementChannels.length > 0 && (
+                            <span>
+                              След. анонс: День {workspace.nextAnnouncementDay} · {workspace.nextAnnouncementChannels.map((c) => `#${c.replace(/^#/, '')}`).join(', ')}
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-2 shrink-0">
@@ -683,12 +705,35 @@ export default function WorkspaceForm({
                             <p className="text-xs">Ожидают отправки / всего сообщений</p>
                           </TooltipContent>
                         </Tooltip>
-                        <Badge  className="text-[10px] shrink-0">
-                        {workspace.isMultiUser ? 'Многопользовательское' : 'Индивидуальное'}
-                      </Badge>
                       </TooltipProvider>
                     )}
+                    <Badge variant="outline" className="text-[10px] shrink-0" title={workspace.isMultiUser ? 'Есть назначенные участники' : 'Только владелец'}>
+                      {workspace.isMultiUser ? 'Многопользовательское' : 'Индивидуальное'}
+                    </Badge>
                   </div>
+
+                  {(workspace.todayIntensiveDay != null && workspace.totalIntensiveDays != null) && (
+                    <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <span className="font-medium">Сегодня: День {workspace.todayIntensiveDay} из {workspace.totalIntensiveDays}</span>
+                        {workspace.messageDueToday !== undefined && (
+                          <span className={workspace.messageDueToday ? 'text-primary font-medium' : ''}>
+                            По шаблонам: {workspace.messageDueToday ? 'отправить сегодня' : 'отправки нет'}
+                          </span>
+                        )}
+                      </div>
+                      {workspace.nextAnnouncementDay != null && workspace.nextAnnouncementChannels && workspace.nextAnnouncementChannels.length > 0 && (
+                        <p className="text-[11px]">
+                          След. анонс: День {workspace.nextAnnouncementDay}
+                          {workspace.nextAnnouncementChannels.length > 0 && (
+                            <span className="ml-1">
+                              · {workspace.nextAnnouncementChannels.map((c) => `#${c.replace(/^#/, '')}`).join(', ')}
+                            </span>
+                          )}
+                        </p>
+                      )}
+                    </div>
+                  )}
 
                   {isSup && (workspace.lastEmojiImport || workspace.lastUsersAdd) && (
                     <div className="text-xs text-muted-foreground space-y-0.5 pt-1">

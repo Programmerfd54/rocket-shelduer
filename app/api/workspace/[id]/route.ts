@@ -59,21 +59,19 @@ export async function GET(
       return NextResponse.json({ workspace: rest });
     }
 
-    // ADM или VOL с назначением на это пространство
-    if (user.role === 'ADM' || user.role === 'VOL') {
+    // ADM, VOL или SUPPORT с назначением на это пространство
+    if (user.role === 'ADM' || user.role === 'VOL' || user.role === 'SUPPORT') {
       const assignment = await prisma.workspaceAdminAssignment.findFirst({
         where: { userId: user.id, workspaceId: id },
       });
       if (assignment) {
-        const normalizeUrl = (u: string) => (u || '').trim().replace(/\/+$/, '') || u;
-        const norm = normalizeUrl(workspace.workspaceUrl);
-        const ownConnection = await prisma.workspaceConnection.findFirst({
-          where: {
-            userId: user.id,
-            OR: [{ workspaceUrl: norm }, { workspaceUrl: norm + '/' }],
-          },
-          select: { id: true },
+        const norm = (u: string) => (u || '').trim().replace(/\/+$/, '').toLowerCase();
+        const workspaceNorm = norm(workspace.workspaceUrl);
+        const ownList = await prisma.workspaceConnection.findMany({
+          where: { userId: user.id },
+          select: { id: true, workspaceUrl: true },
         });
+        const ownConnection = ownList.find((c) => norm(c.workspaceUrl) === workspaceNorm);
         const { userId: _u, ...rest } = workspace;
         return NextResponse.json({
           workspace: { ...rest, isAssigned: true, hasOwnConnection: !!ownConnection },

@@ -477,7 +477,7 @@ export default function WorkspaceDetailPage() {
   // Авто-открытие диалога подключения для назначенного без своего подключения
   useEffect(() => {
     if (loading || !workspace) return
-    if (workspace.isAssigned && workspace.hasOwnConnection === false) {
+    if (workspace.isAssigned && workspace.hasOwnConnection !== true) {
       setConfirmAssignmentOpen(true)
     }
   }, [loading, workspace])
@@ -491,7 +491,7 @@ export default function WorkspaceDetailPage() {
         const users = (d.users || []).filter(
           (u: { id: string; role: string }) =>
             (currentUserRole === 'ADMIN' && (u.role === 'ADM' || u.role === 'SUPPORT' || u.role === 'VOL')) ||
-            (currentUserRole === 'SUPPORT' && (u.role === 'ADM' || u.role === 'VOL'))
+            (currentUserRole === 'SUPPORT' && (u.role === 'ADM' || u.role === 'VOL' || u.role === 'SUPPORT'))
         )
         const assignedIds = new Set(workspaceAssignments.map((a) => a.userId))
         setAssignCandidates(users.filter((u: { id: string }) => !assignedIds.has(u.id)))
@@ -575,10 +575,11 @@ export default function WorkspaceDetailPage() {
       const ws = workspaceData.workspace
       setWorkspace(ws)
 
-      // Назначенный без своего подключения: не запрашиваем каналы/сообщения — избегаем 403 и тостов
-      const assignedWithoutConnection = ws?.isAssigned && ws?.hasOwnConnection === false
+      // Назначенный без своего подключения: не запрашиваем каналы/сообщения — показываем диалог «Подключиться»
+      const assignedWithoutConnection = ws?.isAssigned && ws?.hasOwnConnection !== true
       if (assignedWithoutConnection) {
         setLoading(false)
+        setConfirmAssignmentOpen(true)
         return
       }
 
@@ -589,10 +590,17 @@ export default function WorkspaceDetailPage() {
         setChannels(channelsData.channels)
       } else {
         const errorData = await channelsResponse.json().catch(() => ({}))
-        toast.error('Ошибка загрузки каналов', {
-          description: errorData.details || 'Не удалось загрузить каналы',
-          action: { label: 'Повторить', onClick: () => loadData() },
-        })
+        if (channelsResponse.status === 401 && ws?.isAssigned) {
+          setConfirmAssignmentOpen(true)
+          toast.info('Требуется подключение', {
+            description: 'Войдите в Rocket.Chat своими учётными данными, чтобы загрузить каналы.',
+          })
+        } else {
+          toast.error('Ошибка загрузки каналов', {
+            description: errorData.details || 'Не удалось загрузить каналы',
+            action: { label: 'Повторить', onClick: () => loadData() },
+          })
+        }
       }
 
       // Load messages for this workspace
@@ -1500,22 +1508,28 @@ export default function WorkspaceDetailPage() {
         />
 
         {workspace && !workspace.isActive && (
-          <Alert className="rounded-2xl border-amber-500/50 bg-amber-500/10">
-            <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-            <AlertTitle>Подключение неактивно</AlertTitle>
-            <AlertDescription>
-              Проверьте подключение к пространству, чтобы подтянулись все данные (каналы, сообщения). Нажмите кнопку ниже.
-            </AlertDescription>
-            <Button
-              variant="outline"
-              size="sm"
-              className="mt-3 gap-2 border-amber-500/50 hover:bg-amber-500/20"
-              onClick={handleCheckConnection}
-              disabled={checkingConnection}
-            >
-              {checkingConnection ? <Spinner className="h-4 w-4" /> : <RefreshCw className="h-4 w-4" />}
-              Проверить подключение
-            </Button>
+          <Alert className="rounded-xl border-amber-500/40 bg-amber-500/10 dark:bg-amber-950/20 overflow-visible">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 py-1">
+              <div className="flex gap-3 min-w-0 flex-1">
+                <AlertTriangle className="h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400 mt-0.5" />
+                <div className="min-w-0">
+                  <AlertTitle className="text-base leading-tight">Подключение неактивно</AlertTitle>
+                  <AlertDescription className="mt-1.5 text-sm leading-snug text-muted-foreground">
+                    Проверьте подключение, чтобы подтянулись каналы и сообщения.
+                  </AlertDescription>
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="shrink-0 gap-2 border-amber-500/50 hover:bg-amber-500/20 w-full sm:w-auto"
+                onClick={handleCheckConnection}
+                disabled={checkingConnection}
+              >
+                {checkingConnection ? <Spinner className="h-4 w-4" /> : <RefreshCw className="h-4 w-4" />}
+                Проверить подключение
+              </Button>
+            </div>
           </Alert>
         )}
 

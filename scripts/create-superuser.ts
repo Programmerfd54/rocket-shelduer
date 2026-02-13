@@ -3,7 +3,9 @@
  * Логин: admin, пароль: admin. После первого входа смените их в настройках.
  *
  * Запуск: npx tsx scripts/create-superuser.ts
- * Или из Docker: после старта приложения выполнить этот скрипт один раз.
+ * Docker: используйте тот же DATABASE_URL, что и приложение.
+ *   Пример: docker exec -it <container> npx tsx scripts/create-superuser.ts
+ * Если вход после логина не сохраняется — задайте в .env приложения COOKIE_SECURE=false (при доступе по HTTP).
  */
 
 import { PrismaClient } from '@prisma/client';

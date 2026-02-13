@@ -4,12 +4,19 @@ import { requireAuth, isUserEffectivelyBlocked } from '@/lib/auth';
 import { encryptPassword } from '@/lib/encryption';
 import { RocketChatClient } from '@/lib/rocketchat';
 import { logSecurityEvent, getClientIp, isSuspiciousInput, SecurityEventType } from '@/lib/security';
+import { ADM_TEMPLATES, SUP_TEMPLATES } from '@/lib/templates-data';
 
 export async function GET(request: Request) {
   try {
     const user = await requireAuth();
     const { searchParams } = new URL(request.url);
     const archived = searchParams.get('archived') === 'true';
+    // Локальная дата «сегодня» от клиента (YYYY-MM-DD), чтобы день интенсива совпадал с календарём у пользователя
+    const todayParam = searchParams.get('today');
+    const clientToday =
+      typeof todayParam === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(todayParam)
+        ? new Date(todayParam + 'T12:00:00.000Z')
+        : null;
 
     // Заблокированный пользователь не может видеть архив — только активные пространства
     if (archived && isUserEffectivelyBlocked(user)) {
@@ -57,21 +64,18 @@ export async function GET(request: Request) {
       orderBy: { createdAt: 'desc' },
     });
 
-    // ADM и VOL: свои пространства + назначенные SUP/ADMIN
-    if (user.role === 'ADM' || user.role === 'VOL') {
+    // ADM, VOL и SUPPORT: свои пространства + назначенные. При том же URL показываем только назначенное (A), своё (B) скрываем — нет дубля, всегда многопользовательское и без повторного ввода кредов.
+    if (user.role === 'ADM' || user.role === 'VOL' || user.role === 'SUPPORT') {
       try {
         const assignments = await prisma.workspaceAdminAssignment.findMany({
           where: { userId: user.id },
           select: { workspaceId: true },
         });
         const assignedIds = [...new Set(assignments.map((a) => a.workspaceId))];
-        const ownIds = new Set(ownWorkspaces.map((w) => w.id));
-        const normalizeUrl = (u: string) => (u || '').trim().replace(/\/+$/, '') || u;
-        const ownNormalizedUrls = new Set(ownWorkspaces.map((w) => normalizeUrl(w.workspaceUrl)));
-        const assignedOnlyIds = assignedIds.filter((id) => !ownIds.has(id));
-        if (assignedOnlyIds.length > 0) {
+        const normalizeUrlList = (u: string) => (u || '').trim().replace(/\/+$/, '').toLowerCase();
+        if (assignedIds.length > 0) {
           const assignedWorkspacesRaw = await prisma.workspaceConnection.findMany({
-            where: { id: { in: assignedOnlyIds }, isArchived: archived },
+            where: { id: { in: assignedIds }, isArchived: archived },
             select: {
               id: true,
               workspaceName: true,
@@ -89,13 +93,14 @@ export async function GET(request: Request) {
               color: true,
             },
           });
-          // Не показывать назначенное пространство, если у пользователя уже есть своё подключение к тому же URL (избегаем дублей)
-          const assignedWorkspaces = assignedWorkspacesRaw.filter(
-            (w) => !ownNormalizedUrls.has(normalizeUrl(w.workspaceUrl))
+          const assignedUrls = new Set(assignedWorkspacesRaw.map((w) => normalizeUrlList(w.workspaceUrl)));
+          // Свои подключения с тем же URL, что и у назначенного, не показываем — в списке только назначенное пространство
+          const ownFiltered = ownWorkspaces.filter(
+            (w) => !assignedUrls.has(normalizeUrlList(w.workspaceUrl))
           );
           workspaces = [
-            ...ownWorkspaces.map((w) => ({ ...w, isAssigned: false as const })),
-            ...assignedWorkspaces.map((w) => ({ ...w, isAssigned: true as const })),
+            ...ownFiltered.map((w) => ({ ...w, isAssigned: false as const })),
+            ...assignedWorkspacesRaw.map((w) => ({ ...w, isAssigned: true as const })),
           ];
           workspaces.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
         } else {
@@ -113,13 +118,41 @@ export async function GET(request: Request) {
       return NextResponse.json({ workspaces, groups: [] });
     }
 
-    // Какие пространства многопользовательские (есть хотя бы одно назначение)
+    const normalizeUrlForMulti = (u: string) => (u || '').trim().replace(/\/+$/, '').toLowerCase();
+
+    // Многопользовательское по URL: если к этому URL привязано любое пространство с назначениями — все подключения к этому URL считаем многопользовательскими. Учитываем регистр URL (VOL/ADM могут подключиться с другим регистром).
+    const urlVariants = workspaces.flatMap((w) => {
+      const u = (w.workspaceUrl || '').trim();
+      const noTrail = u.replace(/\/+$/, '');
+      return [u, noTrail, u.toLowerCase(), noTrail.toLowerCase()].filter(Boolean);
+    });
+    const allConnectionsWithSameUrl = await prisma.workspaceConnection.findMany({
+      where: {
+        workspaceUrl: { in: [...new Set(urlVariants)] },
+      },
+      select: { id: true, workspaceUrl: true },
+    });
+    const workspaceIdsByUrl = new Map<string, string[]>();
+    for (const c of allConnectionsWithSameUrl) {
+      const key = normalizeUrlForMulti(c.workspaceUrl);
+      if (!workspaceIdsByUrl.has(key)) workspaceIdsByUrl.set(key, []);
+      workspaceIdsByUrl.get(key)!.push(c.id);
+    }
+    const allIdsForMultiUser = [...new Set(Array.from(workspaceIdsByUrl.values()).flat())];
     const multiUserCounts = await prisma.workspaceAdminAssignment.groupBy({
       by: ['workspaceId'],
-      where: { workspaceId: { in: workspaceIds } },
+      where: { workspaceId: { in: allIdsForMultiUser } },
       _count: { id: true },
     });
-    const multiUserWorkspaceIds = new Set(multiUserCounts.map((m) => m.workspaceId));
+    const multiUserWorkspaceIdsSet = new Set(multiUserCounts.map((m) => m.workspaceId));
+    const multiUserByUrl = new Set<string>();
+    for (const [url, ids] of workspaceIdsByUrl) {
+      if (ids.some((id) => multiUserWorkspaceIdsSet.has(id))) multiUserByUrl.add(url);
+    }
+    // На какие workspace id назначен текущий пользователь (для проверки «многопользовательское» по факту назначения, а не по сравнению URL)
+    const currentUserAssignedWorkspaceIds = await prisma.workspaceAdminAssignment
+      .findMany({ where: { userId: user.id }, select: { workspaceId: true } })
+      .then((rows) => new Set(rows.map((r) => r.workspaceId)));
 
     // Для SUP: собираем все connection id с тем же workspaceUrl, чтобы показывать последние действия любого SUP
     let actionLogWorkspaceIds = workspaceIds;
@@ -188,18 +221,97 @@ export async function GET(request: Request) {
       }
     }
 
-    const workspacesWithStats = workspaces.map((w) => ({
-      ...w,
-      isMultiUser: multiUserWorkspaceIds.has(w.id),
-      messageCountTotal: totalByWs[w.id] ?? 0,
-      messageCountPending: pendingByWs[w.id] ?? 0,
-      ...(user.role === 'SUPPORT'
-        ? {
-            lastEmojiImport: lastEmojiByWs[w.id] ?? null,
-            lastUsersAdd: lastUsersAddByWs[w.id] ?? null,
+    // День интенсива и «нужно ли отправить сегодня» по шаблонам (свои шаблоны пользователя + роль)
+    const now = clientToday ?? new Date();
+    const userTemplateDays = await prisma.userTemplate
+      .findMany({ where: { userId: user.id }, select: { intensiveDay: true } })
+      .then((rows) => new Set(rows.map((r) => r.intensiveDay).filter((d): d is number => d != null)));
+
+    // Для «следующего анонса»: пользовательские шаблоны по дням и каналам
+    const userTemplatesByDay = await prisma.userTemplate.findMany({
+      where: { userId: user.id },
+      select: { intensiveDay: true, channel: true },
+    }).then((rows) => {
+      const map = new Map<number, Set<string>>();
+      for (const r of rows) {
+        if (r.intensiveDay == null) continue;
+        if (!map.has(r.intensiveDay)) map.set(r.intensiveDay, new Set());
+        map.get(r.intensiveDay)!.add(r.channel);
+      }
+      return map;
+    });
+
+    const workspacesWithStats = workspaces.map((w) => {
+      let todayIntensiveDay: number | null = null;
+      let totalIntensiveDays: number | null = null;
+      if (w.startDate && w.endDate) {
+        const start = new Date(w.startDate);
+        const end = new Date(w.endDate);
+        const totalDays = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)));
+        totalIntensiveDays = totalDays;
+        if (now >= start && now <= end) {
+          // День по календарю: разница дат (при clientToday — календарный день у пользователя)
+          const startDay = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()));
+          const todayDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+          const diffDays = Math.floor((todayDay.getTime() - startDay.getTime()) / 86400000);
+          todayIntensiveDay = Math.min(totalDays, Math.max(1, diffDays + 1));
+        }
+      }
+      const messageDueToday =
+        todayIntensiveDay != null && (userTemplateDays.has(todayIntensiveDay) || ['ADM', 'SUPPORT'].includes(user.role));
+
+      // Следующий анонс: ближайший день (>= сегодня) с шаблоном и каналы для него
+      let nextAnnouncementDay: number | undefined;
+      let nextAnnouncementChannels: string[] | undefined;
+      if (todayIntensiveDay != null && totalIntensiveDays != null) {
+        const officialByDay = new Map<number, Set<string>>();
+        const addOfficial = (t: { intensiveDay: number; channel: string }) => {
+          if (!officialByDay.has(t.intensiveDay)) officialByDay.set(t.intensiveDay, new Set());
+          officialByDay.get(t.intensiveDay)!.add(t.channel);
+        };
+        if (user.role === 'ADM') ADM_TEMPLATES.forEach(addOfficial);
+        if (user.role === 'SUPPORT') { ADM_TEMPLATES.forEach(addOfficial); SUP_TEMPLATES.forEach(addOfficial); }
+        let nextDay: number | null = null;
+        for (let d = todayIntensiveDay; d <= totalIntensiveDays; d++) {
+          const userCh = userTemplatesByDay.get(d);
+          const offCh = officialByDay.get(d);
+          if ((userCh && userCh.size > 0) || (offCh && offCh.size > 0)) {
+            nextDay = d;
+            break;
           }
-        : {}),
-    }));
+        }
+        if (nextDay != null) {
+          nextAnnouncementDay = nextDay;
+          const chSet = new Set<string>();
+          userTemplatesByDay.get(nextDay)?.forEach((c) => chSet.add(c));
+          officialByDay.get(nextDay)?.forEach((c) => chSet.add(c));
+          nextAnnouncementChannels = [...chSet];
+        }
+      }
+      const urlKey = normalizeUrlForMulti(w.workspaceUrl);
+      const urlIsMulti = multiUserByUrl.has(urlKey);
+      // Многопользовательское: если у этого workspace есть назначения ИЛИ пользователь назначен на любое пространство с тем же URL (надёжная проверка по id, не по строке URL)
+      const sameUrlIds = workspaceIdsByUrl.get(urlKey) || [];
+      const userIsInMulti =
+        multiUserWorkspaceIdsSet.has(w.id) || sameUrlIds.some((id) => currentUserAssignedWorkspaceIds.has(id));
+      return {
+        ...w,
+        isMultiUser: urlIsMulti && userIsInMulti,
+        messageCountTotal: totalByWs[w.id] ?? 0,
+        messageCountPending: pendingByWs[w.id] ?? 0,
+        todayIntensiveDay: todayIntensiveDay ?? undefined,
+        totalIntensiveDays: totalIntensiveDays ?? undefined,
+        messageDueToday: w.startDate && w.endDate ? messageDueToday : undefined,
+        nextAnnouncementDay: nextAnnouncementDay ?? undefined,
+        nextAnnouncementChannels: nextAnnouncementChannels ?? undefined,
+        ...(user.role === 'SUPPORT'
+          ? {
+              lastEmojiImport: lastEmojiByWs[w.id] ?? null,
+              lastUsersAdd: lastUsersAddByWs[w.id] ?? null,
+            }
+          : {}),
+      };
+    });
 
     const groups = await prisma.workspaceGroup.findMany({
       where: { userId: user.id },

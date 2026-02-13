@@ -11,6 +11,7 @@ import {
   SheetContent,
   SheetTrigger,
 } from '@/components/ui/sheet'
+import { formatLocalDate } from '@/lib/utils'
 
 export default function DashboardLayoutClient({
   children,
@@ -70,7 +71,7 @@ export default function DashboardLayoutClient({
       }
 
       // Load workspaces
-      const workspacesResponse = await fetch('/api/workspace')
+      const workspacesResponse = await fetch(`/api/workspace?today=${formatLocalDate(new Date())}`)
       if (workspacesResponse.ok) {
         const workspacesData = await workspacesResponse.json()
         setWorkspaces(workspacesData.workspaces)

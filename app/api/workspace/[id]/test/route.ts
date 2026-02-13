@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { requireAuth } from '@/lib/auth';
 import { RocketChatClient } from '@/lib/rocketchat';
+import { getEffectiveConnectionForRc } from '@/lib/workspace-rc';
 
 export async function POST(
   request: Request,
@@ -11,12 +12,15 @@ export async function POST(
     const user = await requireAuth();
     const { id } = await params;
 
-    const workspace = await prisma.workspaceConnection.findFirst({
-      where: {
-        id,
-        userId: user.id,
-      },
+    let workspace = await prisma.workspaceConnection.findFirst({
+      where: { id, userId: user.id },
     });
+    if (!workspace) {
+      const assignment = await prisma.workspaceAdminAssignment.findFirst({
+        where: { workspaceId: id, userId: user.id },
+      });
+      if (assignment) workspace = await prisma.workspaceConnection.findUnique({ where: { id } });
+    }
 
     if (!workspace) {
       return NextResponse.json(
@@ -25,22 +29,23 @@ export async function POST(
       );
     }
 
-    if (!workspace.authToken || !workspace.userId_RC) {
+    const effective = await getEffectiveConnectionForRc(user.id, id);
+    if (!effective?.authToken || !effective.userId_RC) {
       return NextResponse.json(
         { error: 'Workspace not authenticated' },
         { status: 401 }
       );
     }
 
-    const rcClient = new RocketChatClient(workspace.workspaceUrl);
+    const rcClient = new RocketChatClient(effective.workspaceUrl);
     const isConnected = await rcClient.testConnection(
-      workspace.authToken,
-      workspace.userId_RC
+      effective.authToken,
+      effective.userId_RC
     );
 
     if (!isConnected) {
       await prisma.workspaceConnection.update({
-        where: { id },
+        where: { id: effective.id },
         data: { isActive: false },
       });
 
@@ -51,7 +56,7 @@ export async function POST(
     }
 
     await prisma.workspaceConnection.update({
-      where: { id },
+      where: { id: effective.id },
       data: {
         isActive: true,
         lastConnected: new Date(),

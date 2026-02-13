@@ -24,7 +24,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { toast } from 'sonner'
-import { formatRelativeTime } from '@/lib/utils'
+import { formatLocalDate, formatRelativeTime } from '@/lib/utils'
 
 export default function DashboardPage() {
   const router = useRouter()
@@ -101,7 +101,7 @@ export default function DashboardPage() {
       }
 
       // Load workspaces
-      const workspacesResponse = await fetch('/api/workspace')
+      const workspacesResponse = await fetch(`/api/workspace?today=${formatLocalDate(new Date())}`)
       if (workspacesResponse.ok) {
         const workspacesData = await workspacesResponse.json()
         setRecentWorkspaces(workspacesData.workspaces.slice(0, 3))

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { requireAuth } from '@/lib/auth';
 import { RocketChatClient } from '@/lib/rocketchat';
+import { getEffectiveConnectionForRc } from '@/lib/workspace-rc';
 
 export async function GET(
   request: Request,
@@ -33,7 +34,8 @@ export async function GET(
       );
     }
 
-    if (!workspace.authToken || !workspace.userId_RC) {
+    const effective = await getEffectiveConnectionForRc(user.id, id);
+    if (!effective?.authToken || !effective.userId_RC) {
       return NextResponse.json(
         { error: 'Workspace not authenticated' },
         { status: 401 }
@@ -41,14 +43,14 @@ export async function GET(
     }
 
     try {
-      const rcClient = new RocketChatClient(workspace.workspaceUrl);
+      const rcClient = new RocketChatClient(effective.workspaceUrl);
       const channels = await rcClient.getChannels(
-        workspace.authToken,
-        workspace.userId_RC
+        effective.authToken,
+        effective.userId_RC
       );
 
       await prisma.workspaceConnection.update({
-        where: { id },
+        where: { id: effective.id },
         data: { lastConnected: new Date() },
       });
 
@@ -66,7 +68,7 @@ export async function GET(
       console.error('Rocket.Chat API error:', {
         message: rcError.message,
         code: rcError.code,
-        url: workspace.workspaceUrl
+        url: effective.workspaceUrl
       });
 
       // Проверяем тип ошибки

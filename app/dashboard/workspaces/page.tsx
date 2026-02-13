@@ -26,6 +26,7 @@ import {
   AlertCircle,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { formatLocalDate } from '@/lib/utils'
 import { WorkspaceDialog } from '@/components/_components/workspace-dialog'
 import WorkspaceForm, { type Workspace } from '@/components/_components/WorkspaceForm'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -97,7 +98,7 @@ export default function WorkspacesPage() {
   const loadWorkspaces = async () => {
     try {
       setLoading(true)
-      const response = await fetch('/api/workspace')
+      const response = await fetch(`/api/workspace?today=${formatLocalDate(new Date())}`)
       if (response.ok) {
         const data = await response.json()
         setWorkspaces(data.workspaces || [])

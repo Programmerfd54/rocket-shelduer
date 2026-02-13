@@ -16,7 +16,7 @@ import {
   RotateCcw
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { formatRelativeTime } from '@/lib/utils'
+import { formatLocalDate, formatRelativeTime } from '@/lib/utils'
 
 export default function ArchivedWorkspacesPage() {
   const router = useRouter()
@@ -39,7 +39,7 @@ export default function ArchivedWorkspacesPage() {
   const loadArchivedWorkspaces = async () => {
     try {
       setLoading(true)
-      const response = await fetch('/api/workspace?archived=true')
+      const response = await fetch(`/api/workspace?archived=true&today=${formatLocalDate(new Date())}`)
       if (response.ok) {
         const data = await response.json()
         setWorkspaces(data.workspaces || [])
@@ -117,21 +117,21 @@ export default function ArchivedWorkspacesPage() {
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-4xl font-bold bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent">
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-foreground">
             Архив пространств
           </h1>
-          <p className="text-muted-foreground mt-2 text-lg">
+          <p className="text-muted-foreground mt-1 text-sm sm:text-base">
             Заархивированные пространства будут удалены через 2 недели
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={loadArchivedWorkspaces} disabled={loading}>
+        <div className="flex items-center gap-2 shrink-0">
+          <Button variant="outline" size="sm" onClick={loadArchivedWorkspaces} disabled={loading}>
             <RefreshCw className={`w-4 h-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
             Перезагрузить
           </Button>
-          <Button variant="outline" asChild>
+          <Button variant="outline" size="sm" asChild>
             <Link href="/dashboard/workspaces">
               Назад к пространствам
             </Link>
@@ -166,12 +166,12 @@ export default function ArchivedWorkspacesPage() {
             return (
               <Card 
                 key={workspace.id} 
-                className={`border-muted ${isUrgent ? 'border-destructive/50 bg-destructive/5' : ''}`}
+                className={`rounded-xl border ${isUrgent ? 'border-destructive/50 bg-destructive/5' : 'border-border'}`}
               >
-                <CardContent className="p-6">
+                <CardContent className="p-5">
                   <div className="space-y-4">
                     {/* Header */}
-                    <div className="flex items-start justify-between">
+                    <div className="flex items-start justify-between gap-2">
                       <div className="flex items-center gap-3 flex-1 min-w-0">
                         <div 
                           className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
@@ -180,25 +180,25 @@ export default function ArchivedWorkspacesPage() {
                           <Server className="w-5 h-5 text-white" />
                         </div>
                         <div className="min-w-0 flex-1">
-                          <h3 className="font-semibold truncate">
+                          <h3 className="font-semibold truncate" title={workspace.workspaceName}>
                             {workspace.workspaceName}
                           </h3>
-                          <p className="text-xs text-muted-foreground truncate">
+                          <p className="text-xs text-muted-foreground truncate" title={workspace.workspaceUrl}>
                             {workspace.workspaceUrl.replace(/^https?:\/\//, '')}
                           </p>
                         </div>
                       </div>
-                      <Badge variant="outline" className="shrink-0">
+                      <Badge variant="secondary" className="shrink-0 text-xs">
                         <Archive className="w-3 h-3 mr-1" />
                         Архив
                       </Badge>
                     </div>
 
                     {/* Archive Info */}
-                    <div className="bg-muted/50 rounded-lg p-3 border space-y-2">
+                    <div className="rounded-lg bg-muted/40 p-3 space-y-1.5 border border-border/60">
                       {workspace.archivedAt && (
                         <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <Calendar className="w-3 h-3" />
+                          <Calendar className="w-3.5 h-3.5 shrink-0" />
                           <span>Заархивировано: {formatRelativeTime(workspace.archivedAt)}</span>
                         </div>
                       )}
@@ -206,7 +206,7 @@ export default function ArchivedWorkspacesPage() {
                         <div className={`flex items-center gap-2 text-xs font-medium ${
                           isUrgent ? 'text-destructive' : 'text-muted-foreground'
                         }`}>
-                          <Trash2 className="w-3 h-3" />
+                          <Trash2 className="w-3.5 h-3.5 shrink-0" />
                           <span>
                             {daysLeft > 0 
                               ? `Удаление через ${daysLeft} ${daysLeft === 1 ? 'день' : daysLeft < 5 ? 'дня' : 'дней'}`
@@ -218,18 +218,18 @@ export default function ArchivedWorkspacesPage() {
                     </div>
 
                     {/* Actions */}
-                    <div className="flex flex-col sm:flex-row gap-2">
+                    <div className="flex flex-col gap-2">
                       <Button
                         onClick={() => handleUnarchive(workspace.id)}
                         variant="outline"
-                        className="flex-1"
                         size="sm"
+                        className="w-full"
                       >
                         <RotateCcw className="w-4 h-4 mr-2" />
                         Восстановить
                       </Button>
                       {deleteConfirmId === workspace.id ? (
-                        <div className="flex gap-2 flex-1">
+                        <div className="flex gap-2">
                           <Button
                             variant="destructive"
                             size="sm"
@@ -252,7 +252,7 @@ export default function ArchivedWorkspacesPage() {
                         <Button
                           variant="outline"
                           size="sm"
-                          className="flex-1 text-destructive hover:text-destructive hover:bg-destructive/10"
+                          className="w-full text-destructive hover:text-destructive hover:bg-destructive/10 border-destructive/30"
                           onClick={() => setDeleteConfirmId(workspace.id)}
                         >
                           <Trash2 className="w-4 h-4 mr-2" />

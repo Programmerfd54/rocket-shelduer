@@ -94,6 +94,12 @@ docker compose up --build
 | `npx prisma migrate dev` | Создание и применение миграций в разработке |
 | `npx prisma migrate deploy` | Применение миграций (продакшен) |
 
+## Деплой в Docker
+
+- Сборка и запуск: см. `Dockerfile`. При старте выполняются `prisma migrate deploy` и `npm start`.
+- **Создание админа:** после первого запуска контейнера выполните скрипт **в той же среде, где работает приложение** (тот же `DATABASE_URL`). Из хоста: `docker exec -it <container> npx tsx scripts/create-superuser.ts` или добавьте одноразовый шаг в docker-compose/CI. Логин по умолчанию: `admin`, пароль: `admin` — смените после первого входа.
+- **Вход не «держится» (после логина снова просит войти):** если приложение доступно по **HTTP** (без HTTPS), в production cookie с флагом `Secure` не отправляется браузером. Задайте в `.env`: **`COOKIE_SECURE=false`**. При работе через HTTPS (или за прокси с терминацией SSL) оставьте `COOKIE_SECURE` не заданным или `true`.
+
 ## Health-check
 
 - **GET** `/api/health` — для мониторинга (Docker, K8s). Проверка приложения и БД: `200` и `{ status, db, latencyMs }` или `503`. Если в `.env` задан `HEALTH_CHECK_SECRET`, запрос должен содержать `?secret=HEALTH_CHECK_SECRET`, иначе вернётся `401`.

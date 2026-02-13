@@ -13,7 +13,7 @@ export async function GET(
 
     const workspace = await prisma.workspaceConnection.findUnique({
       where: { id: workspaceId },
-      select: { userId: true },
+      select: { userId: true, workspaceUrl: true },
     });
     if (!workspace) {
       return NextResponse.json({ error: 'Workspace not found' }, { status: 404 });
@@ -28,6 +28,17 @@ export async function GET(
       where: { userId: currentUser.id, workspaceId },
       select: { id: true },
     });
+    const normUrl = (workspace.workspaceUrl || '').trim().replace(/\/+$/, '');
+    const urlVariants = normUrl
+      ? [normUrl, normUrl + '/', normUrl.toLowerCase(), normUrl.toLowerCase() + '/']
+      : [];
+    const sameUrlIds =
+      urlVariants.length > 0
+        ? (await prisma.workspaceConnection.findMany({
+            where: { workspaceUrl: { in: urlVariants } },
+            select: { id: true },
+          })).map((r) => r.id)
+        : [workspaceId];
     const canList =
       currentUser.role === 'SUPPORT' ||
       currentUser.role === 'ADMIN' ||
@@ -37,8 +48,17 @@ export async function GET(
       return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
     }
 
-    const assignments = await prisma.workspaceAdminAssignment.findMany({
-      where: { workspaceId },
+    // Сливать назначения по URL только если текущий пользователь сам назначен на какое-то пространство с этим URL (иначе индивидуальное пространство показывало бы чужих участников)
+    const currentUserAssignedToSameUrl = sameUrlIds.length > 1
+      ? await prisma.workspaceAdminAssignment.findFirst({
+          where: { userId: currentUser.id, workspaceId: { in: sameUrlIds } },
+          select: { id: true },
+        })
+      : assignedToThis;
+    const idsToLoad = currentUserAssignedToSameUrl ? sameUrlIds : [workspaceId];
+
+    const assignmentsRaw = await prisma.workspaceAdminAssignment.findMany({
+      where: { workspaceId: { in: idsToLoad } },
       include: {
         user: {
           select: { id: true, name: true, email: true, username: true, role: true, avatarUrl: true },
@@ -48,6 +68,12 @@ export async function GET(
         },
       },
       orderBy: { createdAt: 'asc' },
+    });
+    const seenUserIds = new Set<string>();
+    const assignments = assignmentsRaw.filter((a) => {
+      if (seenUserIds.has(a.userId)) return false;
+      seenUserIds.add(a.userId);
+      return true;
     });
 
     return NextResponse.json({
@@ -104,11 +130,11 @@ export async function POST(
         { status: 400 }
       );
     }
-    // SUP может назначать ADM или VOL; ADMIN — ADM, SUP или VOL
+    // SUP может назначать ADM, VOL или другого SUPPORT; ADMIN — ADM, SUP или VOL
     if (currentUser.role === 'SUPPORT') {
-      if (targetUser.role !== 'ADM' && targetUser.role !== 'VOL') {
+      if (targetUser.role !== 'ADM' && targetUser.role !== 'VOL' && targetUser.role !== 'SUPPORT') {
         return NextResponse.json(
-          { error: 'SUP can assign only ADM or VOL users' },
+          { error: 'SUP can assign only ADM, VOL or SUPPORT users' },
           { status: 400 }
         );
       }

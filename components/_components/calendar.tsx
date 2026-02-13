@@ -30,7 +30,7 @@ import {
   Server,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { cn, getInitials, generateAvatarColor, getChannelTagColors } from '@/lib/utils'
+import { cn, formatLocalDate, getInitials, generateAvatarColor, getChannelTagColors } from '@/lib/utils'
 import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar'
 import {
   Dialog,
@@ -88,7 +88,7 @@ export default function CalendarPage() {
       const [userRes, messagesRes, workspacesRes] = await Promise.all([
         fetch('/api/auth/me'),
         fetch('/api/messages?scope=calendar'),
-        fetch('/api/workspace'),
+        fetch(`/api/workspace?today=${formatLocalDate(new Date())}`),
       ])
       if (userRes.ok) {
         const userData = await userRes.json()

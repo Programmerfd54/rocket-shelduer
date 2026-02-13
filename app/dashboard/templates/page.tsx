@@ -49,7 +49,7 @@ import {
   Hash,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { cn, getChannelTagColors } from '@/lib/utils'
+import { cn, formatLocalDate, getChannelTagColors } from '@/lib/utils'
 import { Card, CardContent } from '@/components/ui/card'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Breadcrumbs } from '@/components/common/Breadcrumbs'
@@ -172,7 +172,7 @@ export default function TemplatesPage() {
 
   useEffect(() => {
     if (!scheduleDialogOpen) return
-    fetch('/api/workspace')
+    fetch(`/api/workspace?today=${formatLocalDate(new Date())}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => setWorkspaces(d?.workspaces ?? []))
       .catch(() => setWorkspaces([]))

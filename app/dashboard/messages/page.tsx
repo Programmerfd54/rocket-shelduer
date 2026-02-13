@@ -16,7 +16,7 @@ import { Breadcrumbs } from '@/components/common/Breadcrumbs';
 import { EmptyState } from '@/components/common/EmptyState';
 import { ListSkeletonCard } from '@/components/common/ListSkeleton';
 import { LayoutDashboard, Calendar, MessageSquare, RefreshCw } from 'lucide-react';
-import { formatDate, messageStatusBadgeClasses } from '@/lib/utils';
+import { formatDate, formatLocalDate, messageStatusBadgeClasses } from '@/lib/utils';
 import {
   Tooltip,
   TooltipContent,
@@ -42,7 +42,7 @@ export default function MessagesPage() {
   const [sort, setSort] = useState<string>('asc');
 
   const loadWorkspaces = async () => {
-    const res = await fetch('/api/workspace');
+    const res = await fetch(`/api/workspace?today=${formatLocalDate(new Date())}`);
     if (res.ok) {
       const data = await res.json();
       setWorkspaces(data.workspaces || []);

@@ -51,9 +51,11 @@ export function verifyToken(token: string): JWTPayload | null {
 export async function setAuthCookie(token: string, maxAgeSeconds?: number) {
   const cookieStore = await cookies();
   const maxAge = maxAgeSeconds ?? 60 * 60 * 24 * 7; // 7 days
+  // В Docker/за прокси по HTTP: задайте COOKIE_SECURE=false, иначе cookie не отправляется и вход «не держится»
+  const secure = process.env.NODE_ENV === 'production' && process.env.COOKIE_SECURE !== 'false';
   cookieStore.set('auth-token', token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
+    secure,
     sameSite: 'lax',
     maxAge,
     path: '/',

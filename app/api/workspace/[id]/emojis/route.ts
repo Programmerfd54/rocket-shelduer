@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { requireAuth } from '@/lib/auth';
 import { RocketChatClient } from '@/lib/rocketchat';
+import { getEffectiveConnectionForRc } from '@/lib/workspace-rc';
 
 export async function GET(
   request: Request,
@@ -11,12 +12,15 @@ export async function GET(
     const user = await requireAuth();
     const { id } = await params;
 
-    const workspace = await prisma.workspaceConnection.findFirst({
-      where: {
-        id,
-        userId: user.id,
-      },
+    let workspace = await prisma.workspaceConnection.findFirst({
+      where: { id, userId: user.id },
     });
+    if (!workspace) {
+      const assignment = await prisma.workspaceAdminAssignment.findFirst({
+        where: { workspaceId: id, userId: user.id },
+      });
+      if (assignment) workspace = await prisma.workspaceConnection.findUnique({ where: { id } });
+    }
 
     if (!workspace) {
       return NextResponse.json(
@@ -25,7 +29,8 @@ export async function GET(
       );
     }
 
-    if (!workspace.authToken || !workspace.userId_RC) {
+    const effective = await getEffectiveConnectionForRc(user.id, id);
+    if (!effective?.authToken || !effective.userId_RC) {
       return NextResponse.json(
         { error: 'Workspace not authenticated' },
         { status: 401 }
@@ -33,10 +38,10 @@ export async function GET(
     }
 
     try {
-      const rcClient = new RocketChatClient(workspace.workspaceUrl);
+      const rcClient = new RocketChatClient(effective.workspaceUrl);
       const emojis = await rcClient.getEmojis(
-        workspace.authToken,
-        workspace.userId_RC
+        effective.authToken,
+        effective.userId_RC
       );
 
       return NextResponse.json({
@@ -47,7 +52,7 @@ export async function GET(
           extension: emoji.extension || 'png',
           _updatedAt: emoji._updatedAt,
         })),
-        workspaceUrl: workspace.workspaceUrl, // Для построения URL изображений
+        workspaceUrl: effective.workspaceUrl, // Для построения URL изображений
       });
     } catch (rcError: any) {
       console.error('Rocket.Chat emojis error:', rcError);

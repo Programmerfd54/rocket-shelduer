@@ -20,4 +20,4 @@ RUN npm run build
 EXPOSE 3000
 
 # Запускаем приложение
-CMD npx prisma migrate deploy && npm start
+CMD npx prisma migrate deploy && npm run create-superuser && npm start
