@@ -23,6 +23,8 @@
 
 (скрипт сам создаст `.env` и поднимет контейнеры).
 
+**Важно:** на сервере без нормального интернета **не используйте** `build --no-cache`. Из-за этого Docker пересоберёт всё с нуля, `npm install` снова пойдет в сеть и упадёт по таймауту. Для обновления кода достаточно `up -d --build` — подхватятся изменения и пересоберутся только нужные слои (кэш `npm install` сохранится).
+
 **После запуска:** открыть в браузере **http://10.76.52.21**, войти как **admin** / **admin** и сменить пароль в настройках.
 
 **Остановка:** `docker compose -f deploy/docker-compose.yml down`
@@ -39,7 +41,7 @@
 
 Скрипт создаёт:
 - `JWT_SECRET`, `ENCRYPTION_KEY` — случайные строки
-- `CRON_SECRET=""`, `HEALTH_CHECK_SECRET=""`
+- `CRON_SECRET`, `HEALTH_CHECK_SECRET` (случайные строки)
 - `DATABASE_URL=postgresql://postgres:password@postgres:5432/rocketchat_scheduler` (хост `postgres` — имя сервиса в docker-compose)
 - `NEXT_PUBLIC_APP_URL` и `APP_URL` = `http://10.76.52.21`
 - `COOKIE_SECURE=false` (для входа по HTTP)

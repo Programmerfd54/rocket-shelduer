@@ -2,17 +2,19 @@ FROM node:20
 
 WORKDIR /app
 
-# Только package — зависимости ставим в контейнере (sharp 0.32.6 — пребилды под старые CPU)
+# Увеличьте тайм-аут и количество попыток
+RUN npm config set fetch-timeout 600000 && \
+    npm config set fetch-retries 10
+
 COPY package*.json ./
-# Увеличиваем таймаут и повторы для медленной/нестабильной сети на сервере
-RUN npm config set fetch-timeout 300000 && npm config set fetch-retries 5
-RUN npm install --include=optional
+
+# Используйте флаг --legacy-peer-deps для обхода конфликтов зависимостей
+RUN npm install --include=optional --legacy-peer-deps
 
 COPY . .
-RUN npx prisma generate
+
+# Соберите приложение
 RUN npm run build
 
-EXPOSE 3000
-
-# Запускаем приложение
-CMD npx prisma migrate deploy && npm run create-superuser && npm start
+# Команда запуска
+CMD ["npm", "start"]
