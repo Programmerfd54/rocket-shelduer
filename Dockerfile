@@ -4,6 +4,8 @@ WORKDIR /app
 
 # Только package — зависимости ставим в контейнере (sharp 0.32.6 — пребилды под старые CPU)
 COPY package*.json ./
+# Увеличиваем таймаут и повторы для медленной/нестабильной сети на сервере
+RUN npm config set fetch-timeout 300000 && npm config set fetch-retries 5
 RUN npm install --include=optional
 
 COPY . .
