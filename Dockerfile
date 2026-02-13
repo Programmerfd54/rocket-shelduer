@@ -14,20 +14,18 @@ WORKDIR /app
 
 # Копируем файлы зависимостей
 COPY package*.json ./
-COPY package-lock*.json ./
 
-# Настраиваем npm с правильными таймаутами и отключаем strict-ssl временно
+# Настраиваем npm с правильными таймаутами
 RUN npm config set fetch-retry-mintimeout 20000 \
     && npm config set fetch-retry-maxtimeout 120000 \
     && npm config set fetch-retries 5 \
-    && npm config set strict-ssl false \
     && npm config set registry https://registry.npmjs.org/
 
 # Очищаем кэш npm перед установкой
 RUN npm cache clean --force
 
-# Устанавливаем зависимости с verbose выводом для отладки
-RUN npm ci --include=optional --unsafe-perm --verbose
+# Используем npm install вместо npm ci для разрешения конфликтов версий
+RUN npm install --include=optional --unsafe-perm --verbose
 
 # Копируем остальной код
 COPY . .
