@@ -311,10 +311,30 @@ export default function AdminPage() {
     setCreateInviteLink(null)
   }
 
-  const copyInviteLink = () => {
-    if (createInviteLink) {
-      navigator.clipboard.writeText(createInviteLink)
-      toast.success('Ссылка скопирована')
+  const copyInviteLink = async () => {
+    if (!createInviteLink) return
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(createInviteLink)
+        toast.success('Ссылка скопирована')
+        return
+      }
+    } catch {
+      /* fallback */
+    }
+    const textarea = document.createElement('textarea')
+    textarea.value = createInviteLink
+    textarea.style.position = 'fixed'
+    textarea.style.left = '-9999px'
+    document.body.appendChild(textarea)
+    textarea.select()
+    try {
+      if (document.execCommand('copy')) toast.success('Ссылка скопирована')
+      else toast.error('Не удалось скопировать')
+    } catch {
+      toast.error('Не удалось скопировать')
+    } finally {
+      document.body.removeChild(textarea)
     }
   }
 

@@ -15,14 +15,16 @@ BASE_URL="http://${APP_HOST}$([ "${APP_PORT}" = "80" ] || echo ":${APP_PORT}")"
 # Случайные секреты (openssl есть в Alpine и Debian)
 JWT_SECRET="$(openssl rand -base64 32)"
 ENCRYPTION_KEY="$(openssl rand -base64 32)"
+CRON_SECRET="$(openssl rand -base64 32)"
+HEALTH_CHECK_SECRET="$(openssl rand -base64 32)"
 
 cat << EOF
 # Сгенерировано deploy/generate-env.sh
 DATABASE_URL="postgresql://postgres:password@${DB_HOST}:5432/rocketchat_scheduler"
 JWT_SECRET="${JWT_SECRET}"
 ENCRYPTION_KEY="${ENCRYPTION_KEY}"
-CRON_SECRET=""
-HEALTH_CHECK_SECRET=""
+CRON_SECRET="${CRON_SECRET}"
+HEALTH_CHECK_SECRET="${HEALTH_CHECK_SECRET}"
 COOKIE_SECURE="false"
 NEXT_PUBLIC_APP_URL="${BASE_URL}"
 APP_URL="${BASE_URL}"

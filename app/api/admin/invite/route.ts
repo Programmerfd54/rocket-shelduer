@@ -48,11 +48,13 @@ export async function POST(request: Request) {
       },
     });
 
-    const baseUrl = process.env.NEXTAUTH_URL || process.env.VERCEL_URL
-      ? `https://${process.env.VERCEL_URL || 'localhost:3000'}`
-      : typeof window !== 'undefined' ? `${window.location.origin}` : '';
-    const origin = process.env.NEXTAUTH_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000');
-    const link = `${origin}/register/invite/${token}`;
+    const origin =
+      process.env.APP_URL ||
+      process.env.NEXT_PUBLIC_APP_URL ||
+      process.env.NEXTAUTH_URL ||
+      (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null) ||
+      'http://localhost:3000';
+    const link = `${origin.replace(/\/+$/, '')}/register/invite/${token}`;
 
     return NextResponse.json({
       success: true,
