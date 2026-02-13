@@ -92,6 +92,36 @@ const CHANNEL_OPTIONS = [
   { value: '__other__', label: 'Другой (ввести ниже)' },
 ]
 
+// Вспомогательная функция для безопасного копирования
+async function safeCopyToClipboard(text: string): Promise<boolean> {
+  if (typeof navigator === 'undefined' || !navigator.clipboard) {
+    // Fallback для старых браузеров
+    try {
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      textarea.style.pointerEvents = 'none'
+      document.body.appendChild(textarea)
+      textarea.select()
+      const success = document.execCommand('copy')
+      document.body.removeChild(textarea)
+      return success
+    } catch (err) {
+      console.warn('Fallback copy failed:', err)
+      return false
+    }
+  }
+
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch (err) {
+    console.warn('Clipboard API failed:', err)
+    return false
+  }
+}
+
 export default function TemplatesPage() {
   const router = useRouter()
   const [templates, setTemplates] = useState<Template[]>([])
@@ -432,15 +462,17 @@ export default function TemplatesPage() {
   }
 
   const [copyFeedbackKey, setCopyFeedbackKey] = useState<string | null>(null)
+  
+  // Безопасная функция копирования с обратной связью
   const copyBody = async (body: string, feedbackKey?: string) => {
-    try {
-      await navigator.clipboard.writeText(body)
+    const success = await safeCopyToClipboard(body)
+    if (success) {
       toast.success('Текст скопирован в буфер обмена')
       if (feedbackKey) {
         setCopyFeedbackKey(feedbackKey)
         setTimeout(() => setCopyFeedbackKey(null), 2000)
       }
-    } catch {
+    } else {
       toast.error('Не удалось скопировать')
     }
   }

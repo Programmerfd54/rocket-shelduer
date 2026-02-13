@@ -1563,8 +1563,25 @@ export default function WorkspaceDetailPage() {
                       className="h-8 w-8 p-0 shrink-0 rounded-lg hover:bg-muted/60"
                       title="Копировать URL"
                       onClick={() => {
-                        navigator.clipboard.writeText(workspace.workspaceUrl)
-                        toast.success('URL скопирован')
+                        if (typeof navigator !== 'undefined' && navigator.clipboard) {
+                          navigator.clipboard.writeText(workspace.workspaceUrl).then(() => {
+                            toast.success('URL скопирован')
+                          }).catch(() => {
+                            // Fallback для старых браузеров
+                            const textarea = document.createElement('textarea')
+                            textarea.value = workspace.workspaceUrl
+                            textarea.style.position = 'fixed'
+                            textarea.style.opacity = '0'
+                            document.body.appendChild(textarea)
+                            textarea.select()
+                            document.execCommand('copy')
+                            document.body.removeChild(textarea)
+                            toast.success('URL скопирован')
+                          })
+                        } else {
+                          // Fallback для SSR
+                          toast.error('Копирование недоступно')
+                        }
                       }}
                     >
                       <Copy className="w-4 h-4" />
@@ -2689,15 +2706,32 @@ export default function WorkspaceDetailPage() {
                       </div>
                       <span className="flex-1 truncate text-sm font-medium">{t.title || '(без названия)'}</span>
                       <Button
-                        variant="outline"
-                        size="sm"
+                      variant="outline"
+                      size="sm"
                         className="shrink-0 rounded-lg border-border/80"
-                        onClick={(e) => {
+                        onClick={async (e) => {
                           e.stopPropagation()
-                          navigator.clipboard.writeText(t.body).then(() => {
-                            setTemplateCopiedBody(t.body)
-                            toast.success('Текст скопирован. Выберите канал — текст подставится в форму сообщения.')
-                          })
+                          try {
+                            if (typeof navigator !== 'undefined' && navigator.clipboard) {
+                              await navigator.clipboard.writeText(t.body)
+                              setTemplateCopiedBody(t.body)
+                              toast.success('Текст скопирован. Выберите канал — текст подставится в форму сообщения.')
+                            } else {
+                              // Fallback
+                              const textarea = document.createElement('textarea')
+                              textarea.value = t.body
+                              textarea.style.position = 'fixed'
+                              textarea.style.opacity = '0'
+                              document.body.appendChild(textarea)
+                              textarea.select()
+                              document.execCommand('copy')
+                              document.body.removeChild(textarea)
+                              setTemplateCopiedBody(t.body)
+                              toast.success('Текст скопирован. Выберите канал — текст подставится в форму сообщения.')
+                            }
+                          } catch (err) {
+                            toast.error('Ошибка копирования')
+                          }
                         }}
                       >
                         <Copy className="h-4 w-4 mr-1" />
@@ -2868,12 +2902,29 @@ export default function WorkspaceDetailPage() {
                         variant="outline"
                         size="sm"
                         className="shrink-0 rounded-lg border-border/80"
-                        onClick={(e) => {
+                        onClick={async (e) => {
                           e.stopPropagation()
-                          navigator.clipboard.writeText(t.body).then(() => {
-                            setTemplateCopiedBody(t.body)
-                            toast.success('Текст скопирован. Выберите канал — текст подставится в форму сообщения.')
-                          })
+                          try {
+                            if (typeof navigator !== 'undefined' && navigator.clipboard) {
+                              await navigator.clipboard.writeText(t.body)
+                              setTemplateCopiedBody(t.body)
+                              toast.success('Текст скопирован. Выберите канал — текст подставится в форму сообщения.')
+                            } else {
+                              // Fallback
+                              const textarea = document.createElement('textarea')
+                              textarea.value = t.body
+                              textarea.style.position = 'fixed'
+                              textarea.style.opacity = '0'
+                              document.body.appendChild(textarea)
+                              textarea.select()
+                              document.execCommand('copy')
+                              document.body.removeChild(textarea)
+                              setTemplateCopiedBody(t.body)
+                              toast.success('Текст скопирован. Выберите канал — текст подставится в форму сообщения.')
+                            }
+                          } catch (err) {
+                            toast.error('Ошибка копирования')
+                          }
                         }}
                       >
                         <Copy className="h-4 w-4 mr-1" />
@@ -3006,9 +3057,25 @@ export default function WorkspaceDetailPage() {
                             variant="ghost"
                             size="sm"
                             className="h-7 text-xs gap-1"
-                            onClick={() => {
-                              navigator.clipboard.writeText(lastEmojiImportStatus.errors!.join('\n'))
-                              toast.success('Список ошибок скопирован')
+                            onClick={async () => {
+                              try {
+                                if (typeof navigator !== 'undefined' && navigator.clipboard) {
+                                  await navigator.clipboard.writeText(lastEmojiImportStatus.errors!.join('\n'))
+                                  toast.success('Список ошибок скопирован')
+                                } else {
+                                  const textarea = document.createElement('textarea')
+                                  textarea.value = lastEmojiImportStatus.errors!.join('\n')
+                                  textarea.style.position = 'fixed'
+                                  textarea.style.opacity = '0'
+                                  document.body.appendChild(textarea)
+                                  textarea.select()
+                                  document.execCommand('copy')
+                                  document.body.removeChild(textarea)
+                                  toast.success('Список ошибок скопирован')
+                                }
+                              } catch (err) {
+                                toast.error('Ошибка копирования')
+                              }
                             }}
                           >
                             <Copy className="w-3.5 h-3.5" />
