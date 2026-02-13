@@ -1,4 +1,8 @@
-version: '3.8'
+# Деплой: Postgres + приложение на 10.76.52.21
+# Перед запуском: сгенерировать .env в корне репо:
+#   ./deploy/generate-env.sh > .env
+# Запуск из корня репо: docker compose -f deploy/docker-compose.yml up -d --build
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -8,6 +12,7 @@ services:
       POSTGRES_DB: rocketchat_scheduler
     volumes:
       - pgdata:/var/lib/postgresql/data
+    # Порт не публикуем — приложение ходит в postgres по внутренней сети. Если нужен доступ с хоста (psql), раскомментируйте: "5433:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d rocketchat_scheduler"]
       interval: 3s
@@ -22,7 +27,6 @@ services:
       - ../.env
     environment:
       DATABASE_URL: postgresql://postgres:password@postgres:5432/rocketchat_scheduler
-      HOSTNAME: "0.0.0.0"
     depends_on:
       postgres:
         condition: service_healthy
