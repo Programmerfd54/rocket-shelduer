@@ -7,6 +7,7 @@ RUN echo "deb http://deb.debian.org/debian trixie main" > /etc/apt/sources.list.
     && apt-get update \
     && apt-get install -y --no-install-recommends -t trixie \
         libvips-dev python3 make g++ \
+        libglib2.0-dev libbzip2-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Копируем только package — зависимости ставим внутри контейнера
