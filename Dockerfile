@@ -2,9 +2,11 @@ FROM node:20
 
 WORKDIR /app
 
-# Системные зависимости для сборки sharp из исходников (пребилд linux-x64 требует v2 microarchitecture)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 make g++ libvips-dev \
+# Sharp при сборке из исходников требует libvips 8.17.3+. В bookworm только 8.14 — ставим из Debian testing (trixie)
+RUN echo "deb http://deb.debian.org/debian trixie main" > /etc/apt/sources.list.d/trixie.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends -t trixie \
+        libvips-dev python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
 
 # Копируем только package — зависимости ставим внутри контейнера
