@@ -60,10 +60,10 @@ services:
       app:
         condition: service_started
     command: >
-      sh -c 'while true; do
-      curl -sf -H "Authorization: Bearer ${CRON_SECRET}" http://app:3000/api/cron/send-messages || true;
+      sh -c "while true; do
+      curl -sf -H \"Authorization: Bearer $$CRON_SECRET\" http://app:3000/api/cron/send-messages || true;
       sleep 60;
-      done'
+      done"
     networks:
       - app-network
     restart: unless-stopped
