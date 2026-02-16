@@ -21,9 +21,10 @@ export async function GET() {
       });
       adminContact = row?.value?.trim() || null;
     }
+    const { sessionId, ...safeUser } = user;
     return NextResponse.json({
       user: {
-        ...user,
+        ...safeUser,
         blocked,
         volunteerExpiresAt: user.volunteerExpiresAt?.toISOString() ?? null,
         blockedAt: user.blockedAt?.toISOString() ?? null,

@@ -108,17 +108,18 @@ export interface User {
     message?: string;
   }
   
-  export interface LoginResponse {
-    success: boolean;
-    user: UserSession;
-    token: string;
-  }
-  
-  export interface RegisterResponse {
-    success: boolean;
-    user: UserSession;
-    token: string;
-  }
+export interface LoginResponse {
+  success: boolean;
+  user: UserSession;
+  token?: string;
+  requirePasswordChange?: boolean;
+}
+
+export interface RegisterResponse {
+  success: boolean;
+  user: UserSession;
+  token?: string;
+}
   
   export interface WorkspaceResponse {
     success: boolean;

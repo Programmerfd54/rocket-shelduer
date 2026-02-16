@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { hashPassword, generateToken, setAuthCookie } from '@/lib/auth';
+import { hashPassword, generateToken, setAuthCookie, ensureDeviceCookie, getSessionFingerprint, hashDeviceId } from '@/lib/auth';
 import { getClientIp, isAuthEndpointRateLimited, recordAuthEndpointHit, logSecurityEvent, SecurityEventType } from '@/lib/security';
 
 const DEFAULT_SESSION_MINUTES = 60 * 24 * 7; // 7 days
@@ -110,10 +110,15 @@ export async function POST(request: Request) {
     });
 
     const expiresAt = new Date(Date.now() + DEFAULT_SESSION_MINUTES * 60 * 1000);
+    const deviceId = await ensureDeviceCookie();
+    const fingerprint = getSessionFingerprint(request.headers);
     const session = await prisma.session.create({
       data: {
         userId: user.id,
         userAgent: userAgent?.slice(0, 500) ?? null,
+        fingerprint,
+        deviceIdHash: hashDeviceId(deviceId),
+        ipAddress: ip,
         expiresAt,
       },
     });
@@ -132,7 +137,6 @@ export async function POST(request: Request) {
     return NextResponse.json({
       success: true,
       user,
-      token: authToken,
     });
   } catch (error) {
     console.error('Register invite error:', error);

@@ -44,6 +44,30 @@ services:
       - 8.8.4.4
       - 1.1.1.1
 
+  cron:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        - NODE_ENV=production
+        - NPM_CONFIG_REGISTRY=https://registry.npmjs.org/
+    env_file:
+      - ../.env
+    environment:
+      DATABASE_URL: postgresql://postgres:password@postgres:5432/rocketchat_scheduler
+      NODE_ENV: production
+    depends_on:
+      app:
+        condition: service_started
+    command: >
+      sh -c 'while true; do
+      curl -sf -H "Authorization: Bearer ${CRON_SECRET}" http://app:3000/api/cron/send-messages || true;
+      sleep 60;
+      done'
+    networks:
+      - app-network
+    restart: unless-stopped
+
 volumes:
   pgdata: {}
 

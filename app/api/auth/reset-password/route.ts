@@ -40,6 +40,14 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
+    const { checkPasswordStrength } = await import('@/lib/utils');
+    const strength = checkPasswordStrength(newPassword);
+    if (!strength.valid || strength.strength === 'weak') {
+      return NextResponse.json(
+        { error: strength.message || 'Пароль слишком простой: используйте буквы разного регистра, цифры и спецсимволы' },
+        { status: 400 }
+      );
+    }
 
     const resetRecord = await prisma.passwordResetToken.findUnique({
       where: { token },

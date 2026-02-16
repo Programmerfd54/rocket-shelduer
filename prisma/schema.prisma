@@ -58,6 +58,9 @@ model Session {
   id        String   @id @default(cuid())
   userId    String
   userAgent String?  @db.Text
+  fingerprint String?
+  deviceIdHash String?
+  ipAddress String?
   createdAt DateTime @default(now())
   expiresAt DateTime
 

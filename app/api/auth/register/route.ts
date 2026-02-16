@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { hashPassword, generateToken, setAuthCookie } from '@/lib/auth';
+import { hashPassword, generateToken, setAuthCookie, ensureDeviceCookie, getSessionFingerprint, hashDeviceId } from '@/lib/auth';
 import {
   logSecurityEvent,
   getClientIp,
@@ -34,11 +34,27 @@ export async function POST(request: Request) {
   recordAuthEndpointHit(ip ?? null);
 
   try {
+    if (process.env.ALLOW_PUBLIC_REGISTER !== 'true') {
+      await logSecurityEvent({
+        type: SecurityEventType.UNAUTHORIZED_ACCESS,
+        path: '/api/auth/register',
+        method: 'POST',
+        ipAddress: ip,
+        userAgent,
+        details: 'Попытка публичной регистрации при выключенной регистрации',
+        blocked: true,
+      });
+      return NextResponse.json(
+        { error: 'Публичная регистрация отключена' },
+        { status: 403 }
+      );
+    }
+
     const body = await request.json();
     const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
     const password = body.password;
     const name = body.name;
-    const role = body.role;
+    const role = 'USER';
 
     if (!email || !password) {
       return NextResponse.json(
@@ -116,10 +132,15 @@ export async function POST(request: Request) {
     });
 
     const expiresAt = new Date(Date.now() + DEFAULT_SESSION_MINUTES * 60 * 1000);
+    const deviceId = await ensureDeviceCookie();
+    const fingerprint = getSessionFingerprint(request.headers);
     const session = await prisma.session.create({
       data: {
         userId: user.id,
         userAgent: userAgent?.slice(0, 500) ?? null,
+        fingerprint,
+        deviceIdHash: hashDeviceId(deviceId),
+        ipAddress: ip,
         expiresAt,
       },
     });
@@ -139,7 +160,6 @@ export async function POST(request: Request) {
     return NextResponse.json({
       success: true,
       user,
-      token,
     });
   } catch {
     return NextResponse.json(

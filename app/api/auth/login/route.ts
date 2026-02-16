@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { verifyPassword, generateToken, setAuthCookie, isUserEffectivelyBlocked } from '@/lib/auth';
+import { verifyPassword, generateToken, setAuthCookie, isUserEffectivelyBlocked, ensureDeviceCookie, getSessionFingerprint, hashDeviceId } from '@/lib/auth';
 import {
   logSecurityEvent,
   getClientIp,
@@ -167,11 +167,16 @@ export async function POST(request: Request) {
 
     const sessionMinutes = user.sessionDurationMinutes ?? DEFAULT_SESSION_MINUTES;
     const expiresAt = new Date(Date.now() + sessionMinutes * 60 * 1000);
+    const deviceId = await ensureDeviceCookie();
+    const fingerprint = getSessionFingerprint(request.headers);
 
     const session = await prisma.session.create({
       data: {
         userId: user.id,
         userAgent: userAgent?.slice(0, 500) ?? null,
+        fingerprint,
+        deviceIdHash: hashDeviceId(deviceId),
+        ipAddress: ip,
         expiresAt,
       },
     });
@@ -202,7 +207,6 @@ export async function POST(request: Request) {
         name: user.name,
         role: user.role,
       },
-      token,
       requirePasswordChange: user.requirePasswordChange === true,
     });
   } catch {

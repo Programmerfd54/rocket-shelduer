@@ -1,6 +1,7 @@
 import { cookies, headers } from 'next/headers';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 import prisma from './prisma';
 import { logSecurityEvent, SecurityEventType } from './security';
 
@@ -9,6 +10,8 @@ import { logSecurityEvent, SecurityEventType } from './security';
  * Хеш и исходный пароль никогда не возвращаются в ответах и не логируются.
  */
 const DEFAULT_JWT_SECRET = 'your-secret-key';
+const DEVICE_COOKIE_NAME = 'device-id';
+const DEVICE_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365; // 1 year
 
 function getJwtSecret(): string {
   const secret = process.env.JWT_SECRET || DEFAULT_JWT_SECRET;
@@ -16,6 +19,45 @@ function getJwtSecret(): string {
     throw new Error('JWT_SECRET must be set in production and must not be the default value.');
   }
   return secret;
+}
+
+function getCookieSecureFlag(): boolean {
+  return process.env.NODE_ENV === 'production' && process.env.COOKIE_SECURE !== 'false';
+}
+
+function sha256Hex(value: string): string {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function safeEqualHex(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false;
+  const bufA = Buffer.from(a, 'hex');
+  const bufB = Buffer.from(b, 'hex');
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
+function getRequestIpFromHeaders(h: Headers): string | null {
+  const forwarded = h.get('x-forwarded-for');
+  if (forwarded) {
+    const first = forwarded.split(',')[0]?.trim();
+    if (first) return first;
+  }
+  return h.get('x-real-ip') ?? null;
+}
+
+export function getSessionFingerprint(h: Headers): string {
+  const ua = h.get('user-agent') ?? '';
+  const lang = h.get('accept-language') ?? '';
+  const chUa = h.get('sec-ch-ua') ?? '';
+  const chPlatform = h.get('sec-ch-ua-platform') ?? '';
+  const chMobile = h.get('sec-ch-ua-mobile') ?? '';
+  const raw = `${ua}|${lang}|${chUa}|${chPlatform}|${chMobile}`.slice(0, 2000);
+  return sha256Hex(raw);
+}
+
+export function hashDeviceId(deviceId: string): string {
+  return sha256Hex(deviceId);
 }
 
 export interface JWTPayload {
@@ -52,7 +94,7 @@ export async function setAuthCookie(token: string, maxAgeSeconds?: number) {
   const cookieStore = await cookies();
   const maxAge = maxAgeSeconds ?? 60 * 60 * 24 * 7; // 7 days
   // В Docker/за прокси по HTTP: задайте COOKIE_SECURE=false, иначе cookie не отправляется и вход «не держится»
-  const secure = process.env.NODE_ENV === 'production' && process.env.COOKIE_SECURE !== 'false';
+  const secure = getCookieSecureFlag();
   cookieStore.set('auth-token', token, {
     httpOnly: true,
     secure,
@@ -60,6 +102,26 @@ export async function setAuthCookie(token: string, maxAgeSeconds?: number) {
     maxAge,
     path: '/',
   });
+}
+
+export async function ensureDeviceCookie(): Promise<string> {
+  const cookieStore = await cookies();
+  const existing = cookieStore.get(DEVICE_COOKIE_NAME)?.value;
+  if (existing) return existing;
+  const deviceId = crypto.randomBytes(32).toString('base64url');
+  cookieStore.set(DEVICE_COOKIE_NAME, deviceId, {
+    httpOnly: true,
+    secure: getCookieSecureFlag(),
+    sameSite: 'lax',
+    maxAge: DEVICE_COOKIE_MAX_AGE_SECONDS,
+    path: '/',
+  });
+  return deviceId;
+}
+
+export async function getDeviceCookie(): Promise<string | null> {
+  const cookieStore = await cookies();
+  return cookieStore.get(DEVICE_COOKIE_NAME)?.value ?? null;
 }
 
 export async function clearAuthCookie() {
@@ -88,6 +150,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
   try {
     const cookieStore = await cookies();
     const token = cookieStore.get('auth-token')?.value;
+    const deviceId = cookieStore.get(DEVICE_COOKIE_NAME)?.value ?? null;
 
     if (!token) {
       return null;
@@ -102,7 +165,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
     if (payload.sessionId) {
       const session = await prisma.session.findUnique({
         where: { id: payload.sessionId },
-        select: { userId: true, expiresAt: true, userAgent: true },
+        select: { userId: true, expiresAt: true, userAgent: true, fingerprint: true, deviceIdHash: true, ipAddress: true },
       });
       if (!session || session.userId !== payload.userId || new Date(session.expiresAt) <= new Date()) {
         return null;
@@ -110,9 +173,44 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
       const reqHeaders = await headers();
       const currentUserAgent = (reqHeaders.get('user-agent') ?? '').trim().slice(0, 500);
       const sessionUserAgent = (session.userAgent ?? '').trim();
+      const fingerprint = getSessionFingerprint(reqHeaders);
+      const deviceHash = deviceId ? sha256Hex(deviceId) : null;
+
+      if (!session.deviceIdHash || !deviceHash || !safeEqualHex(session.deviceIdHash, deviceHash)) {
+        await prisma.session.deleteMany({ where: { id: payload.sessionId } });
+        const ip = getRequestIpFromHeaders(reqHeaders);
+        await logSecurityEvent({
+          type: SecurityEventType.SESSION_HIJACK_ATTEMPT,
+          path: null,
+          method: null,
+          ipAddress: ip,
+          userAgent: currentUserAgent || undefined,
+          details: 'Несовпадение device-id для сессии (возможное копирование куки)',
+          blocked: true,
+          userId: payload.userId,
+        });
+        return null;
+      }
+
+      if (!session.fingerprint || !safeEqualHex(session.fingerprint, fingerprint)) {
+        await prisma.session.deleteMany({ where: { id: payload.sessionId } });
+        const ip = getRequestIpFromHeaders(reqHeaders);
+        await logSecurityEvent({
+          type: SecurityEventType.SESSION_HIJACK_ATTEMPT,
+          path: null,
+          method: null,
+          ipAddress: ip,
+          userAgent: currentUserAgent || undefined,
+          details: 'Несовпадение отпечатка сессии (возможное копирование куки)',
+          blocked: true,
+          userId: payload.userId,
+        });
+        return null;
+      }
+
       if (sessionUserAgent && currentUserAgent !== sessionUserAgent) {
         await prisma.session.deleteMany({ where: { id: payload.sessionId } });
-        const ip = reqHeaders.get('x-forwarded-for')?.split(',')[0]?.trim() ?? reqHeaders.get('x-real-ip') ?? null;
+        const ip = getRequestIpFromHeaders(reqHeaders);
         await logSecurityEvent({
           type: SecurityEventType.SESSION_HIJACK_ATTEMPT,
           path: null,
@@ -124,6 +222,24 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
           userId: payload.userId,
         });
         return null;
+      }
+
+      if (process.env.SESSION_BIND_IP === 'true' && session.ipAddress) {
+        const ip = getRequestIpFromHeaders(reqHeaders);
+        if (ip && ip !== session.ipAddress) {
+          await prisma.session.deleteMany({ where: { id: payload.sessionId } });
+          await logSecurityEvent({
+            type: SecurityEventType.SESSION_HIJACK_ATTEMPT,
+            path: null,
+            method: null,
+            ipAddress: ip,
+            userAgent: currentUserAgent || undefined,
+            details: 'Несовпадение IP у сессии (возможное копирование куки)',
+            blocked: true,
+            userId: payload.userId,
+          });
+          return null;
+        }
       }
     }
 

@@ -9,6 +9,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from 'sonner';
 import { Lock, Loader2, ArrowLeft } from 'lucide-react';
+import { checkPasswordStrength } from '@/lib/utils';
 
 export default function ResetPasswordPage() {
   const router = useRouter();
@@ -26,6 +27,11 @@ export default function ResetPasswordPage() {
     }
     if (password.length < 8) {
       toast.error('Пароль должен быть не менее 8 символов');
+      return;
+    }
+    const strength = checkPasswordStrength(password);
+    if (!strength.valid || strength.strength === 'weak') {
+      toast.error('Слабый пароль', { description: strength.message });
       return;
     }
     setLoading(true);
