@@ -12,6 +12,7 @@
  */
 
 import prisma from '../lib/prisma';
+import { decryptAuthToken } from '../lib/encryption';
 import { RocketChatClient } from '../lib/rocketchat';
 
 export async function sendScheduledMessages() {
@@ -53,7 +54,7 @@ export async function sendScheduledMessages() {
         // Если сообщение запланировано «от имени» другого пользователя (SUP), отправляем его
         // через подключение этого пользователя к тому же RC-серверу, чтобы в RC сообщение
         // отображалось от правильного отправителя.
-        let authToken = workspace.authToken;
+        let authToken = decryptAuthToken(workspace.authToken);
         let userId_RC = workspace.userId_RC;
         let connectionActive = workspace.isActive;
         connectionIdToDeactivate = message.workspaceId;
@@ -68,8 +69,9 @@ export async function sendScheduledMessages() {
               userId_RC: { not: null },
             },
           });
-          if (authorConnection?.authToken && authorConnection?.userId_RC) {
-            authToken = authorConnection.authToken;
+          const authorToken = authorConnection?.authToken ? decryptAuthToken(authorConnection.authToken) : null;
+          if (authorToken && authorConnection?.userId_RC) {
+            authToken = authorToken;
             userId_RC = authorConnection.userId_RC;
             connectionActive = true;
             connectionIdToDeactivate = authorConnection.id;

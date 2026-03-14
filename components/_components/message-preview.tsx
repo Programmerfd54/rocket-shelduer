@@ -1,6 +1,7 @@
 "use client"
 
 import { Card, CardContent } from '@/components/ui/card'
+import { sanitizeMessageHtml } from '@/lib/sanitize'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Hash } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -113,7 +114,7 @@ export default function MessagePreview({
 }: MessagePreviewProps) {
   if (!message.trim()) return null
 
-  const parsedMessage = parseRocketChatMarkdown(message, workspaceId, emojis)
+  const parsedMessage = sanitizeMessageHtml(parseRocketChatMarkdown(message, workspaceId, emojis))
   const userInitials = username.charAt(0).toUpperCase()
 
   return (

@@ -1,15 +1,12 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { requireAuth } from '@/lib/auth';
+import { requireAdmin, isForbiddenError } from '@/lib/auth';
 
 const KEYS = ['templatesTabVisible', 'helpMainVisible', 'helpAdminVisible'] as const;
 
 export async function PATCH(request: Request) {
   try {
-    const user = await requireAuth();
-    if (user.role !== 'ADMIN') {
-      return NextResponse.json({ error: 'Only ADMIN can update visibility' }, { status: 403 });
-    }
+    await requireAdmin();
     const body = await request.json().catch(() => ({}));
     for (const key of KEYS) {
       if (body[key] === undefined) continue;
@@ -28,6 +25,7 @@ export async function PATCH(request: Request) {
       helpAdminVisible: get('helpAdminVisible') !== 'false',
     });
   } catch (e) {
+    if (isForbiddenError(e)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     console.error('Admin help visibility error:', e);
     return NextResponse.json({ error: 'Failed to update visibility' }, { status: 500 });
   }

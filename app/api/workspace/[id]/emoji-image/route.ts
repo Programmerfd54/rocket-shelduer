@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { requireAuth } from '@/lib/auth';
+import { decryptAuthToken } from '@/lib/encryption';
 
 /**
  * Прокси изображений кастомных эмодзи Rocket.Chat.
@@ -52,9 +53,10 @@ export async function GET(
     }
 
     const baseUrl = workspace.workspaceUrl.replace(/\/$/, '');
+    const decryptedToken = decryptAuthToken(workspace.authToken);
     const authHeaders: Record<string, string> = {}
-    if (workspace.authToken && workspace.userId_RC) {
-      authHeaders['X-Auth-Token'] = workspace.authToken
+    if (decryptedToken && workspace.userId_RC) {
+      authHeaders['X-Auth-Token'] = decryptedToken
       authHeaders['X-User-Id'] = workspace.userId_RC
     }
 

@@ -58,7 +58,7 @@ export default function ResetPasswordPage() {
         <Card className="w-full max-w-md">
           <CardContent className="pt-6">
             <p className="text-muted-foreground mb-4">Неверная ссылка для сброса пароля.</p>
-            <Button asChild><Link href="/forgot-password">Запросить сброс снова</Link></Button>
+            <Button asChild><Link href="/login">Войти</Link></Button>
           </CardContent>
         </Card>
       </div>

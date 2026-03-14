@@ -323,3 +323,35 @@ export async function requireAuthNotBlocked() {
   }
   return user;
 }
+
+/** Проверка: ошибка «Forbidden» от requireAdmin/requireAction. */
+export function isForbiddenError(e: unknown): boolean {
+  return e instanceof Error && e.message === 'Forbidden';
+}
+
+/** Требует роль ADMIN. Выбрасывает при недостаточных правах. */
+export async function requireAdmin() {
+  const user = await requireAuth();
+  if (user.role !== 'ADMIN') {
+    throw new Error('Forbidden');
+  }
+  return user;
+}
+
+/** Требует роль SUPPORT или ADMIN. */
+export async function requireSupportOrAdmin() {
+  const user = await requireAuth();
+  if (user.role !== 'SUPPORT' && user.role !== 'ADMIN') {
+    throw new Error('Forbidden');
+  }
+  return user;
+}
+
+/** Требует роль SUPPORT, ADM или ADMIN. */
+export async function requireSupportAdmOrAdmin() {
+  const user = await requireAuth();
+  if (user.role !== 'SUPPORT' && user.role !== 'ADM' && user.role !== 'ADMIN') {
+    throw new Error('Forbidden');
+  }
+  return user;
+}

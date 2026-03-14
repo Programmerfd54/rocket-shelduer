@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
+import { getSafeErrorMessage } from '@/lib/security';
 import prisma from '@/lib/prisma';
-import { requireAuth, hashPassword } from '@/lib/auth';
+import { requireSupportOrAdmin, hashPassword, isForbiddenError } from '@/lib/auth';
 import { createActivityLog } from '@/app/api/activity/route';
 import { isUnsafeId } from '@/lib/security';
 
@@ -10,16 +11,9 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const currentUser = await requireAuth();
+    const currentUser = await requireSupportOrAdmin();
     const { id } = await params;
     if (isUnsafeId(id)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
-
-    if (currentUser.role !== 'SUPPORT' && currentUser.role !== 'ADMIN') {
-      return NextResponse.json(
-        { error: 'Insufficient permissions' },
-        { status: 403 }
-      );
-    }
 
     const targetUser = await prisma.user.findUnique({
       where: { id },
@@ -119,10 +113,11 @@ export async function PATCH(
     });
 
     return NextResponse.json({ success: true, user: updated });
-  } catch (error) {
-    console.error('Admin update profile error:', error);
+  } catch (e) {
+    if (isForbiddenError(e)) return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
+    console.error('Admin update profile error:', e);
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to update profile' },
+      { error: getSafeErrorMessage(e, 'Failed to update profile') },
       { status: 500 }
     );
   }
@@ -134,16 +129,9 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const currentUser = await requireAuth();
+    const currentUser = await requireSupportOrAdmin();
     const { id } = await params;
     if (isUnsafeId(id)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
-
-    if (currentUser.role !== 'SUPPORT' && currentUser.role !== 'ADMIN') {
-      return NextResponse.json(
-        { error: 'Insufficient permissions' },
-        { status: 403 }
-      );
-    }
 
     if (currentUser.id === id) {
       return NextResponse.json(
@@ -189,10 +177,11 @@ export async function DELETE(
     );
 
     return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error('Delete user error:', error);
+  } catch (e) {
+    if (isForbiddenError(e)) return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
+    console.error('Delete user error:', e);
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to delete user' },
+      { error: getSafeErrorMessage(e, 'Failed to delete user') },
       { status: 500 }
     );
   }

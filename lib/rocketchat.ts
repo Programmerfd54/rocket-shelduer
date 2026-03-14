@@ -13,6 +13,12 @@ interface RocketChatLoginResponse {
     fname?: string;
     t: string;
     msgs?: number;
+    topic?: string;
+    description?: string;
+    ts?: string;
+    default?: boolean;
+    ro?: boolean;
+    u?: { _id?: string; username?: string; name?: string };
   }
 
   interface RocketChatMessage {
@@ -51,7 +57,13 @@ interface RocketChatLoginResponse {
   
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.message || `Login failed: ${response.statusText}`);
+          const msg =
+            errorData.message ||
+            errorData.error ||
+            errorData.reason ||
+            (typeof errorData.details === 'string' ? errorData.details : null) ||
+            `Login failed: ${response.statusText}`;
+          throw new Error(msg);
         }
   
         const data: RocketChatLoginResponse = await response.json();
@@ -68,7 +80,6 @@ interface RocketChatLoginResponse {
           userId: this.userId,
         };
       } catch (error) {
-        console.error('RocketChat login error:', error);
         throw new Error(`Failed to login to Rocket.Chat: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
     }
@@ -578,5 +589,156 @@ interface RocketChatLoginResponse {
       const data = await response.json().catch(() => ({}));
       if (!response.ok) return { success: false, error: data.error || data.message || response.statusText };
       return { success: data.success === true, error: data.error };
+    }
+
+    /** Создать публичный канал (channels.create). */
+    async createChannel(
+      authToken: string,
+      userId: string,
+      name: string,
+      options?: { readOnly?: boolean; topic?: string; description?: string }
+    ): Promise<{ roomId: string; error?: string }> {
+      const res = await fetch(`${this.baseUrl}/api/v1/channels.create`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Auth-Token': authToken, 'X-User-Id': userId },
+        body: JSON.stringify({
+          name: name.replace(/\s+/g, '_').replace(/^#/, ''),
+          readOnly: options?.readOnly ?? false,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return { roomId: '', error: data.error || data.message || res.statusText };
+      const roomId = data.channel?._id;
+      if (!roomId) return { roomId: '', error: 'No roomId in response' };
+      if (options?.topic) {
+        await this.setChannelTopic(authToken, userId, roomId, options.topic);
+      }
+      if (options?.description) {
+        await this.setChannelDescription(authToken, userId, roomId, options.description);
+      }
+      return { roomId };
+    }
+
+    /** Создать приватный канал (groups.create). */
+    async createGroup(
+      authToken: string,
+      userId: string,
+      name: string,
+      options?: { readOnly?: boolean; topic?: string; description?: string }
+    ): Promise<{ roomId: string; error?: string }> {
+      const res = await fetch(`${this.baseUrl}/api/v1/groups.create`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Auth-Token': authToken, 'X-User-Id': userId },
+        body: JSON.stringify({
+          name: name.replace(/\s+/g, '_').replace(/^#/, ''),
+          readOnly: options?.readOnly ?? false,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return { roomId: '', error: data.error || data.message || res.statusText };
+      const roomId = data.group?._id;
+      if (!roomId) return { roomId: '', error: 'No roomId in response' };
+      if (options?.topic) {
+        await this.setGroupTopic(authToken, userId, roomId, options.topic);
+      }
+      if (options?.description) {
+        await this.setGroupDescription(authToken, userId, roomId, options.description);
+      }
+      return { roomId };
+    }
+
+    /** Установить канал как «по умолчанию» — новые пользователи автоматически присоединятся. */
+    async setChannelDefault(authToken: string, userId: string, roomId: string, isDefault: boolean): Promise<{ ok: boolean; error?: string }> {
+      const res = await fetch(`${this.baseUrl}/api/v1/channels.setDefault`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Auth-Token': authToken, 'X-User-Id': userId },
+        body: JSON.stringify({ roomId, default: isDefault }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return { ok: false, error: data.error || data.message || res.statusText };
+      return { ok: true };
+    }
+
+    /** Установить группу (приватный канал) как «по умолчанию». */
+    async setGroupDefault(authToken: string, userId: string, roomId: string, isDefault: boolean): Promise<{ ok: boolean; error?: string }> {
+      const res = await fetch(`${this.baseUrl}/api/v1/groups.setDefault`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Auth-Token': authToken, 'X-User-Id': userId },
+        body: JSON.stringify({ roomId, default: isDefault }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return { ok: false, error: data.error || data.message || res.statusText };
+      return { ok: true };
+    }
+
+    async setChannelTopic(authToken: string, userId: string, roomId: string, topic: string): Promise<boolean> {
+      const res = await fetch(`${this.baseUrl}/api/v1/channels.setTopic`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Auth-Token': authToken, 'X-User-Id': userId },
+        body: JSON.stringify({ roomId, topic }),
+      });
+      return res.ok;
+    }
+
+    async setChannelDescription(authToken: string, userId: string, roomId: string, description: string): Promise<boolean> {
+      const res = await fetch(`${this.baseUrl}/api/v1/channels.setDescription`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Auth-Token': authToken, 'X-User-Id': userId },
+        body: JSON.stringify({ roomId, description }),
+      });
+      return res.ok;
+    }
+
+    async setGroupTopic(authToken: string, userId: string, roomId: string, topic: string): Promise<boolean> {
+      const res = await fetch(`${this.baseUrl}/api/v1/groups.setTopic`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Auth-Token': authToken, 'X-User-Id': userId },
+        body: JSON.stringify({ roomId, topic }),
+      });
+      return res.ok;
+    }
+
+    async setGroupDescription(authToken: string, userId: string, roomId: string, description: string): Promise<boolean> {
+      const res = await fetch(`${this.baseUrl}/api/v1/groups.setDescription`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Auth-Token': authToken, 'X-User-Id': userId },
+        body: JSON.stringify({ roomId, description }),
+      });
+      return res.ok;
+    }
+
+    /** Получить информацию о комнате (rooms.info). */
+    async getRoomInfo(authToken: string, userId: string, roomId: string): Promise<{ room?: RocketChatChannel; error?: string }> {
+      const res = await fetch(`${this.baseUrl}/api/v1/rooms.info?roomId=${encodeURIComponent(roomId)}`, {
+        headers: { 'X-Auth-Token': authToken, 'X-User-Id': userId },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return { error: data.error || data.message || res.statusText };
+      const room = data.room;
+      return { room };
+    }
+
+    /** Сохранить настройки комнаты (rooms.saveRoomSettings). systemMessages — массив типов системных сообщений для скрытия. */
+    async saveRoomSettings(
+      authToken: string,
+      userId: string,
+      roomId: string,
+      options: { systemMessages?: string[] }
+    ): Promise<{ success: boolean; error?: string }> {
+      const res = await fetch(`${this.baseUrl}/api/v1/rooms.saveRoomSettings`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Auth-Token': authToken,
+          'X-User-Id': userId,
+        },
+        body: JSON.stringify({
+          rid: roomId,
+          ...(options.systemMessages !== undefined && { systemMessages: options.systemMessages }),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return { success: false, error: data.error || data.message || res.statusText };
+      return { success: data.success === true };
     }
   }

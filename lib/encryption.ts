@@ -10,8 +10,7 @@ const ALGORITHM = 'aes-256-gcm';
 const DEFAULT_ENCRYPTION_SECRET = 'default-secret-key';
 
 function getEncryptionKey(): Buffer {
-  const secret =
-    process.env.ENCRYPTION_KEY || process.env.JWT_SECRET || DEFAULT_ENCRYPTION_SECRET;
+  const secret = process.env.ENCRYPTION_KEY || DEFAULT_ENCRYPTION_SECRET;
   if (
     process.env.NODE_ENV === 'production' &&
     (secret === DEFAULT_ENCRYPTION_SECRET || !process.env.ENCRYPTION_KEY)
@@ -57,4 +56,24 @@ export function decryptPassword(encryptedData: string): string {
     // Не логируем содержимое ошибки — может содержать чувствительные данные
     throw new Error('Failed to decrypt password');
   }
+}
+
+const AUTH_TOKEN_PREFIX = 'enc:';
+
+/** Шифрование RC auth token для хранения в БД. */
+export function encryptAuthToken(token: string): string {
+  return AUTH_TOKEN_PREFIX + encryptPassword(token);
+}
+
+/** Расшифровка RC auth token. Поддерживает legacy (незашифрованные) значения. */
+export function decryptAuthToken(stored: string | null | undefined): string | null {
+  if (!stored?.trim()) return null;
+  if (stored.startsWith(AUTH_TOKEN_PREFIX)) {
+    try {
+      return decryptPassword(stored.slice(AUTH_TOKEN_PREFIX.length));
+    } catch {
+      return null;
+    }
+  }
+  return stored;
 }

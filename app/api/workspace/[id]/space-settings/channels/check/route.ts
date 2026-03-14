@@ -1,0 +1,60 @@
+import { NextResponse } from 'next/server';
+import { requireAuth } from '@/lib/auth';
+import { getSafeErrorMessage } from '@/lib/security';
+import { RocketChatClient } from '@/lib/rocketchat';
+import { getEffectiveConnectionForRc } from '@/lib/workspace-rc';
+
+/** GET — проверить, что канал существует (rooms.info). */
+export async function GET(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const user = await requireAuth();
+    const { id: workspaceId } = await params;
+    const { searchParams } = new URL(request.url);
+    const roomId = searchParams.get('roomId');
+
+    if (!roomId) {
+      return NextResponse.json({ error: 'Укажите roomId' }, { status: 400 });
+    }
+
+    const effective = await getEffectiveConnectionForRc(user.id, workspaceId);
+    if (!effective?.authToken || !effective.userId_RC) {
+      return NextResponse.json(
+        { error: 'Подключитесь к пространству' },
+        { status: 401 }
+      );
+    }
+
+    const rc = new RocketChatClient(effective.workspaceUrl);
+    const { room, error } = await rc.getRoomInfo(
+      effective.authToken,
+      effective.userId_RC,
+      roomId
+    );
+
+    if (error || !room) {
+      return NextResponse.json({ exists: false, error: error || 'Канал не найден' });
+    }
+
+    return NextResponse.json({
+      exists: true,
+      room: {
+        id: room._id,
+        name: room.name,
+        topic: room.topic,
+        description: room.description,
+        ts: room.ts,
+        default: room.default,
+        readOnly: room.ro,
+      },
+    });
+  } catch (error) {
+    console.error('Check channel error:', error);
+    return NextResponse.json(
+      { error: getSafeErrorMessage(error, 'Ошибка') },
+      { status: 500 }
+    );
+  }
+}

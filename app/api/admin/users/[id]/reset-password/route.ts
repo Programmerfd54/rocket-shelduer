@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { requireAuth, hashPassword } from '@/lib/auth';
+import { requireSupportOrAdmin, hashPassword, isForbiddenError } from '@/lib/auth';
 
 function generateRandomPassword(length: number = 12): string {
   const charset = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*';
@@ -16,15 +16,8 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const user = await requireAuth();
+    const user = await requireSupportOrAdmin();
     const { id } = await params;
-
-    if (user.role !== 'SUPPORT' && user.role !== 'ADMIN') {
-      return NextResponse.json(
-        { error: 'Insufficient permissions' },
-        { status: 403 }
-      );
-    }
 
     const targetUser = await prisma.user.findUnique({
       where: { id },
@@ -59,10 +52,8 @@ export async function POST(
       success: true,
       newPassword,
     });
-  } catch {
-    return NextResponse.json(
-      { error: 'Failed to reset password' },
-      { status: 500 }
-    );
+  } catch (e) {
+    if (isForbiddenError(e)) return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
+    return NextResponse.json({ error: 'Failed to reset password' }, { status: 500 });
   }
 }

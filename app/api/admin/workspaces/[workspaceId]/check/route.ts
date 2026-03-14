@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { requireAuth } from '@/lib/auth';
+import { decryptAuthToken } from '@/lib/encryption';
 import { RocketChatClient } from '@/lib/rocketchat';
 
 /** SUP может проверить подключение любого workspace (в т.ч. другого пользователя). */
@@ -30,7 +31,8 @@ export async function POST(
       );
     }
 
-    if (!workspace.authToken || !workspace.userId_RC) {
+    const decryptedToken = decryptAuthToken(workspace.authToken);
+    if (!decryptedToken || !workspace.userId_RC) {
       return NextResponse.json(
         { ok: false, error: 'Workspace not authenticated' },
         { status: 200 }
@@ -39,7 +41,7 @@ export async function POST(
 
     const rcClient = new RocketChatClient(workspace.workspaceUrl);
     const isConnected = await rcClient.testConnection(
-      workspace.authToken,
+      decryptedToken,
       workspace.userId_RC
     );
 

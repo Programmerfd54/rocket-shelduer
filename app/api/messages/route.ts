@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { requireAuth } from '@/lib/auth';
+import { isUnsafeId } from '@/lib/security';
 
 export async function GET(request: Request) {
   try {
@@ -9,6 +10,12 @@ export async function GET(request: Request) {
     const workspaceId = searchParams.get('workspaceId');
     const status = searchParams.get('status');
     const filterUserId = searchParams.get('userId'); // Фильтр по пользователю (для админов)
+    if (workspaceId && isUnsafeId(workspaceId)) {
+      return NextResponse.json({ error: 'Bad request' }, { status: 400 });
+    }
+    if (filterUserId && isUnsafeId(filterUserId)) {
+      return NextResponse.json({ error: 'Bad request' }, { status: 400 });
+    }
     const scope = searchParams.get('scope'); // Специальный режим выборки (например, calendar)
 
     const where: any = {};
@@ -116,6 +123,12 @@ export async function POST(request: Request) {
         { error: 'All fields are required' },
         { status: 400 }
       );
+    }
+    if (isUnsafeId(workspaceId) || isUnsafeId(channelId)) {
+      return NextResponse.json({ error: 'Bad request' }, { status: 400 });
+    }
+    if (asUserId && isUnsafeId(asUserId)) {
+      return NextResponse.json({ error: 'Bad request' }, { status: 400 });
     }
 
     const workspace = await prisma.workspaceConnection.findUnique({

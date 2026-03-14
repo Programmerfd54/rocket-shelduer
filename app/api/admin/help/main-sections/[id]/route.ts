@@ -1,16 +1,13 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { requireAuth } from '@/lib/auth';
+import { requireAdmin, isForbiddenError } from '@/lib/auth';
 
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const user = await requireAuth();
-    if (user.role !== 'ADMIN') {
-      return NextResponse.json({ error: 'Only ADMIN' }, { status: 403 });
-    }
+    await requireAdmin();
     const { id } = await params;
     const body = await request.json();
     const data: { title?: string; order?: number; content?: string } = {};
@@ -20,6 +17,7 @@ export async function PATCH(
     await prisma.helpMainSection.update({ where: { id }, data });
     return NextResponse.json({ success: true });
   } catch (e) {
+    if (isForbiddenError(e)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     console.error('Admin help main-section PATCH error:', e);
     return NextResponse.json({ error: 'Failed to update' }, { status: 500 });
   }
@@ -30,14 +28,12 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const user = await requireAuth();
-    if (user.role !== 'ADMIN') {
-      return NextResponse.json({ error: 'Only ADMIN' }, { status: 403 });
-    }
+    await requireAdmin();
     const { id } = await params;
     await prisma.helpMainSection.delete({ where: { id } });
     return NextResponse.json({ success: true });
   } catch (e) {
+    if (isForbiddenError(e)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     console.error('Admin help main-section DELETE error:', e);
     return NextResponse.json({ error: 'Failed to delete' }, { status: 500 });
   }

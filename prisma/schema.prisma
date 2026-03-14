@@ -196,7 +196,8 @@ model WorkspaceActionLog {
   id          String   @id @default(cuid())
   workspaceId String
   userId      String
-  action      String   // "emoji_import" | "users_add"
+  action      String   // "emoji_import" | "users_add" | "channel_create" | "setting_apply"
+  details     String?  @db.Text // JSON: { roomId, channelName } | { settingKey }
   createdAt   DateTime @default(now())
 
   workspace WorkspaceConnection @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -204,6 +205,7 @@ model WorkspaceActionLog {
 
   @@index([workspaceId])
   @@index([userId])
+  @@index([workspaceId, action])
 }
 
 model AdminNote {
@@ -367,13 +369,15 @@ model UserTemplateVersion {
   @@index([userTemplateId])
 }
 
-// Переопределения официальных шаблонов (SUPER): правка body/title для SUP или ADM
+// Переопределения официальных шаблонов (SUPER): правка body/title/channel/time для SUP или ADM
 model OfficialTemplateOverride {
   id         String   @id @default(cuid())
   templateId String  // id из lib/templates-data (например d1-09)
   scope      String  // "SUP" | "ADM"
   body       String  @db.Text
   title      String?
+  channel    String? // переопределение канала (adm, announcements, general, support, services и т.д.)
+  time       String? // переопределение времени "HH:mm"
   updatedById String
   updatedAt  DateTime @updatedAt
 

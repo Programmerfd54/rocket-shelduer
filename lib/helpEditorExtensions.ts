@@ -1,5 +1,6 @@
 import { Node, mergeAttributes } from '@tiptap/core'
 import { HELPDOC_ICONS } from '@/lib/helpIcons'
+import { sanitizeSvgIcon } from '@/lib/sanitize'
 
 /** Inline-иконка в справке: хранит имя иконки, в редакторе и при просмотре рендерится как SVG */
 export const HelpIcon = Node.create({
@@ -54,8 +55,8 @@ export const HelpIcon = Node.create({
         span.setAttribute('data-icon-color', node.attrs.color)
         span.style.color = node.attrs.color
       }
-      const svg = HELPDOC_ICONS[node.attrs.name]
-      if (svg) span.innerHTML = svg
+      const raw = HELPDOC_ICONS[node.attrs.name]
+      if (raw) span.innerHTML = sanitizeSvgIcon(raw)
       return { dom: span }
     }
   },

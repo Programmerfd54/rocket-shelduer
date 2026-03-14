@@ -1,8 +1,9 @@
 'use client'
 
-import { useRef, useEffect, useCallback } from 'react'
+import { useRef, useEffect, useCallback, useMemo } from 'react'
 import { cn } from '@/lib/utils'
 import { HELPDOC_ICONS } from '@/lib/helpIcons'
+import { sanitizeHelpHtml, sanitizeSvgIcon } from '@/lib/sanitize'
 
 /** Рендерит HTML контент справки и подменяет относительные пути изображений на абсолютные для корректной загрузки. */
 export function HelpHtmlContent({
@@ -12,6 +13,7 @@ export function HelpHtmlContent({
   html: string
   className?: string
 }) {
+  const sanitized = useMemo(() => sanitizeHelpHtml(html), [html])
   const ref = useRef<HTMLDivElement>(null)
 
   const injectIconsAndAssets = useCallback(() => {
@@ -36,8 +38,8 @@ export function HelpHtmlContent({
       if (span.querySelector('svg')) return
       const name = span.getAttribute('data-icon')
       const color = span.getAttribute('data-icon-color')
-      const svg = name && name in HELPDOC_ICONS ? HELPDOC_ICONS[name] : ''
-      if (svg) span.innerHTML = svg
+      const raw = name && name in HELPDOC_ICONS ? HELPDOC_ICONS[name] : ''
+      if (raw) span.innerHTML = sanitizeSvgIcon(raw)
       if (color) span.style.color = color
     })
   }, [])
@@ -50,13 +52,13 @@ export function HelpHtmlContent({
       cancelAnimationFrame(rafId)
       window.clearTimeout(timeoutId)
     }
-  }, [html, injectIconsAndAssets])
+  }, [sanitized, injectIconsAndAssets])
 
   return (
     <div
       ref={ref}
       className={cn('help-content prose prose-sm dark:prose-invert max-w-none', className)}
-      dangerouslySetInnerHTML={{ __html: html }}
+      dangerouslySetInnerHTML={{ __html: sanitized }}
     />
   )
 }

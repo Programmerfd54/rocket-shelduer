@@ -71,10 +71,93 @@ import { cn, getInitials, generateAvatarColor, getChannelTagColors, messageStatu
 import { Breadcrumbs } from '@/components/common/Breadcrumbs'
 import { EmptyState } from '@/components/common/EmptyState'
 import { VirtualList } from '@/components/_components/VirtualList'
-import { Trash2, RotateCcw, ChevronDown, ChevronRight, ChevronUp, Copy, FileText } from 'lucide-react'
+import { Trash2, RotateCcw, ChevronDown, ChevronRight, ChevronUp, Copy, FileText, KeyRound, Eye } from 'lucide-react'
 import { Calendar, ExternalLink } from 'lucide-react'
 import { ResetAccountTab } from '@/components/_components/workspace/ResetAccountTab'
 import { UserAccessTab } from '@/components/_components/workspace/UserAccessTab'
+import { SpaceSettingsTab } from '@/components/_components/workspace/SpaceSettingsTab'
+import { WorkspaceCalendar } from '@/components/_components/workspace/WorkspaceCalendar'
+
+const TAB_COLORS = {
+  blue: {
+    active: 'bg-blue-500/15 border-blue-400/60 text-blue-700 dark:text-blue-300',
+    icon: 'text-blue-600 dark:text-blue-400',
+    inactive: 'border-transparent hover:border-blue-300/40 hover:bg-blue-500/5 text-muted-foreground hover:text-foreground',
+  },
+  emerald: {
+    active: 'bg-emerald-500/15 border-emerald-400/60 text-emerald-700 dark:text-emerald-300',
+    icon: 'text-emerald-600 dark:text-emerald-400',
+    inactive: 'border-transparent hover:border-emerald-300/40 hover:bg-emerald-500/5 text-muted-foreground hover:text-foreground',
+  },
+  amber: {
+    active: 'bg-amber-500/15 border-amber-400/60 text-amber-700 dark:text-amber-300',
+    icon: 'text-amber-600 dark:text-amber-400',
+    inactive: 'border-transparent hover:border-amber-300/40 hover:bg-amber-500/5 text-muted-foreground hover:text-foreground',
+  },
+  violet: {
+    active: 'bg-violet-500/15 border-violet-400/60 text-violet-700 dark:text-violet-300',
+    icon: 'text-violet-600 dark:text-violet-400',
+    inactive: 'border-transparent hover:border-violet-300/40 hover:bg-violet-500/5 text-muted-foreground hover:text-foreground',
+  },
+  rose: {
+    active: 'bg-rose-500/15 border-rose-400/60 text-rose-700 dark:text-rose-300',
+    icon: 'text-rose-600 dark:text-rose-400',
+    inactive: 'border-transparent hover:border-rose-300/40 hover:bg-rose-500/5 text-muted-foreground hover:text-foreground',
+  },
+  orange: {
+    active: 'bg-orange-500/15 border-orange-400/60 text-orange-700 dark:text-orange-300',
+    icon: 'text-orange-600 dark:text-orange-400',
+    inactive: 'border-transparent hover:border-orange-300/40 hover:bg-orange-500/5 text-muted-foreground hover:text-foreground',
+  },
+  cyan: {
+    active: 'bg-cyan-500/15 border-cyan-400/60 text-cyan-700 dark:text-cyan-300',
+    icon: 'text-cyan-600 dark:text-cyan-400',
+    inactive: 'border-transparent hover:border-cyan-300/40 hover:bg-cyan-500/5 text-muted-foreground hover:text-foreground',
+  },
+  teal: {
+    active: 'bg-teal-500/15 border-teal-400/60 text-teal-700 dark:text-teal-300',
+    icon: 'text-teal-600 dark:text-teal-400',
+    inactive: 'border-transparent hover:border-teal-300/40 hover:bg-teal-500/5 text-muted-foreground hover:text-foreground',
+  },
+} as const
+
+function TabNavButton({
+  active,
+  onClick,
+  icon,
+  label,
+  badge,
+  color,
+}: {
+  active: boolean
+  onClick: () => void
+  icon: React.ReactNode
+  label: string
+  badge?: number
+  color: keyof typeof TAB_COLORS
+}) {
+  const c = TAB_COLORS[color]
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'w-full flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium transition-all border-2',
+        active ? c.active : c.inactive
+      )}
+    >
+      <span className={cn('shrink-0 flex items-center justify-center w-7 h-7 rounded-md', active ? c.icon : 'text-muted-foreground', active && 'bg-background/80')}>
+        {icon}
+      </span>
+      <span className="truncate flex-1 text-left">{label}</span>
+      {badge !== undefined && (
+        <Badge variant="secondary" className={cn('text-[10px] h-5 px-1.5 shrink-0', active && 'bg-background/80')}>
+          {badge}
+        </Badge>
+      )}
+    </button>
+  )
+}
 
 export default function WorkspaceDetailPage() {
   const params = useParams()
@@ -97,6 +180,7 @@ export default function WorkspaceDetailPage() {
   const [userVolunteerIntensive, setUserVolunteerIntensive] = useState<string | null>(null)
   const [userVolunteerExpiresAt, setUserVolunteerExpiresAt] = useState<string | null>(null)
   const [checkingConnection, setCheckingConnection] = useState(false)
+  const [unarchiveLoading, setUnarchiveLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [messageFilterFromStats, setMessageFilterFromStats] = useState<string | null>(null)
   /** Фильтр по автору сообщений (многопользовательское пространство) */
@@ -131,6 +215,8 @@ export default function WorkspaceDetailPage() {
   const [workspaceActionLog, setWorkspaceActionLog] = useState<{
     lastEmojiImport: { userName: string | null; userEmail: string; at: string } | null
     lastUsersAdd: { userName: string | null; userEmail: string; at: string } | null
+    channelCreators: Record<string, { userName: string | null; userEmail: string; rcUsername?: string; at: string }>
+    settingAppliers: Record<string, { userName: string | null; userEmail: string; rcUsername?: string; at: string }>
   } | null>(null)
   /** Ограничения вкладок для SUP/ADM (от ADMIN). ADMIN всегда все true. */
   const [tabRestrictions, setTabRestrictions] = useState<{ templates: boolean; emojiImport: boolean; usersAdd: boolean } | null>(null)
@@ -279,19 +365,18 @@ export default function WorkspaceDetailPage() {
   }, [currentUserRole])
 
   const allowedTabsList = useMemo(() => {
-    if (currentUserRole === 'ADMIN') return ['channels', 'messages', 'templates', 'emoji-import', 'users-add', 'reset-account', 'user-access']
+    if (currentUserRole === 'ADMIN') return ['channels', 'messages', 'templates', 'emoji-import', 'reset-account', 'user-access']
     if (currentUserRole === 'SUPPORT') {
-      if (!tabRestrictions) return ['channels', 'messages', 'templates', 'emoji-import', 'users-add', 'reset-account', 'user-access']
+      if (!tabRestrictions) return ['channels', 'messages', 'templates', 'emoji-import', 'reset-account', 'user-access']
       const t = ['channels', 'messages']
       if (tabRestrictions.templates) t.push('templates')
       if (tabRestrictions.emojiImport) t.push('emoji-import')
-      if (tabRestrictions.usersAdd) t.push('users-add')
       t.push('reset-account', 'user-access')
       return t
     }
     if (currentUserRole === 'ADM') {
-      if (!tabRestrictions) return ['channels', 'messages', 'templates']
-      return ['channels', 'messages', ...(tabRestrictions.templates ? ['templates'] : [])]
+      if (!tabRestrictions) return ['channels', 'messages', 'templates', 'user-access']
+      return ['channels', 'messages', ...(tabRestrictions.templates ? ['templates'] : []), 'user-access']
     }
     return ['channels', 'messages']
   }, [currentUserRole, tabRestrictions])
@@ -302,24 +387,39 @@ export default function WorkspaceDetailPage() {
     }
   }, [currentUserRole, tabRestrictions, allowedTabsList, activeTab])
 
-  useEffect(() => {
+  const refetchActionLog = useCallback(() => {
     if (currentUserRole !== 'SUPPORT' && currentUserRole !== 'ADMIN' || !workspaceId) return
     fetch(`/api/workspace/${workspaceId}/action-log`)
       .then((r) => r.json())
       .then((data) => {
-        if (data.lastEmojiImport || data.lastUsersAdd) {
-          setWorkspaceActionLog({
-            lastEmojiImport: data.lastEmojiImport
-              ? { userName: data.lastEmojiImport.userName, userEmail: data.lastEmojiImport.userEmail, at: data.lastEmojiImport.at }
-              : null,
-            lastUsersAdd: data.lastUsersAdd
-              ? { userName: data.lastUsersAdd.userName, userEmail: data.lastUsersAdd.userEmail, at: data.lastUsersAdd.at }
-              : null,
-          })
+        const mapUser = (u: { userName?: string | null; userEmail: string; at: string } | null) =>
+          u ? { userName: u.userName ?? null, userEmail: u.userEmail, at: u.at } : null
+        const mapRecord = (r: Record<string, { userName?: string | null; userEmail: string; rcUsername?: string; at: string }> | undefined) => {
+          if (!r) return {}
+          const out: Record<string, { userName: string | null; userEmail: string; rcUsername?: string; at: string }> = {}
+          for (const [k, v] of Object.entries(r)) {
+            out[k] = { userName: v.userName ?? null, userEmail: v.userEmail, rcUsername: v.rcUsername, at: v.at }
+          }
+          return out
         }
+        setWorkspaceActionLog({
+          lastEmojiImport: mapUser(data.lastEmojiImport),
+          lastUsersAdd: mapUser(data.lastUsersAdd),
+          channelCreators: mapRecord(data.channelCreators),
+          settingAppliers: mapRecord(data.settingAppliers),
+        })
       })
       .catch(() => {})
   }, [currentUserRole, workspaceId])
+
+  useEffect(() => {
+    refetchActionLog()
+  }, [refetchActionLog])
+
+  // Обновляем «кто создал/применил» при открытии вкладки настройки пространства — чтобы все видели актуальные данные
+  useEffect(() => {
+    if (activeTab === 'emoji-import') refetchActionLog()
+  }, [activeTab, refetchActionLog])
 
   useEffect(() => {
     loadData()
@@ -339,7 +439,7 @@ export default function WorkspaceDetailPage() {
     const savedTab = localStorage.getItem(`activeTab_${workspaceId}`)
     const allowedTabs =
       currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN'
-        ? ['channels', 'messages', 'templates', 'emoji-import', 'users-add']
+        ? ['channels', 'messages', 'templates', 'emoji-import']
         : currentUserRole === 'ADM'
           ? ['channels', 'messages', 'templates']
           : ['channels', 'messages']
@@ -379,7 +479,7 @@ export default function WorkspaceDetailPage() {
     if (savedTab && allowedTabsList.includes(savedTab)) {
       setActiveTab(savedTab)
     } else if (currentUserRole === 'VOL' || currentUserRole === 'USER') {
-      setActiveTab((prev) => (['emoji-import', 'users-add', 'templates', 'reset-account', 'user-access'].includes(prev) ? 'channels' : prev))
+      setActiveTab((prev) => (['emoji-import', 'templates', 'reset-account', 'user-access'].includes(prev) ? 'channels' : prev))
     }
   }, [currentUserRole, workspaceId, allowedTabsList])
   
@@ -445,6 +545,22 @@ export default function WorkspaceDetailPage() {
     }
   }
 
+  const handleUnarchive = async () => {
+    if (!workspaceId) return
+    setUnarchiveLoading(true)
+    try {
+      const res = await fetch(`/api/workspace/${workspaceId}/archive`, { method: 'DELETE' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Ошибка восстановления')
+      toast.success('Пространство восстановлено из архива')
+      await loadData()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Ошибка восстановления')
+    } finally {
+      setUnarchiveLoading(false)
+    }
+  }
+
   const loadAddedUsers = useCallback(async () => {
     try {
       const res = await fetch(`/api/workspace/${workspaceId}/users`)
@@ -455,7 +571,7 @@ export default function WorkspaceDetailPage() {
   }, [workspaceId])
 
   useEffect(() => {
-    if (activeTab === 'users-add') loadAddedUsers()
+    if (activeTab === 'emoji-import') loadAddedUsers()
   }, [activeTab, loadAddedUsers])
 
   const loadAssignments = useCallback(async () => {
@@ -1176,6 +1292,7 @@ export default function WorkspaceDetailPage() {
       toast.success('Сообщение перенесено в очередь — отправка через минуту')
     } catch (error: any) {
       toast.error(error.message || 'Ошибка повтора отправки', {
+
         action: {
           label: 'Повторить',
           onClick: () => handleRetryMessage(messageId),
@@ -1427,7 +1544,7 @@ export default function WorkspaceDetailPage() {
   if (loading) {
     return (
       <div className="min-h-screen bg-background">
-        <div className="container max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+        <div className="container max-w-7xl mx-auto px-3 sm:px-4 lg:px-6 py-4 sm:py-6 space-y-4 sm:space-y-6">
           <div className="space-y-6">
             <Skeleton className="h-9 w-40" />
             <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
@@ -1447,7 +1564,7 @@ export default function WorkspaceDetailPage() {
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {[1, 2, 3].map((i) => (
                 <Card key={i} className="border-muted/70">
-                  <CardContent className="p-6">
+                  <CardContent className="p-4">
                     <div className="flex items-center justify-between">
                       <div className="space-y-2">
                         <Skeleton className="h-8 w-16" />
@@ -1497,7 +1614,7 @@ export default function WorkspaceDetailPage() {
 
   return (
     <div className="min-h-screen bg-background">
-      <div className="container max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+      <div className="container max-w-7xl mx-auto px-3 sm:px-4 lg:px-6 py-4 sm:py-6 space-y-4 sm:space-y-6">
         <Breadcrumbs
           items={[
             { label: 'Дашборд', href: '/dashboard' },
@@ -1507,22 +1624,40 @@ export default function WorkspaceDetailPage() {
           className="-ml-2"
         />
 
-        {workspace && !workspace.isActive && (
+        {workspace?.isArchived && (
           <Alert className="rounded-xl border-amber-500/40 bg-amber-500/10 dark:bg-amber-950/20 overflow-visible">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 py-1">
-              <div className="flex gap-3 min-w-0 flex-1">
-                <AlertTriangle className="h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400 mt-0.5" />
-                <div className="min-w-0">
-                  <AlertTitle className="text-base leading-tight">Подключение неактивно</AlertTitle>
-                  <AlertDescription className="mt-1.5 text-sm leading-snug text-muted-foreground">
-                    Проверьте подключение, чтобы подтянулись каналы и сообщения.
-                  </AlertDescription>
-                </div>
-              </div>
+            <Archive className="h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400" />
+            <div className="col-start-2 w-full min-w-0 space-y-3">
+              <AlertTitle className="text-base leading-tight w-full">Пространство в архиве</AlertTitle>
+              <AlertDescription className="mt-1 text-sm text-muted-foreground w-full max-w-none">
+                Это пространство заархивировано и недоступно для работы. Чтобы выполнить какую-либо работу, верните пространство из архива.
+              </AlertDescription>
               <Button
                 variant="outline"
                 size="sm"
-                className="shrink-0 gap-2 border-amber-500/50 hover:bg-amber-500/20 w-full sm:w-auto"
+                className="gap-2 border-amber-500/50 hover:bg-amber-500/20"
+                onClick={handleUnarchive}
+                disabled={unarchiveLoading}
+              >
+                {unarchiveLoading ? <Spinner className="h-4 w-4" /> : <RotateCcw className="h-4 w-4" />}
+                Вернуть из архива
+              </Button>
+            </div>
+          </Alert>
+        )}
+
+        {workspace && !workspace.isArchived && !workspace.isActive && (
+          <Alert className="rounded-xl border-amber-500/40 bg-amber-500/10 dark:bg-amber-950/20 overflow-visible">
+            <AlertTriangle className="h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400" />
+            <div className="col-start-2 w-full min-w-0 space-y-3">
+              <AlertTitle className="text-base leading-tight w-full">Подключение неактивно</AlertTitle>
+              <AlertDescription className="mt-1 text-sm text-muted-foreground w-full max-w-none">
+                Проверьте подключение, чтобы подтянулись каналы и сообщения.
+              </AlertDescription>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-2 border-amber-500/50 hover:bg-amber-500/20"
                 onClick={handleCheckConnection}
                 disabled={checkingConnection}
               >
@@ -1533,15 +1668,15 @@ export default function WorkspaceDetailPage() {
           </Alert>
         )}
 
-        <div className="grid gap-6 lg:grid-cols-1">
+        <div className="grid gap-4 lg:grid-cols-1">
           {/* Блок: Информация о пространстве + Действия — в стиле result-ai.tech */}
           <Card className="rounded-2xl border border-border/80 bg-card shadow-[0_1px_3px_rgba(0,0,0,0.06)] overflow-hidden">
-            <div className="px-6 py-5 bg-gradient-to-b from-muted/20 to-transparent border-b border-border/60">
+            <div className="px-4 py-3 bg-gradient-to-b from-muted/20 to-transparent border-b border-border/60">
               <h2 className="text-base font-semibold text-foreground tracking-tight">Пространство и действия</h2>
               <p className="text-sm text-muted-foreground mt-0.5">Подключение к Rocket.Chat и быстрые действия</p>
             </div>
-            <CardContent className="p-6">
-              <div className="flex flex-col sm:flex-row sm:items-start gap-6">
+            <CardContent className="p-4">
+              <div className="flex flex-col sm:flex-row sm:items-start gap-4">
                 <div
                   className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl flex items-center justify-center shadow-lg ring-2 ring-background shrink-0"
                   style={{ backgroundColor: workspace.color || '#ef4444' }}
@@ -1890,11 +2025,11 @@ export default function WorkspaceDetailPage() {
 
           {(currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && workspaceActionLog && (workspaceActionLog.lastEmojiImport || workspaceActionLog.lastUsersAdd) && (
             <Card className="rounded-2xl border border-border/80 bg-card shadow-[0_1px_3px_rgba(0,0,0,0.06)] overflow-hidden">
-              <div className="px-6 py-5 bg-gradient-to-b from-muted/20 to-transparent border-b border-border/60">
+              <div className="px-4 py-3 bg-gradient-to-b from-muted/20 to-transparent border-b border-border/60">
                 <h2 className="text-base font-semibold text-foreground tracking-tight">Последние действия по пространству</h2>
                 <p className="text-sm text-muted-foreground mt-0.5">Импорт эмодзи и добавление пользователей</p>
               </div>
-              <CardContent className="p-6">
+              <CardContent className="p-4">
                 <div className="flex flex-col sm:flex-row sm:flex-wrap gap-3 text-sm">
                   {workspaceActionLog.lastEmojiImport && (
                     <div className="flex items-center gap-2 rounded-xl border border-border/70 bg-muted/20 px-4 py-3 w-full sm:w-auto">
@@ -1918,7 +2053,7 @@ export default function WorkspaceDetailPage() {
           {/* Назначенные администраторы: в многопользовательском пространстве только SUP/ADMIN; в индивидуальном — все, кто видит пространство */}
           {canSeeAssignments && (currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN' || workspaceAssignments.length === 0) && (
             <Card className="rounded-2xl border border-border/80 bg-card shadow-[0_1px_3px_rgba(0,0,0,0.06)] overflow-hidden">
-              <div className="px-6 py-5 bg-gradient-to-b from-muted/20 to-transparent border-b border-border/60 flex items-center justify-between flex-wrap gap-3">
+              <div className="px-4 py-3 bg-gradient-to-b from-muted/20 to-transparent border-b border-border/60 flex items-center justify-between flex-wrap gap-3">
                 <button
                   type="button"
                   className="flex items-center gap-2 text-base font-semibold text-foreground tracking-tight hover:opacity-80 transition-opacity"
@@ -1947,7 +2082,7 @@ export default function WorkspaceDetailPage() {
                 )}
               </div>
               {!assignmentsCollapsed && (
-                <CardContent className="p-6">
+                <CardContent className="p-4">
                   {(currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && (
                     <p className="text-sm text-muted-foreground mb-4 rounded-xl bg-muted/20 border border-border/60 px-4 py-3">
                       {currentUserRole === 'ADMIN'
@@ -2015,7 +2150,7 @@ export default function WorkspaceDetailPage() {
           {/* Участники пространства: владелец + назначенные — имя, логин, роль (для всех, кто видит пространство) */}
           {canSeeAssignments && (workspaceOwner || workspaceAssignments.length > 0) && (
             <Card className="rounded-2xl border border-border/80 bg-card shadow-[0_1px_3px_rgba(0,0,0,0.06)] overflow-hidden">
-              <div className="px-6 py-5 bg-gradient-to-b from-muted/20 to-transparent border-b border-border/60">
+              <div className="px-4 py-3 bg-gradient-to-b from-muted/20 to-transparent border-b border-border/60">
                 <h2 className="text-base font-semibold text-foreground tracking-tight">Участники пространства</h2>
                 <p className="text-sm text-muted-foreground mt-0.5">С кем работаете — владелец и назначенные пользователи</p>
               </div>
@@ -2145,55 +2280,66 @@ export default function WorkspaceDetailPage() {
             </DialogContent>
           </Dialog>
 
-          {/* Статистика сообщений — компактный блок */}
-          <Card className="border-border/80 bg-card shadow-sm overflow-hidden">
-            <div className="px-4 py-2.5 border-b border-border/80 bg-muted/30 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-foreground">Статистика сообщений</h2>
+          {/* Сводная панель — ожидает, отправлено, ошибки */}
+          <Card className="border-2 border-border/80 bg-card shadow-md overflow-hidden">
+            <div className="px-4 py-3 border-b-2 border-border/70 bg-muted/20 flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-foreground">Сводка сообщений</h2>
+              <Link href={`/dashboard/calendar?workspaceId=${workspaceId}`} className="text-xs text-primary hover:underline">
+                Календарь →
+              </Link>
             </div>
             <CardContent className="p-3 sm:p-4">
               <div className="grid grid-cols-4 gap-2 sm:gap-3">
                 <button
                   type="button"
-                  className="flex items-center gap-2 rounded-lg border border-border/70 bg-card p-3 text-left transition-colors hover:bg-muted/50 hover:border-primary/30 focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  className="flex items-center gap-2.5 rounded-xl border-2 border-slate-300/50 bg-slate-50 dark:bg-slate-900/50 p-3.5 text-left transition-all hover:bg-slate-100 dark:hover:bg-slate-800/50 hover:border-slate-400/60 focus:outline-none focus:ring-2 focus:ring-slate-400/30"
                   onClick={() => { setActiveTab('messages'); setMessageFilterFromStats('all'); if (typeof window !== 'undefined') window.history.replaceState(null, '', `${window.location.pathname}#messages`) }}
                 >
-                  <MessageSquare className="w-5 h-5 text-muted-foreground shrink-0" />
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-200/80 dark:bg-slate-700/50">
+                    <MessageSquare className="w-4 h-4 text-slate-600 dark:text-slate-400" />
+                  </div>
                   <div className="min-w-0">
-                    <p className="text-lg font-bold leading-tight">{messages.length}</p>
-                    <p className="text-xs text-muted-foreground">Всего</p>
+                    <p className="text-xl font-bold leading-tight">{messages.length}</p>
+                    <p className="text-xs text-muted-foreground font-medium">Всего</p>
                   </div>
                 </button>
                 <button
                   type="button"
-                  className="flex items-center gap-2 rounded-lg border border-border/70 bg-card p-3 text-left transition-colors hover:bg-yellow-500/10 hover:border-yellow-500/50 focus:outline-none focus:ring-2 focus:ring-yellow-500/20"
+                  className="flex items-center gap-2.5 rounded-xl border-2 border-amber-400/60 bg-amber-50 dark:bg-amber-950/30 p-3.5 text-left transition-all hover:bg-amber-100 dark:hover:bg-amber-900/30 hover:border-amber-500/70 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
                   onClick={() => { setActiveTab('messages'); setMessageFilterFromStats('PENDING'); if (typeof window !== 'undefined') window.history.replaceState(null, '', `${window.location.pathname}#messages`) }}
                 >
-                  <Clock className="w-5 h-5 text-yellow-600 dark:text-yellow-500 shrink-0" />
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-200/80 dark:bg-amber-800/50">
+                    <Clock className="w-4 h-4 text-amber-700 dark:text-amber-300" />
+                  </div>
                   <div className="min-w-0">
-                    <p className="text-lg font-bold leading-tight">{stats.pending}</p>
-                    <p className="text-xs text-muted-foreground">Ожидает</p>
+                    <p className="text-xl font-bold leading-tight text-amber-800 dark:text-amber-200">{stats.pending}</p>
+                    <p className="text-xs text-amber-700/80 dark:text-amber-300/80 font-medium">Ожидает</p>
                   </div>
                 </button>
                 <button
                   type="button"
-                  className="flex items-center gap-2 rounded-lg border border-border/70 bg-card p-3 text-left transition-colors hover:bg-green-500/10 hover:border-green-500/50 focus:outline-none focus:ring-2 focus:ring-green-500/20"
+                  className="flex items-center gap-2.5 rounded-xl border-2 border-emerald-400/60 bg-emerald-50 dark:bg-emerald-950/30 p-3.5 text-left transition-all hover:bg-emerald-100 dark:hover:bg-emerald-900/30 hover:border-emerald-500/70 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
                   onClick={() => { setActiveTab('messages'); setMessageFilterFromStats('SENT'); if (typeof window !== 'undefined') window.history.replaceState(null, '', `${window.location.pathname}#messages`) }}
                 >
-                  <CheckCircle2 className="w-5 h-5 text-green-600 dark:text-green-500 shrink-0" />
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-emerald-200/80 dark:bg-emerald-800/50">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-700 dark:text-emerald-300" />
+                  </div>
                   <div className="min-w-0">
-                    <p className="text-lg font-bold leading-tight">{stats.sent}</p>
-                    <p className="text-xs text-muted-foreground">Отправлено</p>
+                    <p className="text-xl font-bold leading-tight text-emerald-800 dark:text-emerald-200">{stats.sent}</p>
+                    <p className="text-xs text-emerald-700/80 dark:text-emerald-300/80 font-medium">Отправлено</p>
                   </div>
                 </button>
                 <button
                   type="button"
-                  className="flex items-center gap-2 rounded-lg border border-border/70 bg-card p-3 text-left transition-colors hover:bg-red-500/10 hover:border-red-500/50 focus:outline-none focus:ring-2 focus:ring-red-500/20"
+                  className="flex items-center gap-2.5 rounded-xl border-2 border-rose-400/60 bg-rose-50 dark:bg-rose-950/30 p-3.5 text-left transition-all hover:bg-rose-100 dark:hover:bg-rose-900/30 hover:border-rose-500/70 focus:outline-none focus:ring-2 focus:ring-rose-500/30"
                   onClick={() => { setActiveTab('messages'); setMessageFilterFromStats('FAILED'); if (typeof window !== 'undefined') window.history.replaceState(null, '', `${window.location.pathname}#messages`) }}
                 >
-                  <XCircle className="w-5 h-5 text-red-600 dark:text-red-500 shrink-0" />
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-rose-200/80 dark:bg-rose-800/50">
+                    <XCircle className="w-4 h-4 text-rose-700 dark:text-rose-300" />
+                  </div>
                   <div className="min-w-0">
-                    <p className="text-lg font-bold leading-tight">{stats.failed}</p>
-                    <p className="text-xs text-muted-foreground">Ошибки</p>
+                    <p className="text-xl font-bold leading-tight text-rose-800 dark:text-rose-200">{stats.failed}</p>
+                    <p className="text-xs text-rose-700/80 dark:text-rose-300/80 font-medium">Ошибки</p>
                   </div>
                 </button>
               </div>
@@ -2201,123 +2347,75 @@ export default function WorkspaceDetailPage() {
           </Card>
         </div>
 
-        {/* Tabs block — оформление в стиле result-ai.tech */}
+        {/* Tabs block */}
         <Card className="rounded-2xl border border-border/80 bg-card shadow-[0_1px_3px_rgba(0,0,0,0.06)] overflow-hidden">
-          <div className="px-6 py-5 bg-gradient-to-b from-muted/20 to-transparent border-b border-border/60">
+          <div className="px-4 py-3 bg-gradient-to-b from-muted/20 to-transparent border-b border-border/60">
             <h2 className="text-base font-semibold text-foreground tracking-tight">Каналы, сообщения и настройки</h2>
             <p className="text-sm text-muted-foreground mt-0.5">Управление каналами, планирование сообщений и настройки пространства</p>
           </div>
-          <div className="p-6">
-        <div className="flex flex-col lg:flex-row gap-6">
-          {/* Сайдбар навигации (как в справке) */}
+          <div className="p-4">
+        <div className="flex flex-col lg:flex-row gap-4">
+          {/* Сайдбар навигации с цветами и обводками */}
           <aside className="lg:w-52 shrink-0">
-            <nav className="rounded-xl bg-muted/30 border border-border/60 p-1.5 space-y-0.5 lg:sticky lg:top-24">
-              <button
-                type="button"
+            <nav className="rounded-xl bg-muted/20 border-2 border-border/70 p-2 space-y-1.5 lg:sticky lg:top-24">
+              <TabNavButton
+                active={activeTab === 'channels'}
                 onClick={() => handleTabChange('channels')}
-                className={cn(
-                  'w-full flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
-                  activeTab === 'channels'
-                    ? 'bg-background shadow-sm text-foreground'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
-                )}
-              >
-                <Hash className="w-4 h-4 shrink-0" />
-                <span className="truncate">Каналы</span>
-                <Badge variant="secondary" className="ml-auto text-[10px] h-5 px-1.5 shrink-0">
-                  {channels.length}
-                </Badge>
-              </button>
-              <button
-                type="button"
+                icon={<Hash className="w-4 h-4" />}
+                label="Каналы"
+                badge={channels.length}
+                color="blue"
+              />
+              <TabNavButton
+                active={activeTab === 'messages'}
                 onClick={() => handleTabChange('messages')}
-                className={cn(
-                  'w-full flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
-                  activeTab === 'messages'
-                    ? 'bg-background shadow-sm text-foreground'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
-                )}
-              >
-                <MessageSquare className="w-4 h-4 shrink-0" />
-                <span className="truncate">Сообщения</span>
-                <Badge variant="secondary" className="ml-auto text-[10px] h-5 px-1.5 shrink-0">
-                  {messages.length}
-                </Badge>
-              </button>
+                icon={<MessageSquare className="w-4 h-4" />}
+                label="Сообщения"
+                badge={messages.length}
+                color="emerald"
+              />
+              <TabNavButton
+                active={activeTab === 'calendar'}
+                onClick={() => handleTabChange('calendar')}
+                icon={<Calendar className="w-4 h-4" />}
+                label="Календарь"
+                color="teal"
+              />
               {(currentUserRole === 'ADM' || currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && (currentUserRole === 'ADMIN' || tabRestrictions === null || tabRestrictions.templates) && (
-                <button
-                  type="button"
+                <TabNavButton
+                  active={activeTab === 'templates'}
                   onClick={() => handleTabChange('templates')}
-                  className={cn(
-                    'w-full flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
-                    activeTab === 'templates'
-                      ? 'bg-background shadow-sm text-foreground'
-                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
-                  )}
-                >
-                  <FileText className="w-4 h-4 shrink-0" />
-                  <span className="truncate">Шаблоны</span>
-                </button>
+                  icon={<FileText className="w-4 h-4" />}
+                  label="Шаблоны"
+                  color="amber"
+                />
               )}
               {(currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && (currentUserRole === 'ADMIN' || tabRestrictions === null || tabRestrictions.emojiImport) && (
-                <button
-                  type="button"
+                <TabNavButton
+                  active={activeTab === 'emoji-import'}
                   onClick={() => handleTabChange('emoji-import')}
-                  className={cn(
-                    'w-full flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
-                    activeTab === 'emoji-import'
-                      ? 'bg-background shadow-sm text-foreground'
-                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
-                  )}
-                >
-                  <Smile className="w-4 h-4 shrink-0" />
-                  <span className="truncate">Импорт эмодзи</span>
-                </button>
-              )}
-              {(currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && (currentUserRole === 'ADMIN' || tabRestrictions === null || tabRestrictions.usersAdd) && (
-                <button
-                  type="button"
-                  onClick={() => handleTabChange('users-add')}
-                  className={cn(
-                    'w-full flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
-                    activeTab === 'users-add'
-                      ? 'bg-background shadow-sm text-foreground'
-                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
-                  )}
-                >
-                  <Users className="w-4 h-4 shrink-0" />
-                  <span className="truncate">Добавление пользователей</span>
-                </button>
+                  icon={<Smile className="w-4 h-4" />}
+                  label="Настройка пространства"
+                  color="violet"
+                />
               )}
               {(currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => handleTabChange('reset-account')}
-                    className={cn(
-                      'w-full flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
-                      activeTab === 'reset-account'
-                        ? 'bg-background shadow-sm text-foreground'
-                        : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
-                    )}
-                  >
-                    <RotateCcw className="w-4 h-4 shrink-0" />
-                    <span className="truncate">Сброс учётки</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleTabChange('user-access')}
-                    className={cn(
-                      'w-full flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
-                      activeTab === 'user-access'
-                        ? 'bg-background shadow-sm text-foreground'
-                        : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
-                    )}
-                  >
-                    <LogIn className="w-4 h-4 shrink-0" />
-                    <span className="truncate">Состояние входа</span>
-                  </button>
-                </>
+                <TabNavButton
+                  active={activeTab === 'reset-account'}
+                  onClick={() => handleTabChange('reset-account')}
+                  icon={<RotateCcw className="w-4 h-4" />}
+                  label="Сброс учётки"
+                  color="orange"
+                />
+              )}
+              {(currentUserRole === 'ADM' || currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && (
+                <TabNavButton
+                  active={activeTab === 'user-access'}
+                  onClick={() => handleTabChange('user-access')}
+                  icon={<LogIn className="w-4 h-4" />}
+                  label="Состояние входа"
+                  color="cyan"
+                />
               )}
             </nav>
           </aside>
@@ -2586,7 +2684,7 @@ export default function WorkspaceDetailPage() {
                 }
               />
             ) : (
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                 {/* Список каналов с сообщениями */}
                 <Card className="lg:col-span-1 border-muted/70">
                   <CardContent className="p-4">
@@ -2653,13 +2751,40 @@ export default function WorkspaceDetailPage() {
             )}
           </TabsContent>
 
+          {/* Календарь с цветовой кодировкой по статусам */}
+          <TabsContent value="calendar" className="space-y-5 mt-0">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              <div className="lg:col-span-1">
+                <WorkspaceCalendar messages={messages} workspaceId={workspaceId} />
+              </div>
+              <div className="lg:col-span-2">
+                <Card className="rounded-2xl border border-border/80">
+                  <CardContent className="p-4">
+                    <p className="text-sm text-muted-foreground">
+                      Календарь показывает цветовую кодировку по статусам сообщений: <span className="text-amber-600 font-medium">жёлтый</span> — ожидает, <span className="text-emerald-600 font-medium">зелёный</span> — отправлено, <span className="text-rose-600 font-medium">красный</span> — ошибки.
+                    </p>
+                    <p className="text-sm text-muted-foreground mt-2">
+                      Клик по дню открывает полный календарь с деталями. Для drag &amp; drop переноса сообщений используйте вкладку «Сообщения».
+                    </p>
+                    <Link href={`/dashboard/calendar?workspaceId=${workspaceId}`}>
+                      <Button variant="outline" className="mt-4 gap-2">
+                        <Calendar className="w-4 h-4" />
+                        Открыть полный календарь
+                      </Button>
+                    </Link>
+                  </CardContent>
+                </Card>
+              </div>
+            </div>
+          </TabsContent>
+
           {/* Шаблоны анонсов (ADM/SUP/ADMIN) — в стиле result-ai.tech: табы по дням, канал выделен, сворачиваемые дни */}
           {(currentUserRole === 'ADM' || currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && (
           <TabsContent value="templates" className="space-y-6 mt-0">
             <Card className="rounded-2xl border border-border/80 bg-card shadow-[0_1px_3px_rgba(0,0,0,0.06)] overflow-hidden">
-              <div className="px-6 py-4 bg-gradient-to-b from-muted/20 to-transparent border-b border-border/60">
+              <div className="px-4 py-3 bg-gradient-to-b from-muted/20 to-transparent border-b border-border/60">
                 <p className="text-sm text-muted-foreground">
-                  Канал и примерное время указаны в каждом шаблоне. Копируйте текст и вставьте в запланированное сообщение в нужный канал (#adm / #announcements). Свои шаблоны можно редактировать на странице <Link href="/dashboard/templates" className="text-primary underline font-medium">Шаблоны</Link> → вкладка «Мои шаблоны».
+                  Канал и примерное время указаны в каждом шаблоне. Копируйте текст и вставьте в запланированное сообщение в нужный канал (#adm / #announcements). Свои шаблоны можно редактировать на странице <Link href="/dashboard/admin/templates" className="text-primary underline font-medium">Шаблоны</Link> → вкладка «Мои шаблоны».
                 </p>
               </div>
             </Card>
@@ -2754,9 +2879,9 @@ export default function WorkspaceDetailPage() {
               }
               return (
                 <Card className="rounded-2xl border border-border/80 bg-card shadow-[0_1px_3px_rgba(0,0,0,0.06)] overflow-hidden">
-                  <div className="px-6 py-5 bg-gradient-to-b from-muted/20 to-transparent border-b border-border/60 flex flex-wrap items-center justify-between gap-3">
+                  <div className="px-4 py-3 bg-gradient-to-b from-muted/20 to-transparent border-b border-border/60 flex flex-wrap items-center justify-between gap-3">
                     <h3 className="text-base font-semibold text-foreground tracking-tight">Мои шаблоны</h3>
-                    <Link href="/dashboard/templates" className="text-sm text-primary hover:underline font-medium">
+                    <Link href="/dashboard/admin/templates" className="text-sm text-primary hover:underline font-medium">
                       Редактировать на странице Шаблоны
                     </Link>
                   </div>
@@ -3023,17 +3148,29 @@ export default function WorkspaceDetailPage() {
           </TabsContent>
           )}
 
-          {/* Emoji Import Tab — в стиле result-ai.tech */}
+          {/* Настройка пространства: каналы, эмодзи, доп. настройки */}
           {(currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && (
           <TabsContent value="emoji-import" className="space-y-5 mt-0">
-            <Card className="rounded-2xl border border-border/80 bg-card shadow-[0_1px_3px_rgba(0,0,0,0.06)] overflow-hidden">
-              <div className="px-6 py-5 bg-gradient-to-b from-muted/20 to-transparent border-b border-border/60">
+            <SpaceSettingsTab
+              workspaceId={workspaceId}
+              workspaceUrl={workspace?.workspaceUrl}
+              channels={channels}
+              onChannelsRefresh={loadData}
+              channelCreators={workspaceActionLog?.channelCreators ?? {}}
+              settingAppliers={workspaceActionLog?.settingAppliers ?? {}}
+              onSpaceSettingsAction={refetchActionLog}
+            >
+            <Card className="rounded-xl border border-border/70 bg-card shadow-sm overflow-hidden border-l-2 border-l-violet-400/50">
+              <div className="px-4 py-3 bg-muted/20 border-b border-border/60 flex items-start gap-3">
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-violet-500/25 text-violet-700 dark:text-violet-300 font-bold text-xs">10</span>
+                <div>
                 <h3 className="text-base font-semibold text-foreground tracking-tight">Массовый импорт кастомных эмодзи</h3>
                 <p className="text-sm text-muted-foreground mt-0.5">
                   Загрузка эмодзи из YAML-каталога в Rocket.Chat этого пространства. Уже существующие эмодзи пропускаются. Укажите учётные данные администратора Rocket.Chat — система проверит их перед импортом.
                 </p>
+                </div>
               </div>
-              <CardContent className="p-6 space-y-5">
+              <CardContent className="p-4 space-y-4">
                 {lastEmojiImportStatus && (
                   <div className="rounded-xl border border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950/30 p-4 space-y-2">
                     <p className="font-medium text-sm text-green-800 dark:text-green-200">Последний успешный импорт</p>
@@ -3313,72 +3450,90 @@ export default function WorkspaceDetailPage() {
                 )}
               </CardContent>
             </Card>
-          </TabsContent>
-          )}
 
-          {/* Добавление пользователей Tab — в стиле result-ai.tech */}
-          {(currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && (
-          <TabsContent value="users-add" className="space-y-5 mt-0">
-            <Card className="rounded-2xl border border-border/80 bg-card shadow-[0_1px_3px_rgba(0,0,0,0.06)] overflow-hidden">
-              <div className="px-6 py-5 bg-gradient-to-b from-muted/20 to-transparent border-b border-border/60">
-                <h3 className="text-base font-semibold text-foreground tracking-tight">Добавление пользователей в Rocket.Chat</h3>
-                <p className="text-sm text-muted-foreground mt-0.5">
-                  Вставьте список логинов (по одному на строку). Для каждого будет создан пользователь: email = логин@student.21-school.ru, пароль = логин, смена пароля при первом входе включена. Максимум 100 пользователей за запрос.
-                </p>
-              </div>
-              <CardContent className="p-6 space-y-5">
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="space-y-2">
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Label htmlFor="users-admin-username" className="cursor-help">Логин администратора Rocket.Chat</Label>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="max-w-xs">
-                        Учётная запись администратора RC на этом сервере — нужна для создания пользователей и назначения ролей.
-                      </TooltipContent>
-                    </Tooltip>
-                    <Input
-                      id="users-admin-username"
-                      type="text"
-                      placeholder="admin"
-                      value={usersAddAdminUsername}
-                      onChange={(e) => setUsersAddAdminUsername(e.target.value)}
-                      disabled={usersAdding}
-                      className="bg-background rounded-lg border-border/80"
-                    />
+            {/* Добавление пользователей в Rocket.Chat — перенесено в настройку пространства */}
+            {(currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && !workspace?.workspaceUrl?.toLowerCase().includes('rocketchat-student.21-school.ru') && (
+            <Card className="rounded-xl border border-border/70 bg-card shadow-sm overflow-hidden border-l-2 border-l-rose-400/50">
+              <div className="px-3 py-2.5 border-b border-border/60 bg-muted/20 flex items-start gap-3">
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-rose-500/25 text-rose-700 dark:text-rose-300 font-bold text-xs">9</span>
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-500/15 text-rose-600 dark:text-rose-400">
+                    <UserPlus className="h-5 w-5" />
                   </div>
-                  <div className="space-y-2">
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Label htmlFor="users-admin-password" className="cursor-help">Пароль администратора</Label>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="max-w-xs">
-                        Пароль от учётной записи администратора RC — используется только для API при создании пользователей.
-                      </TooltipContent>
-                    </Tooltip>
-                    <Input
-                      id="users-admin-password"
-                      type="password"
-                      placeholder="••••••••"
-                      value={usersAddAdminPassword}
-                      onChange={(e) => setUsersAddAdminPassword(e.target.value)}
-                      disabled={usersAdding}
-                      className="bg-background rounded-lg border-border/80"
-                    />
+                </div>
+                <div>
+                  <h3 className="text-base font-semibold text-foreground tracking-tight">Добавление пользователей в Rocket.Chat</h3>
+                  <p className="text-sm text-muted-foreground mt-0.5">
+                    Вставьте список логинов (по одному на строку). Для каждого будет создан пользователь: email = логин@student.21-school.ru, пароль = логин, смена пароля при первом входе включена. Максимум 100 пользователей за запрос.
+                  </p>
+                </div>
+              </div>
+              <CardContent className="p-3 space-y-4">
+                <div className="rounded-xl border-2 border-amber-400/40 bg-amber-500/5 p-4 space-y-3">
+                  <p className="text-sm font-medium flex items-center gap-2">
+                    <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/20 text-amber-600 dark:text-amber-400">
+                      <KeyRound className="w-4 h-4" />
+                    </span>
+                    Учётные данные администратора Rocket.Chat
+                  </p>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Label htmlFor="users-admin-username" className="cursor-help text-xs">Логин администратора Rocket.Chat</Label>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-xs">
+                          Учётная запись администратора RC на этом сервере — нужна для создания пользователей и назначения ролей.
+                        </TooltipContent>
+                      </Tooltip>
+                      <Input
+                        id="users-admin-username"
+                        type="text"
+                        placeholder="admin"
+                        value={usersAddAdminUsername}
+                        onChange={(e) => setUsersAddAdminUsername(e.target.value)}
+                        disabled={usersAdding}
+                        className="bg-background rounded-lg border-2 border-amber-300/30 focus:border-amber-400/50"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Label htmlFor="users-admin-password" className="cursor-help text-xs">Пароль администратора</Label>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-xs">
+                          Пароль от учётной записи администратора RC — используется только для API при создании пользователей.
+                        </TooltipContent>
+                      </Tooltip>
+                      <Input
+                        id="users-admin-password"
+                        type="password"
+                        placeholder="••••••••"
+                        value={usersAddAdminPassword}
+                        onChange={(e) => setUsersAddAdminPassword(e.target.value)}
+                        disabled={usersAdding}
+                        className="bg-background rounded-lg border-2 border-amber-300/30 focus:border-amber-400/50"
+                      />
+                    </div>
                   </div>
                 </div>
 
                 {previewLogins === null ? (
                   <>
-                    <div className="space-y-2">
-                      <Label htmlFor="users-logins">Список логинов (по одному на строку)</Label>
+                    <div className="rounded-xl border-2 border-blue-400/40 bg-blue-500/5 p-4 space-y-2">
+                      <Label htmlFor="users-logins" className="flex items-center gap-2 text-sm font-medium">
+                        <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-500/20 text-blue-600 dark:text-blue-400">
+                          <Users className="w-4 h-4" />
+                        </span>
+                        Список логинов (по одному на строку)
+                      </Label>
                       <Textarea
                         id="users-logins"
                         placeholder={'wrightag\nuser2\nuser3'}
                         value={usersLogins}
                         onChange={(e) => setUsersLogins(e.target.value)}
                         disabled={usersAdding}
-                        className="min-h-[120px] font-mono text-sm bg-background rounded-lg border-border/80"
+                        className="min-h-[120px] font-mono text-sm bg-background rounded-lg border-2 border-blue-300/30 focus:border-blue-400/50"
                         rows={6}
                       />
                       <p className="text-xs text-muted-foreground">
@@ -3386,14 +3541,15 @@ export default function WorkspaceDetailPage() {
                       </p>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      <Button onClick={openPreview} disabled={usersAdding} variant="outline" className="gap-2 rounded-lg border-border/80 hover:bg-muted/50">
+                      <Button onClick={openPreview} disabled={usersAdding} variant="outline" className="gap-2 rounded-lg border-2 border-blue-300/40 hover:bg-blue-500/10">
+                        <Eye className="w-4 h-4" />
                         Предпросмотр
                       </Button>
                     </div>
                   </>
                 ) : (
                   <>
-                    <div className="rounded-xl border border-border/70 bg-muted/10 p-4 space-y-2">
+                    <div className="rounded-xl border-2 border-emerald-400/40 bg-emerald-500/5 p-4 space-y-2">
                       <p className="font-medium text-sm">
                         Будет создано пользователей: <strong>{previewLogins.length}</strong>
                       </p>
@@ -3427,9 +3583,16 @@ export default function WorkspaceDetailPage() {
                   </>
                 )}
 
-                <div className="grid gap-4 sm:grid-cols-2 pt-2 border-t border-border/70">
+                <div className="rounded-xl border-2 border-violet-400/40 bg-violet-500/5 p-4 space-y-4 pt-4">
+                  <p className="text-sm font-medium flex items-center gap-2">
+                    <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-500/20 text-violet-600 dark:text-violet-400">
+                      <Hash className="w-4 h-4" />
+                    </span>
+                    Дополнительные опции
+                  </p>
+                  <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
-                    <Label>Добавить в канал/группу (опционально)</Label>
+                    <Label className="text-xs">Добавить в канал/группу (опционально)</Label>
 <Select
                       value={usersAddChannelId ? `${usersAddChannelId}:${usersAddChannelType}` : '__none__'}
                       onValueChange={(v) => {
@@ -3443,7 +3606,7 @@ export default function WorkspaceDetailPage() {
                       }}
                       disabled={usersAdding}
                     >
-                      <SelectTrigger className="bg-background rounded-lg border-border/80">
+                      <SelectTrigger className="bg-background rounded-lg border-2 border-violet-300/30">
                         <SelectValue placeholder="Не добавлять" />
                       </SelectTrigger>
                       <SelectContent>
@@ -3462,7 +3625,7 @@ export default function WorkspaceDetailPage() {
                     </Select>
                   </div>
                   <div className="space-y-2">
-                    <Label>Роль (опционально)</Label>
+                    <Label className="text-xs">Роль (опционально)</Label>
                     <div className="flex gap-2">
                       <Button
                         type="button"
@@ -3470,11 +3633,12 @@ export default function WorkspaceDetailPage() {
                         size="sm"
                         onClick={loadUsersRoles}
                         disabled={usersRolesLoading || !usersAddAdminUsername.trim() || !usersAddAdminPassword}
+                        className="border-2 border-violet-300/30 rounded-lg"
                       >
                         {usersRolesLoading ? <Spinner className="w-3.5 h-3.5" /> : 'Загрузить роли'}
                       </Button>
                       <Select value={usersAddRoleId || '__none__'} onValueChange={(v) => setUsersAddRoleId(v === '__none__' ? '' : v)} disabled={usersAdding}>
-                        <SelectTrigger className="bg-background flex-1 rounded-lg border-border/80">
+                        <SelectTrigger className="bg-background flex-1 rounded-lg border-2 border-violet-300/30">
                           <SelectValue placeholder="Без роли" />
                         </SelectTrigger>
                         <SelectContent>
@@ -3490,9 +3654,9 @@ export default function WorkspaceDetailPage() {
                   </div>
                 </div>
                 <div className="space-y-2">
-                  <Label>Если пользователь уже существует</Label>
+                  <Label className="text-xs">Если пользователь уже существует</Label>
                   <Select value={usersIfUserExists} onValueChange={(v: 'skip' | 'reset_password') => setUsersIfUserExists(v)} disabled={usersAdding}>
-                    <SelectTrigger className="bg-background w-full sm:w-64 rounded-lg border-border/80">
+                    <SelectTrigger className="bg-background w-full sm:w-64 rounded-lg border-2 border-violet-300/30">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -3501,9 +3665,10 @@ export default function WorkspaceDetailPage() {
                     </SelectContent>
                   </Select>
                 </div>
+                </div>
 
                 {(addUsersProgress || usersRetryProgress) && (
-                  <div className="rounded-xl border border-border/70 bg-muted/10 p-4 space-y-2">
+                  <div className="rounded-xl border-2 border-emerald-400/40 bg-emerald-500/5 p-4 space-y-2">
                     <div className="flex items-center justify-between gap-2 flex-wrap">
                       <p className="text-sm font-medium">
                         {addUsersProgress
@@ -3550,7 +3715,7 @@ export default function WorkspaceDetailPage() {
                 </AlertDialog>
 
                 {addUsersResults && addUsersResults.length > 0 && (
-                  <div className="rounded-xl border border-border/70 bg-muted/10 p-4 space-y-2">
+                  <div className="rounded-xl border-2 border-emerald-400/40 bg-emerald-500/5 p-4 space-y-2">
                     <p className="font-medium text-sm">Результат по пользователям</p>
                     <ul className="space-y-1.5 max-h-40 overflow-y-auto">
                       {addUsersResults.map((r, i) => (
@@ -3668,6 +3833,8 @@ export default function WorkspaceDetailPage() {
                 )}
               </CardContent>
             </Card>
+            )}
+            </SpaceSettingsTab>
           </TabsContent>
           )}
 
@@ -3678,10 +3845,10 @@ export default function WorkspaceDetailPage() {
           </TabsContent>
           )}
 
-          {/* Состояние входа (SUP/ADMIN) — вынесен в отдельный компонент для уменьшения перерисовок */}
-          {(currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && (
+          {/* Состояние входа (ADM/SUP/ADMIN) — вынесен в отдельный компонент */}
+          {(currentUserRole === 'ADM' || currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && (
           <TabsContent value="user-access" className="space-y-5 mt-0">
-            <UserAccessTab workspaceId={workspaceId} />
+            <UserAccessTab workspaceId={workspaceId} currentUserRole={currentUserRole} />
           </TabsContent>
           )}
         </Tabs>

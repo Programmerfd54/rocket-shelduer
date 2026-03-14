@@ -144,7 +144,7 @@
 
 
 
-/* ===== Sonner toasts: современный вид и прогресс ===== */
+/* ===== Sonner toasts: улучшенный дизайн ===== */
 [data-sonner-toaster] {
   --normal-bg: var(--card);
   --normal-text: var(--card-foreground);
@@ -153,14 +153,36 @@
 }
 
 [data-sonner-toast] {
-  border-radius: var(--radius-xl) !important;
   overflow: visible;
-  box-shadow:
-    0 10px 40px -10px rgba(0, 0, 0, 0.15),
-    0 0 0 1px rgba(0, 0, 0, 0.03) !important;
+  transition: transform 0.2s ease-out, opacity 0.2s ease-out;
 }
 
-/* Без полоски таймера — тосты закрываются по таймеру, визуально только иконка и акцент слева */
+/* Тень для светлой темы — мягкая, глубокая */
+:root [data-sonner-toast] {
+  box-shadow:
+    0 20px 45px -15px rgba(0, 0, 0, 0.12),
+    0 4px 12px -4px rgba(0, 0, 0, 0.06) !important;
+}
+
+/* Тень для тёмной темы — более мягкая */
+.dark [data-sonner-toast] {
+  box-shadow:
+    0 20px 45px -15px rgba(0, 0, 0, 0.35),
+    0 0 0 1px rgba(255, 255, 255, 0.05) !important;
+}
+
+/* Крестик закрытия — в правом верхнем углу внутри тоста */
+[data-sonner-toaster][dir='ltr'] {
+  --toast-close-button-start: unset;
+  --toast-close-button-end: 0;
+  --toast-close-button-transform: translate(0, 0);
+}
+[data-sonner-toast] [data-close-button] {
+  top: 8px !important;
+  right: 8px !important;
+  left: auto !important;
+  transform: none !important;
+}
 
 /* ===== Focus ring для доступности (клавиатурная навигация). Кнопки уже имеют focus-visible в компоненте Button. ===== */
 a:focus-visible,

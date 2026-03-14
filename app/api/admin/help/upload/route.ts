@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { requireAuth } from '@/lib/auth';
+import { requireAdmin, isForbiddenError } from '@/lib/auth';
 import { writeFile, mkdir } from 'fs/promises';
 import path from 'path';
 
@@ -59,10 +59,7 @@ function getExt(name: string, type: string): string {
 
 export async function POST(request: Request) {
   try {
-    const user = await requireAuth();
-    if (user.role !== 'ADMIN') {
-      return NextResponse.json({ error: 'Only ADMIN can upload' }, { status: 403 });
-    }
+    await requireAdmin();
     const formData = await request.formData();
     const file = formData.get('file') as File | null;
     const typeHint = (formData.get('type') as string) || 'image'; // image | video | audio | file
@@ -91,7 +88,8 @@ export async function POST(request: Request) {
     await writeFile(filePath, buf);
     const url = `/help-uploads/${name}`;
     return NextResponse.json({ url });
-  } catch {
+  } catch (e) {
+    if (isForbiddenError(e)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     return NextResponse.json({ error: 'Failed to upload' }, { status: 500 });
   }
 }

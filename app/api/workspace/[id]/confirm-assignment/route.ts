@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
+import { getSafeErrorMessage } from '@/lib/security';
 import prisma from '@/lib/prisma';
 import { requireAuth } from '@/lib/auth';
-import { encryptPassword } from '@/lib/encryption';
+import { encryptPassword, encryptAuthToken } from '@/lib/encryption';
 import { RocketChatClient } from '@/lib/rocketchat';
 import { logSecurityEvent, getClientIp, isSuspiciousInput, SecurityEventType } from '@/lib/security';
 
@@ -103,6 +104,7 @@ export async function POST(
     const { authToken, userId: rcUserId } = await rcClient.login(username.trim(), password);
 
     const encryptedPassword = encryptPassword(password);
+    const encryptedToken = encryptAuthToken(authToken);
 
     const newConnection = await prisma.workspaceConnection.create({
       data: {
@@ -112,7 +114,7 @@ export async function POST(
         username: username.trim(),
         encryptedPassword,
         has2FA: false,
-        authToken,
+        authToken: encryptedToken,
         userId_RC: rcUserId,
         isActive: true,
         lastConnected: new Date(),
@@ -135,7 +137,7 @@ export async function POST(
     const status = isNetworkError ? 503 : 500;
     const message = isNetworkError
       ? 'Сервер Rocket.Chat недоступен. Проверьте подключение к интернету и доступность сервера, затем повторите попытку.'
-      : rawMessage;
+      : getSafeErrorMessage(error, 'Ошибка подключения к Rocket.Chat');
     return NextResponse.json(
       { error: message },
       { status }

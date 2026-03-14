@@ -1,18 +1,13 @@
 import { NextResponse } from 'next/server';
+import type { Prisma } from '@prisma/client';
 import prisma from '@/lib/prisma';
-import { requireAuth, hashPassword } from '@/lib/auth';
+import { requireSupportAdmOrAdmin, requireSupportOrAdmin, hashPassword, isForbiddenError } from '@/lib/auth';
 import { createActivityLog } from '@/app/api/activity/route';
+import { getSafeErrorMessage } from '@/lib/security';
 
 export async function GET() {
   try {
-    const user = await requireAuth();
-
-    if (user.role !== 'SUPPORT' && user.role !== 'ADM' && user.role !== 'ADMIN') {
-      return NextResponse.json(
-        { error: 'Insufficient permissions' },
-        { status: 403 }
-      );
-    }
+    await requireSupportAdmOrAdmin();
 
     const users = await prisma.user.findMany({
       select: {
@@ -42,11 +37,11 @@ export async function GET() {
     });
 
     return NextResponse.json({ users });
-  } catch (error) {
-    console.error('Get users error:', error);
-    const message = error instanceof Error ? error.message : 'Failed to fetch users';
+  } catch (e) {
+    if (isForbiddenError(e)) return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
+    console.error('Get users error:', e);
     return NextResponse.json(
-      { error: message },
+      { error: getSafeErrorMessage(e, 'Failed to fetch users') },
       { status: 500 }
     );
   }
@@ -54,13 +49,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const currentUser = await requireAuth();
-    if (currentUser.role !== 'SUPPORT' && currentUser.role !== 'ADMIN') {
-      return NextResponse.json(
-        { error: 'Insufficient permissions' },
-        { status: 403 }
-      );
-    }
+    const currentUser = await requireSupportOrAdmin();
 
     const body = await request.json();
     const {
@@ -101,7 +90,7 @@ export async function POST(request: Request) {
     }
 
     const hashedPassword = await hashPassword(password);
-    const data: Record<string, unknown> = {
+    const data: Prisma.UserCreateInput = {
       email: email.trim().toLowerCase(),
       password: hashedPassword,
       name: (name || '').trim() || null,
@@ -125,7 +114,7 @@ export async function POST(request: Request) {
     }
 
     const newUser = await prisma.user.create({
-      data: data as any,
+      data,
       select: {
         id: true,
         email: true,
@@ -148,11 +137,9 @@ export async function POST(request: Request) {
     );
 
     return NextResponse.json({ user: newUser });
-  } catch (error) {
-    console.error('Create user error:', error);
-    return NextResponse.json(
-      { error: 'Failed to create user' },
-      { status: 500 }
-    );
+  } catch (e) {
+    if (isForbiddenError(e)) return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
+    console.error('Create user error:', e);
+    return NextResponse.json({ error: 'Failed to create user' }, { status: 500 });
   }
 }

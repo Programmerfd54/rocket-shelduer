@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getCurrentUser } from '@/lib/auth';
+import { requireAdmin, isForbiddenError } from '@/lib/auth';
 import prisma from '@/lib/prisma';
 import { ADM_TEMPLATES, SUP_TEMPLATES } from '@/lib/templates-data';
 
@@ -14,24 +14,15 @@ function isValidTemplate(templateId: string, scope: string): boolean {
 
 /**
  * PATCH /api/templates/official/[templateId]
- * ADMIN: сохранить переопределение официального шаблона (body, title) для scope SUP или ADM.
- * Body: { scope: 'SUPPORT' | 'ADM', body: string, title?: string }
+ * ADMIN: сохранить переопределение официального шаблона (body, title, channel, time) для scope SUP или ADM.
+ * Body: { scope: 'SUPPORT' | 'ADM', body: string, title?: string, channel?: string, time?: string }
  */
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ templateId: string }> }
 ) {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
-    }
-    if (user.role !== 'ADMIN') {
-      return NextResponse.json(
-        { error: 'Only superuser can edit official templates' },
-        { status: 403 }
-      );
-    }
+    const user = await requireAdmin();
     const { templateId } = await params;
     const body = await request.json();
     const scope = body?.scope;
@@ -49,6 +40,8 @@ export async function PATCH(
     }
     const textBody = typeof body.body === 'string' ? body.body : '';
     const title = typeof body.title === 'string' ? body.title : null;
+    const channel = typeof body.channel === 'string' && body.channel.trim() ? body.channel.trim() : null;
+    const time = typeof body.time === 'string' && body.time.trim() ? body.time.trim() : null;
 
     await prisma.officialTemplateOverride.upsert({
       where: {
@@ -59,21 +52,23 @@ export async function PATCH(
         scope,
         body: textBody,
         title,
+        channel,
+        time,
         updatedById: user.id,
       },
       update: {
         body: textBody,
         title,
+        channel,
+        time,
         updatedById: user.id,
       },
     });
     return NextResponse.json({ ok: true });
-  } catch (error) {
-    console.error('PATCH official template override error:', error);
-    return NextResponse.json(
-      { error: 'Failed to save override' },
-      { status: 500 }
-    );
+  } catch (e) {
+    if (isForbiddenError(e)) return NextResponse.json({ error: 'Only superuser can edit official templates' }, { status: 403 });
+    console.error('PATCH official template override error:', e);
+    return NextResponse.json({ error: 'Failed to save override' }, { status: 500 });
   }
 }
 
@@ -86,16 +81,7 @@ export async function DELETE(
   { params }: { params: Promise<{ templateId: string }> }
 ) {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
-    }
-    if (user.role !== 'ADMIN') {
-      return NextResponse.json(
-        { error: 'Only superuser can reset official templates' },
-        { status: 403 }
-      );
-    }
+    await requireAdmin();
     const { templateId } = await params;
     const scope = request.nextUrl.searchParams.get('scope');
     if (scope !== 'SUPPORT' && scope !== 'ADM') {
@@ -114,11 +100,9 @@ export async function DELETE(
       where: { templateId, scope },
     });
     return NextResponse.json({ ok: true });
-  } catch (error) {
-    console.error('DELETE official template override error:', error);
-    return NextResponse.json(
-      { error: 'Failed to reset override' },
-      { status: 500 }
-    );
+  } catch (e) {
+    if (isForbiddenError(e)) return NextResponse.json({ error: 'Only superuser can reset official templates' }, { status: 403 });
+    console.error('DELETE official template override error:', e);
+    return NextResponse.json({ error: 'Failed to reset override' }, { status: 500 });
   }
 }

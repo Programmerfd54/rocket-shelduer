@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getCurrentUser } from '@/lib/auth';
+import { requireAdmin, isForbiddenError } from '@/lib/auth';
 import prisma from '@/lib/prisma';
 
 /**
@@ -9,15 +9,7 @@ import prisma from '@/lib/prisma';
  */
 export async function GET(request: Request) {
   try {
-    const user = await getCurrentUser();
-    
-    if (!user) {
-      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
-    }
-
-    if (user.role !== 'ADMIN') {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
+    await requireAdmin();
 
     const { searchParams } = new URL(request.url);
     
@@ -102,11 +94,9 @@ export async function GET(request: Request) {
       limit,
       totalPages,
     });
-  } catch (error) {
-    console.error('Error loading security events:', error);
-    return NextResponse.json(
-      { error: 'Failed to load security events' },
-      { status: 500 }
-    );
+  } catch (e) {
+    if (isForbiddenError(e)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    console.error('Error loading security events:', e);
+    return NextResponse.json({ error: 'Failed to load security events' }, { status: 500 });
   }
 }

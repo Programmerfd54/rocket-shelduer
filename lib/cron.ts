@@ -1,30 +1,32 @@
 import cron, { type ScheduledTask } from 'node-cron';
+import { sendScheduledMessages } from '@/scripts/send-scheduled-messages';
 
 let cronJob: ScheduledTask | null = null;
 
 export function startCronJob() {
-  // Запускаем только в development и если еще не запущен
-  if (process.env.NODE_ENV === 'development' && !cronJob) {
-    console.log('🚀 Starting cron job for scheduled messages...');
-    
-    // Запускаем каждую минуту
-    cronJob = cron.schedule('* * * * *', async () => {
-      try {
-        console.log(`[${new Date().toISOString()}] Checking for scheduled messages...`);
-        
-        const response = await fetch('http://localhost:3000/api/cron/send-messages');
-        const data = await response.json();
-        
-        if (response.ok && (data.sent > 0 || data.failed > 0)) {
-          console.log(`✅ Sent: ${data.sent}, Failed: ${data.failed}`);
-        }
-      } catch (error) {
-        console.error('❌ Cron job error:', error);
-      }
-    });
+  if (cronJob) return;
+  // В development: всегда запускаем внутренний cron.
+  // В production: запускаем, если CRON_SECRET не задан (нет внешнего cron — Docker без отдельного cron-контейнера).
+  const runInternalCron =
+    process.env.NODE_ENV === 'development' ||
+    (process.env.NODE_ENV === 'production' && !process.env.CRON_SECRET);
+  if (!runInternalCron) return;
 
-    console.log('✅ Cron job started! Messages will be sent automatically every minute.');
-  }
+  console.log('🚀 Starting internal cron job for scheduled messages...');
+
+  cronJob = cron.schedule('* * * * *', async () => {
+    try {
+      const result = await sendScheduledMessages();
+      const total = (result.sent ?? 0) + (result.failed ?? 0);
+      if (total > 0) {
+        console.log(`✅ Cron: sent=${result.sent ?? 0}, failed=${result.failed ?? 0}`);
+      }
+    } catch (error) {
+      console.error('❌ Cron job error:', error);
+    }
+  });
+
+  console.log('✅ Internal cron started! Messages will be sent every minute.');
 }
 
 export function stopCronJob() {

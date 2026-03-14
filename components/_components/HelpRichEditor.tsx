@@ -11,6 +11,7 @@ import { useTiptap } from '@tiptap/react'
 import { NodeSelection } from '@tiptap/pm/state'
 import { BlockHighlight, HelpIcon } from '@/lib/helpEditorExtensions'
 import { HELPDOC_ICONS, HELPDOC_ICON_NAMES } from '@/lib/helpIcons'
+import { sanitizeSvgIcon } from '@/lib/sanitize'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -620,7 +621,7 @@ function HelpEditorToolbar({ onImageUpload }: { onImageUpload?: (html: string) =
                   onClick={() => {
                     runCommand(() => editor.chain().focus().insertHelpIcon(name, iconColor).run())
                   }}
-                  dangerouslySetInnerHTML={{ __html: HELPDOC_ICONS[name] || '' }}
+                  dangerouslySetInnerHTML={{ __html: sanitizeSvgIcon(HELPDOC_ICONS[name] || '') }}
                 />
               ))}
             </div>

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { getCurrentUser } from '@/lib/auth';
+import { requireAdmin, isForbiddenError } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -51,9 +51,11 @@ function getEnvValueDisplay(key: string, value: string | undefined, secret: bool
  * Возвращает: БД + версия, порты, env с реальными значениями (секреты маскируются).
  */
 export async function GET() {
-  const user = await getCurrentUser();
-  if (!user || user.role !== 'ADMIN') {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  try {
+    await requireAdmin();
+  } catch (e) {
+    if (isForbiddenError(e)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   const checks: CheckResult[] = [];
@@ -80,7 +82,9 @@ export async function GET() {
     checks.push({
       name: 'database',
       status: 'error',
-      message: e instanceof Error ? e.message : 'Connection failed',
+      ...(process.env.NODE_ENV !== 'production' && {
+        message: e instanceof Error ? e.message : 'Connection failed',
+      }),
       durationMs: Date.now() - dbStart,
     });
   }

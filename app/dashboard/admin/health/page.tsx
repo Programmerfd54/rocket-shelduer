@@ -5,7 +5,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Breadcrumbs } from '@/components/common/Breadcrumbs';
-import { Activity, Database, RefreshCw, CheckCircle, XCircle, AlertCircle, Network } from 'lucide-react';
+import Link from 'next/link';
+import { Activity, Database, RefreshCw, CheckCircle, XCircle, AlertCircle, Network, ArrowLeft } from 'lucide-react';
 
 type CheckItem = {
   name: string;
@@ -64,10 +65,17 @@ export default function AdminHealthPage() {
 
   return (
     <div className="space-y-6">
+      <Link href="/dashboard/admin">
+        <Button variant="ghost" size="sm" className="mb-2 -ml-2 gap-2">
+          <ArrowLeft className="h-4 w-4" />
+          Назад в админку
+        </Button>
+      </Link>
       <Breadcrumbs
         items={[
+          { label: 'Дашборд', href: '/dashboard' },
           { label: 'Админ', href: '/dashboard/admin' },
-          { label: 'Health-check', href: '/dashboard/admin/health' },
+          { label: 'Health-check', current: true },
         ]}
       />
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">

@@ -6,9 +6,16 @@ import prisma from '@/lib/prisma';
 
 export async function GET(request: Request) {
   try {
-    // Проверяем секретный ключ (если задан — иначе разрешаем для dev)
     const authHeader = request.headers.get('authorization');
-    if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+    const cronSecret = process.env.CRON_SECRET;
+    if (process.env.NODE_ENV === 'production') {
+      if (!cronSecret) {
+        return NextResponse.json({ error: 'CRON_SECRET must be set in production' }, { status: 503 });
+      }
+      if (authHeader !== `Bearer ${cronSecret}`) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      }
+    } else if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -64,7 +71,12 @@ export async function GET(request: Request) {
           return { success: true, id: ws.id, name: ws.workspaceName };
         } catch (error) {
           console.error(`Failed to delete workspace ${ws.id}:`, error);
-          return { success: false, id: ws.id, name: ws.workspaceName, error };
+          return {
+            success: false,
+            id: ws.id,
+            name: ws.workspaceName,
+            ...(process.env.NODE_ENV !== 'production' && { error }),
+          };
         }
       })
     );

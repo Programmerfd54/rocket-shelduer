@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { requireAuth, isUserEffectivelyBlocked } from '@/lib/auth';
-import { encryptPassword } from '@/lib/encryption';
+import { encryptPassword, encryptAuthToken } from '@/lib/encryption';
 import { RocketChatClient } from '@/lib/rocketchat';
-import { logSecurityEvent, getClientIp, isSuspiciousInput, SecurityEventType } from '@/lib/security';
+import { logSecurityEvent, getClientIp, getSafeErrorMessage, isSuspiciousInput, SecurityEventType } from '@/lib/security';
 import { ADM_TEMPLATES, SUP_TEMPLATES } from '@/lib/templates-data';
 
 export async function GET(request: Request) {
@@ -385,6 +385,16 @@ export async function POST(request: Request) {
       );
     }
 
+    try {
+      const { assertSafeWorkspaceUrl } = await import('@/lib/ssrf');
+      assertSafeWorkspaceUrl(workspaceUrl);
+    } catch (e) {
+      return NextResponse.json(
+        { error: e instanceof Error ? e.message : 'Invalid workspace URL' },
+        { status: 400 }
+      );
+    }
+
     // Нормализация URL: без завершающего слэша, чтобы url.com и url.com/ не создавали дубли
     const normalizeWorkspaceUrl = (u: string) => (u || '').trim().replace(/\/+$/, '') || u;
     const normalizedUrl = normalizeWorkspaceUrl(workspaceUrl);
@@ -445,6 +455,7 @@ export async function POST(request: Request) {
     const { authToken, userId: rcUserId } = await rcClient.login(username, password);
 
     const encryptedPassword = encryptPassword(password);
+    const encryptedToken = encryptAuthToken(authToken);
 
     const workspace = await prisma.workspaceConnection.create({
       data: {
@@ -454,7 +465,7 @@ export async function POST(request: Request) {
         username,
         encryptedPassword,
         has2FA: has2FA || false,
-        authToken,
+        authToken: encryptedToken,
         userId_RC: rcUserId,
         isActive: true,
         lastConnected: new Date(),
@@ -494,9 +505,7 @@ export async function POST(request: Request) {
       blocked: true,
     });
     return NextResponse.json(
-      {
-        error: error instanceof Error ? error.message : 'Failed to connect workspace',
-      },
+      { error: getSafeErrorMessage(error, 'Failed to connect workspace') },
       { status: 500 }
     );
   }

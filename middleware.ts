@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import { jwtVerify } from 'jose';
 
 const STATE_CHANGING_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE'];
 
@@ -47,21 +48,36 @@ function isOriginAllowed(request: NextRequest, origin: string | null): boolean {
   return allowed.some((a) => origin === a || origin === a + '/' || a.startsWith(origin));
 }
 
-export function middleware(request: NextRequest) {
+/** Проверка JWT в Edge (без Prisma). */
+async function isTokenValid(token: string): Promise<boolean> {
+  const secret = process.env.JWT_SECRET || 'your-secret-key';
+  if (process.env.NODE_ENV === 'production' && (secret === 'your-secret-key' || !process.env.JWT_SECRET)) {
+    return false;
+  }
+  try {
+    const key = new TextEncoder().encode(secret);
+    await jwtVerify(token, key, { algorithms: ['HS256'] });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function middleware(request: NextRequest) {
   const token = request.cookies.get('auth-token')?.value;
   const { pathname } = request.nextUrl;
   const response = NextResponse.next();
 
-  // Security headers для всех ответов (защита от XSS, clickjacking, MIME-sniffing, утечки referrer)
+  // Security headers (защита от XSS, clickjacking, MIME-sniffing)
   response.headers.set('X-Frame-Options', 'DENY');
   response.headers.set('X-Content-Type-Options', 'nosniff');
   response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
   response.headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), interest-cohort=()');
   response.headers.set('X-DNS-Prefetch-Control', 'off');
-  // CSP: разрешаем только свои скрипты и стили, запрещаем inline eval и недоверенные источники
+  // CSP: убран unsafe-eval, оставлен unsafe-inline для React/Next
   response.headers.set(
     'Content-Security-Policy',
-    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
   );
   if (process.env.NODE_ENV === 'production') {
     response.headers.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
@@ -106,7 +122,7 @@ export function middleware(request: NextRequest) {
     let isAuthenticated = false;
     if (token) {
       try {
-        isAuthenticated = token.length > 0;
+        isAuthenticated = await isTokenValid(token);
       } catch {
         isAuthenticated = false;
       }

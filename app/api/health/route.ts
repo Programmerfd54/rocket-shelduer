@@ -11,7 +11,15 @@ export const revalidate = 0;
  */
 export async function GET(request: NextRequest) {
   const healthSecret = process.env.HEALTH_CHECK_SECRET;
-  if (healthSecret) {
+  if (process.env.NODE_ENV === 'production') {
+    if (!healthSecret) {
+      return NextResponse.json({ error: 'HEALTH_CHECK_SECRET must be set in production' }, { status: 503 });
+    }
+    const provided = request.nextUrl.searchParams.get('secret');
+    if (provided !== healthSecret) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+  } else if (healthSecret) {
     const provided = request.nextUrl.searchParams.get('secret');
     if (provided !== healthSecret) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });

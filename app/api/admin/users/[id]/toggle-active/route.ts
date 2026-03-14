@@ -1,23 +1,16 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { requireAuth } from '@/lib/auth';
+import { requireSupportOrAdmin, isForbiddenError } from '@/lib/auth';
 
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const user = await requireAuth();
+    const user = await requireSupportOrAdmin();
     const { id } = await params;
     const body = await request.json();
     const { isActive } = body;
-
-    if (user.role !== 'SUPPORT' && user.role !== 'ADMIN') {
-      return NextResponse.json(
-        { error: 'Insufficient permissions' },
-        { status: 403 }
-      );
-    }
 
     if (user.id === id) {
       return NextResponse.json(
@@ -54,11 +47,9 @@ export async function PATCH(
       success: true,
       message: 'User status updated',
     });
-  } catch (error) {
-    console.error('Toggle user active error:', error);
-    return NextResponse.json(
-      { error: 'Failed to update user status' },
-      { status: 500 }
-    );
+  } catch (e) {
+    if (isForbiddenError(e)) return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
+    console.error('Toggle user active error:', e);
+    return NextResponse.json({ error: 'Failed to update user status' }, { status: 500 });
   }
 }

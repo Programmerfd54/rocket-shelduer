@@ -98,7 +98,7 @@ export async function POST(
         } catch {
           return NextResponse.json(
             { error: 'Не удалось войти в Rocket.Chat. Проверьте логин и пароль администратора.' },
-            { status: 401 }
+            { status: 400 }
           );
         }
       }

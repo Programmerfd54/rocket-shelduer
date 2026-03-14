@@ -30,6 +30,7 @@ import { Loader2, ArrowLeft, FileText, HelpCircle, Plus, Pencil, Trash2, Eye } f
 import { toast } from 'sonner'
 import { HelpRichEditor, HELP_ROLE_OPTIONS } from '@/components/_components/HelpRichEditor'
 import { Checkbox } from '@/components/ui/checkbox'
+import { sanitizeHelpHtml } from '@/lib/sanitize'
 
 type Instruction = { id: string; title: string; content: string; order: number; roles: string[] }
 type FAQ = { id: string; question: string; answer: string; order: number; roles: string[] }
@@ -81,7 +82,7 @@ export default function CatalogEditPage() {
     try {
       const res = await fetch(`/api/admin/help/catalogs/${catalogId}`)
       if (res.status === 404) {
-        router.replace('/dashboard/help/admin')
+        router.replace('/dashboard/admin/help/admin')
         return
       }
       if (!res.ok) throw new Error('Failed to load')
@@ -91,7 +92,7 @@ export default function CatalogEditPage() {
       setCatalogRoles(Array.isArray(data.roles) ? data.roles : [])
     } catch (e) {
       toast.error('Ошибка загрузки каталога')
-      router.replace('/dashboard/help/admin')
+      router.replace('/dashboard/admin/help/admin')
     } finally {
       setLoading(false)
     }
@@ -339,15 +340,15 @@ export default function CatalogEditPage() {
       <Breadcrumbs
         items={[
           { label: 'Дашборд', href: '/dashboard' },
-          { label: 'Справка', href: '/dashboard/help' },
-          { label: 'Управление справкой', href: '/dashboard/help/admin' },
+          { label: 'Справка', href: '/dashboard/admin/help' },
+          { label: 'Управление справкой', href: '/dashboard/admin/help/admin' },
           { label: catalog.title, current: true },
         ]}
         className="mb-6"
       />
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-bold tracking-tight">Редактирование каталога</h1>
-        <Link href="/dashboard/help/admin">
+        <Link href="/dashboard/admin/help/admin">
           <Button variant="outline" size="sm">
             <ArrowLeft className="h-4 w-4 mr-1" />
             К управлению справкой
@@ -554,7 +555,7 @@ export default function CatalogEditPage() {
                 {previewInstContent ? (
                   <div
                     className="prose prose-sm dark:prose-invert max-w-none"
-                    dangerouslySetInnerHTML={{ __html: previewInstContent }}
+                    dangerouslySetInnerHTML={{ __html: sanitizeHelpHtml(previewInstContent) }}
                   />
                 ) : (
                   <p className="text-sm text-muted-foreground">Введите контент выше — здесь появится предпросмотр.</p>

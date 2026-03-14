@@ -96,12 +96,16 @@ export default function Sidebar({ user, workspaces = [], groups = [], pendingCou
           },
         ]
       : []),
-    {
-      name: 'Инструкции',
-      href: '/dashboard/help',
-      icon: BookOpen,
-      active: pathname.startsWith('/dashboard/help'),
-    },
+    ...(role !== 'ADMIN'
+      ? [
+          {
+            name: 'Инструкции',
+            href: '/dashboard/admin/help',
+            icon: BookOpen,
+            active: pathname.startsWith('/dashboard/admin/help'),
+          },
+        ]
+      : []),
   ]
 
   const showTemplatesTab = visibility === null ? true : (visibility.templatesTabVisible || role === 'ADMIN')
@@ -112,25 +116,15 @@ export default function Sidebar({ user, workspaces = [], groups = [], pendingCou
             name: 'Админ панель',
             href: '/dashboard/admin',
             icon: Users,
-            active: pathname.startsWith('/dashboard/admin') && !pathname.startsWith('/dashboard/admin/health'),
+            active: pathname.startsWith('/dashboard/admin'),
           },
-          ...(role === 'ADMIN'
-            ? [
-                {
-                  name: 'Health',
-                  href: '/dashboard/admin/health',
-                  icon: Activity,
-                  active: pathname.startsWith('/dashboard/admin/health'),
-                },
-              ]
-            : []),
-          ...(showTemplatesTab
+          ...(showTemplatesTab && role !== 'ADMIN'
             ? [
                 {
                   name: 'Шаблоны',
-                  href: '/dashboard/templates',
+                  href: '/dashboard/admin/templates',
                   icon: FileText,
-                  active: pathname === '/dashboard/templates',
+                  active: pathname === '/dashboard/admin/templates',
                 },
               ]
             : []),

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { requireAuth } from '@/lib/auth';
+import { decryptAuthToken } from '@/lib/encryption';
 import { RocketChatClient } from '@/lib/rocketchat';
 import { isUnsafeId } from '@/lib/security';
 
@@ -61,17 +62,17 @@ export async function GET(
     let externalStatus: ExternalStatus = 'UNKNOWN';
     let rocketChatMessage: any = null;
 
-    // Проверяем только отправленные сообщения, у которых есть messageId_RC и привязанный workspace
+    const decryptedToken = message.workspace?.authToken ? decryptAuthToken(message.workspace.authToken) : null;
     if (
       message.status === 'SENT' &&
       message.messageId_RC &&
       message.workspace &&
-      message.workspace.authToken &&
+      decryptedToken &&
       message.workspace.userId_RC
     ) {
       const rcClient = new RocketChatClient(message.workspace.workspaceUrl);
       const rcMessage = await rcClient.getMessage(
-        message.workspace.authToken,
+        decryptedToken,
         message.workspace.userId_RC,
         message.messageId_RC
       );
@@ -166,7 +167,7 @@ export async function PATCH(
     const user = await requireAuth();
     const { id } = await params;
     const body = await request.json();
-    const { message: messageText, scheduledFor } = body;
+    const { message: messageText, scheduledFor, channelId: newChannelId, channelName: newChannelName } = body;
 
     const message = await prisma.scheduledMessage.findUnique({
       where: { id },
@@ -203,7 +204,8 @@ export async function PATCH(
         },
       });
 
-      if (!workspace || !workspace.authToken || !workspace.userId_RC) {
+      const editToken = workspace?.authToken ? decryptAuthToken(workspace.authToken) : null;
+      if (!workspace || !editToken || !workspace.userId_RC) {
         return NextResponse.json(
           { error: 'Workspace not authenticated' },
           { status: 401 }
@@ -224,7 +226,7 @@ export async function PATCH(
         // Редактируем сообщение в Rocket.Chat
         // roomId (channelId) обязателен для API редактирования
         await rcClient.editMessage(
-          workspace.authToken,
+          editToken,
           workspace.userId_RC,
           message.channelId, // roomId для Rocket.Chat API
           message.messageId_RC,
@@ -261,11 +263,18 @@ export async function PATCH(
       );
     }
 
+    // channelId/channelName можно менять только для PENDING (ещё не отправлено)
+    const channelUpdate =
+      newChannelId && newChannelName && message.status === 'PENDING'
+        ? { channelId: newChannelId, channelName: newChannelName }
+        : {};
+
     const updatedMessage = await prisma.scheduledMessage.update({
       where: { id },
       data: {
         message: messageText,
         ...(scheduledFor && { scheduledFor: scheduledDate }),
+        ...channelUpdate,
         updatedAt: new Date(),
       },
       include: {

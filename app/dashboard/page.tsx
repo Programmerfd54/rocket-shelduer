@@ -276,14 +276,7 @@ export default function DashboardPage() {
             Обзор вашей активности и запланированных сообщений
           </p>
         </div>
-        {currentUser?.role !== 'VOL' && (
-          <Button asChild size="lg" className="bg-gradient-to-r from-red-600 to-red-700 shadow-lg hover:shadow-xl transition-all">
-            <Link href="/dashboard/workspaces">
-              <Plus className="w-5 h-5 mr-2" />
-              Новое пространство
-            </Link>
-          </Button>
-        )}
+       
       </div>
 
       {/* Expiring Workspaces Alert */}

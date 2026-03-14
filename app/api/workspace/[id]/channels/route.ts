@@ -61,6 +61,12 @@ export async function GET(
           displayName: ch.fname || ch.name,
           type: ch.t,
           messageCount: ch.msgs || 0,
+          topic: ch.topic,
+          description: ch.description,
+          ts: ch.ts,
+          default: ch.default,
+          readOnly: ch.ro,
+          createdByRcUsername: ch.u?.username,
         })),
       });
     } catch (rcError: any) {

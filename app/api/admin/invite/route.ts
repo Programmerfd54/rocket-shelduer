@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { requireAuth } from '@/lib/auth';
+import { requireSupportOrAdmin, isForbiddenError } from '@/lib/auth';
 import crypto from 'crypto';
 
 const TOKEN_BYTES = 32;
@@ -9,13 +9,7 @@ const EXPIRES_HOURS = 1;
 /** POST — сгенерировать ссылку-приглашение на регистрацию. SUPPORT не может выдавать ADMIN. Body: { role, email? } */
 export async function POST(request: Request) {
   try {
-    const user = await requireAuth();
-    if (user.role !== 'SUPPORT' && user.role !== 'ADMIN') {
-      return NextResponse.json(
-        { error: 'Недостаточно прав' },
-        { status: 403 }
-      );
-    }
+    const user = await requireSupportOrAdmin();
 
     const body = await request.json();
     const role = body?.role ?? 'USER';
@@ -64,11 +58,9 @@ export async function POST(request: Request) {
       role,
       email,
     });
-  } catch (error) {
-    console.error('Create invite error:', error);
-    return NextResponse.json(
-      { error: 'Ошибка создания приглашения' },
-      { status: 500 }
-    );
+  } catch (e) {
+    if (isForbiddenError(e)) return NextResponse.json({ error: 'Недостаточно прав' }, { status: 403 });
+    console.error('Create invite error:', e);
+    return NextResponse.json({ error: 'Ошибка создания приглашения' }, { status: 500 });
   }
 }

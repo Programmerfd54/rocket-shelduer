@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server';
+import { getSafeErrorMessage } from '@/lib/security';
 import prisma from '@/lib/prisma';
 import { requireAuth } from '@/lib/auth';
 import { isUnsafeId } from '@/lib/security';
 import { RocketChatClient } from '@/lib/rocketchat';
+import { getEffectiveConnectionForRc } from '@/lib/workspace-rc';
 
-/** Проверка доступа: владелец пространства или назначенный SUP/ADMIN */
+/** Проверка доступа: владелец пространства или назначенный SUP/ADMIN/ADM */
 async function canAccessWorkspaceAdmin(userId: string, userRole: string, workspaceId: string) {
   const workspace = await prisma.workspaceConnection.findUnique({
     where: { id: workspaceId },
@@ -12,7 +14,7 @@ async function canAccessWorkspaceAdmin(userId: string, userRole: string, workspa
   });
   if (!workspace) return { ok: false as const, error: 'Workspace not found' };
   if (workspace.userId === userId) return { ok: true as const };
-  if (userRole !== 'SUPPORT' && userRole !== 'ADMIN') return { ok: false as const, error: 'Forbidden' };
+  if (userRole !== 'SUPPORT' && userRole !== 'ADMIN' && userRole !== 'ADM') return { ok: false as const, error: 'Forbidden' };
   const assigned = await prisma.workspaceAdminAssignment.findFirst({
     where: { userId, workspaceId },
     select: { id: true },
@@ -22,8 +24,8 @@ async function canAccessWorkspaceAdmin(userId: string, userRole: string, workspa
 
 /**
  * POST — список пользователей Rocket.Chat (все или по логинам) с lastLogin.
- * Тело: { adminUsername, adminPassword, usernames?: string[] }.
- * Требуются креды администратора RC. Возвращает всех пользователей сервера RC (с пагинацией) или отфильтрованных по usernames.
+ * Тело: { adminUsername?, adminPassword?, usernames?: string[] }.
+ * Сначала пробует использовать существующее подключение (если вы владелец или назначены). Если не хватает прав — нужны креды админа RC.
  */
 export async function POST(
   request: Request,
@@ -56,25 +58,67 @@ export async function POST(
       ? (body.usernames as string[]).map((u) => String(u).trim().toLowerCase()).filter(Boolean)
       : null;
 
-    if (!adminUsername || !adminPassword) {
-      return NextResponse.json(
-        { error: 'Укажите логин и пароль администратора Rocket.Chat для доступа ко всем пользователям.' },
-        { status: 400 }
-      );
-    }
-
     const baseUrl = workspace.workspaceUrl.replace(/\/$/, '');
     const rc = new RocketChatClient(baseUrl);
     let authToken: string;
     let rcUserId: string;
-    try {
-      const loginResult = await rc.login(adminUsername, adminPassword);
-      authToken = loginResult.authToken;
-      rcUserId = loginResult.userId;
-    } catch (e: any) {
+
+    // 1. Если запрашивают полный список (пустой filterUsernames) — требуем креды админа RC.
+    //    Без кредов можно только по конкретным логинам (через user-access API для добавленных).
+    if ((!filterUsernames || filterUsernames.length === 0) && (!adminUsername || !adminPassword)) {
       return NextResponse.json(
-        { error: 'Не удалось войти в Rocket.Chat. Проверьте логин и пароль администратора.', details: e?.message },
-        { status: 401 }
+        { error: 'Для получения полного списка пользователей RC укажите логин и пароль администратора Rocket.Chat.' },
+        { status: 400 }
+      );
+    }
+
+    // 2. Пробуем существующее подключение — работает, если вы владелец/назначены и подключены
+    const effective = await getEffectiveConnectionForRc(currentUser.id, workspaceId);
+    if (effective?.authToken && effective?.userId_RC && (filterUsernames?.length ?? 0) > 0) {
+      try {
+        await rc.listUsers(effective.authToken, effective.userId_RC, { count: 1, offset: 0 });
+        authToken = effective.authToken;
+        rcUserId = effective.userId_RC;
+      } catch {
+        // Подключение есть, но listUsers не прошёл (нет прав) — пробуем логин по кредам
+        if (adminUsername && adminPassword) {
+          try {
+            const loginResult = await rc.login(adminUsername, adminPassword);
+            authToken = loginResult.authToken;
+            rcUserId = loginResult.userId;
+          } catch (e: any) {
+            const msg = e?.message ?? '';
+            const hint =
+              msg.toLowerCase().includes('unauthorized') || msg.toLowerCase().includes('invalid')
+                ? 'Проверьте логин и пароль. Если входите через OAuth/SSO — у аккаунта может не быть пароля для API.'
+                : msg ? `Ошибка Rocket.Chat: ${msg}` : 'Проверьте логин и пароль.';
+            return NextResponse.json({ error: 'Не удалось войти в Rocket.Chat. ' + hint, details: msg }, { status: 401 });
+          }
+        } else {
+          return NextResponse.json(
+            { error: 'Подключение есть, но прав на список пользователей нет. Укажите логин и пароль администратора RC.' },
+            { status: 400 }
+          );
+        }
+      }
+    } else if (adminUsername && adminPassword) {
+      // 3. Логин по кредам
+      try {
+        const loginResult = await rc.login(adminUsername, adminPassword);
+        authToken = loginResult.authToken;
+        rcUserId = loginResult.userId;
+      } catch (e: any) {
+        const msg = e?.message ?? '';
+        const hint =
+          msg.toLowerCase().includes('unauthorized') || msg.toLowerCase().includes('invalid')
+            ? 'Проверьте логин и пароль. Если входите через OAuth/SSO — у аккаунта может не быть пароля для API.'
+            : msg ? `Ошибка Rocket.Chat: ${msg}` : 'Проверьте логин и пароль.';
+        return NextResponse.json({ error: 'Не удалось войти в Rocket.Chat. ' + hint, details: msg }, { status: 401 });
+      }
+    } else {
+      return NextResponse.json(
+        { error: 'Укажите логины для проверки и подключитесь к пространству, либо укажите креды админа RC для полного списка.' },
+        { status: 400 }
       );
     }
 
@@ -117,7 +161,7 @@ export async function POST(
   } catch (error) {
     console.error('User access RC error:', error);
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Не удалось получить список пользователей RC' },
+      { error: getSafeErrorMessage(error, 'Не удалось получить список пользователей RC') },
       { status: 500 }
     );
   }

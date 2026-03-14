@@ -51,7 +51,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { toast } from 'sonner'
-import { Loader2, ArrowLeft, MoreVertical, Shield, ShieldOff, Key, Ban, Users, Activity, UserPlus, Pencil, CalendarPlus, Search, ClipboardCopy, FileText, Server, Archive, ShieldCheck } from 'lucide-react'
+import { Loader2, ArrowLeft, MoreVertical, Shield, ShieldOff, Key, Ban, Users, Activity, UserPlus, Pencil, CalendarPlus, Search, ClipboardCopy, FileText, Server, Archive, ShieldCheck, BookOpen, Heart } from 'lucide-react'
 import { CopyButton } from '@/components/common/CopyButton'
 import Link from 'next/link'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
@@ -576,6 +576,51 @@ export default function AdminPage() {
           </div>
         </header>
 
+        {/* Кнопки для ADMIN: Справка, Health, Шаблоны */}
+        {currentUser?.role === 'ADMIN' && (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6 sm:mb-8">
+            <Link href="/dashboard/admin/help">
+              <Card className="border bg-card shadow-sm hover:shadow-md hover:border-primary/30 transition-all cursor-pointer h-full">
+                <CardContent className="p-5 flex flex-col items-start gap-3">
+                  <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
+                    <BookOpen className="h-5 w-5 text-primary" />
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-foreground">Справка</h3>
+                    <p className="text-xs text-muted-foreground mt-0.5">Инструкции и FAQ</p>
+                  </div>
+                </CardContent>
+              </Card>
+            </Link>
+            <Link href="/dashboard/admin/health">
+              <Card className="border bg-card shadow-sm hover:shadow-md hover:border-primary/30 transition-all cursor-pointer h-full">
+                <CardContent className="p-5 flex flex-col items-start gap-3">
+                  <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
+                    <Heart className="h-5 w-5 text-primary" />
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-foreground">Health</h3>
+                    <p className="text-xs text-muted-foreground mt-0.5">Состояние БД и приложения</p>
+                  </div>
+                </CardContent>
+              </Card>
+            </Link>
+            <Link href="/dashboard/admin/templates">
+              <Card className="border bg-card shadow-sm hover:shadow-md hover:border-primary/30 transition-all cursor-pointer h-full">
+                <CardContent className="p-5 flex flex-col items-start gap-3">
+                  <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
+                    <FileText className="h-5 w-5 text-primary" />
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-foreground">Шаблоны</h3>
+                    <p className="text-xs text-muted-foreground mt-0.5">Шаблоны анонсов</p>
+                  </div>
+                </CardContent>
+              </Card>
+            </Link>
+          </div>
+        )}
+
         {/* Статистика — компактные карточки */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4 mb-6 sm:mb-8">
           <Card className="border bg-card shadow-sm">
@@ -738,7 +783,7 @@ export default function AdminPage() {
                     />
                   </div>
                   <div className="flex items-center justify-between rounded-lg border p-3">
-                    <span className="text-sm">SUPPORT: вкладка «Импорт эмодзи»</span>
+                    <span className="text-sm">SUPPORT: вкладка «Настройка пространства»</span>
                     <Checkbox
                       checked={systemSettings.workspaceTabEmojiImportSup !== 'false'}
                       onCheckedChange={async (checked) => {

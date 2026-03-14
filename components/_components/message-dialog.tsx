@@ -15,7 +15,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import * as toast from '@/lib/toast'
-import { Calendar, Clock, Eye, User } from 'lucide-react'
+import { Calendar, Clock, Eye, User, Hash } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import MessagePreview from './message-preview'
 import MessageEditor from './message-editor'
@@ -68,7 +68,10 @@ export default function MessageDialog({
     scheduledFor: '',
     scheduledDate: '',
     scheduledTime: '',
+    channelId: '',
+    channelName: '',
   })
+  const [channels, setChannels] = useState<{ id: string; name: string; displayName?: string }[]>([])
 
   // SUP/ADM/ADMIN: загрузка списка пользователей для «Отправить от имени» (ADM — только ADM и VOL)
   useEffect(() => {
@@ -182,6 +185,18 @@ export default function MessageDialog({
     }
   }, [formData.message, open, editingMessage, saveDraft])
 
+  // Load channels when editing PENDING message (for channel change)
+  useEffect(() => {
+    if (open && workspaceId && editingMessage?.status === 'PENDING') {
+      fetch(`/api/workspace/${workspaceId}/channels`)
+        .then((r) => (r.ok ? r.json() : { channels: [] }))
+        .then((d) => setChannels(d.channels || []))
+        .catch(() => setChannels([]))
+    } else {
+      setChannels([])
+    }
+  }, [open, workspaceId, editingMessage?.status])
+
   useEffect(() => {
     if (editingMessage) {
       const scheduledDate = new Date(editingMessage.scheduledFor)
@@ -193,6 +208,8 @@ export default function MessageDialog({
         scheduledFor: editingMessage.scheduledFor || '',
         scheduledDate: dateStr,
         scheduledTime: timeStr,
+        channelId: editingMessage.channelId || '',
+        channelName: editingMessage.channelName || '',
       })
     } else if (open && (initialMessage != null || initialTime != null || initialDate != null)) {
       const tomorrow = new Date()
@@ -204,6 +221,8 @@ export default function MessageDialog({
         scheduledFor: '',
         scheduledDate: dateStr,
         scheduledTime: timeStr,
+        channelId: '',
+        channelName: '',
       })
     } else if (open) {
       const tomorrow = new Date()
@@ -216,6 +235,8 @@ export default function MessageDialog({
         scheduledFor: '',
         scheduledDate: dateStr,
         scheduledTime: timeStr,
+        channelId: '',
+        channelName: '',
       })
     }
   }, [editingMessage, open, initialMessage, initialTime, initialDate])
@@ -253,17 +274,28 @@ export default function MessageDialog({
       : '/api/messages'
     const method = editingMessage ? 'PATCH' : 'POST'
 
+    const body = editingMessage
+      ? {
+          message: formData.message,
+          ...(scheduledFor && { scheduledFor: scheduledFor.toISOString() }),
+          ...(editingMessage.status === 'PENDING' && formData.channelId && {
+            channelId: formData.channelId,
+            channelName: formData.channelName || formData.channelId,
+          }),
+        }
+      : {
+          workspaceId,
+          channelId,
+          channelName,
+          message: formData.message,
+          ...(scheduledFor && { scheduledFor: scheduledFor.toISOString() }),
+          ...((currentUserRole === 'SUPPORT' || currentUserRole === 'ADM' || currentUserRole === 'ADMIN') && sendAsUserId && { asUserId: sendAsUserId }),
+        }
+
     const savePromise = fetch(url, {
       method,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        workspaceId,
-        channelId,
-        channelName,
-        message: formData.message,
-        ...(scheduledFor && { scheduledFor: scheduledFor.toISOString() }),
-        ...((currentUserRole === 'SUPPORT' || currentUserRole === 'ADM' || currentUserRole === 'ADMIN') && !editingMessage && sendAsUserId && { asUserId: sendAsUserId }),
-      }),
+      body: JSON.stringify(body),
     })
       .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
       .then(({ ok, data }) => {
@@ -295,6 +327,8 @@ export default function MessageDialog({
             scheduledFor: '',
             scheduledDate: dateStr,
             scheduledTime: '09:00',
+            channelId: '',
+            channelName: '',
           })
         }
       })
@@ -317,12 +351,45 @@ export default function MessageDialog({
             <DialogTitle className="text-lg font-semibold tracking-tight">
               {editingMessage ? 'Редактировать сообщение' : 'Создать отложенное сообщение'}
             </DialogTitle>
-            <DialogDescription className="text-sm text-muted-foreground">
-              Канал: <span className="font-medium text-foreground">#{channelName}</span>
-            </DialogDescription>
+            {!editingMessage || editingMessage.status !== 'PENDING' ? (
+              <DialogDescription className="text-sm text-muted-foreground">
+                Канал: <span className="font-medium text-foreground">#{channelName}</span>
+              </DialogDescription>
+            ) : null}
           </DialogHeader>
 
           <div className="grid gap-5 py-5">
+            {editingMessage && editingMessage.status === 'PENDING' && channels.length > 0 && (
+              <div className="space-y-2">
+                <Label htmlFor="channel">
+                  <Hash className="inline w-4 h-4 mr-1" />
+                  Канал
+                </Label>
+                <Select
+                  value={formData.channelId || editingMessage.channelId}
+                  onValueChange={(val) => {
+                    const ch = channels.find((c) => c.id === val)
+                    setFormData((prev) => ({
+                      ...prev,
+                      channelId: val,
+                      channelName: ch?.name || ch?.displayName || val,
+                    }))
+                  }}
+                >
+                  <SelectTrigger id="channel" className="bg-background">
+                    <SelectValue placeholder="Выберите канал" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {channels.map((ch) => (
+                      <SelectItem key={ch.id} value={ch.id}>
+                        #{ch.displayName || ch.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
             <Tabs defaultValue="edit" className="w-full">
               <TabsList className="grid w-full grid-cols-2 h-10 rounded-lg bg-muted/50 p-1">
                 <TabsTrigger value="edit" className="rounded-md data-[state=active]:bg-background data-[state=active]:shadow-sm">

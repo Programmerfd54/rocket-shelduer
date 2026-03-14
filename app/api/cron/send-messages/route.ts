@@ -4,14 +4,18 @@ import { sendScheduledMessages } from '@/scripts/send-scheduled-messages';
 // Этот эндпоинт будет вызываться через Vercel Cron Jobs
 export async function GET(request: Request) {
   try {
-    // Проверка авторизации для безопасности
+    // В production CRON_SECRET обязателен; без него отклоняем запрос
     const authHeader = request.headers.get('authorization');
-    
-    if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
+    const cronSecret = process.env.CRON_SECRET;
+    if (process.env.NODE_ENV === 'production') {
+      if (!cronSecret) {
+        return NextResponse.json({ error: 'CRON_SECRET must be set in production' }, { status: 503 });
+      }
+      if (authHeader !== `Bearer ${cronSecret}`) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      }
+    } else if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const result = await sendScheduledMessages();
@@ -25,9 +29,9 @@ export async function GET(request: Request) {
   } catch (error) {
     console.error('Cron job error:', error);
     return NextResponse.json(
-      { 
+      {
         error: 'Failed to process scheduled messages',
-        details: error instanceof Error ? error.message : 'Unknown error'
+        ...(process.env.NODE_ENV !== 'production' && { details: error instanceof Error ? error.message : 'Unknown error' }),
       },
       { status: 500 }
     );

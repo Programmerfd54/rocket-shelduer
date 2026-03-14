@@ -119,6 +119,17 @@ export async function isLoginRateLimited(ipAddress: string | null): Promise<bool
   return count >= LOGIN_RATE_LIMIT_COUNT;
 }
 
+/**
+ * Безопасное сообщение об ошибке для ответов API.
+ * В production возвращает fallback, в dev — message из Error (если есть).
+ */
+export function getSafeErrorMessage(error: unknown, fallback: string): string {
+  if (process.env.NODE_ENV !== 'production') {
+    return error instanceof Error ? error.message : fallback;
+  }
+  return fallback;
+}
+
 /** Получить IP из запроса (учёт X-Forwarded-For за прокси). */
 export function getClientIp(request: Request): string | null {
   const forwarded = request.headers.get('x-forwarded-for');
@@ -165,4 +176,26 @@ export function recordAuthEndpointHit(ip: string | null): void {
     return;
   }
   entry.count++;
+}
+
+/** Rate limit для invite token: 30 проверок в минуту с одного IP. */
+const INVITE_RATE_WINDOW_MS = 60 * 1000;
+const INVITE_RATE_MAX = 30;
+const inviteRateMap = new Map<string, { count: number; resetAt: number }>();
+
+export function isInviteTokenRateLimited(ip: string | null): boolean {
+  if (!ip?.trim()) return false;
+  const key = `invite:${ip.trim()}`;
+  const now = Date.now();
+  const entry = inviteRateMap.get(key);
+  if (!entry) {
+    inviteRateMap.set(key, { count: 1, resetAt: now + INVITE_RATE_WINDOW_MS });
+    return false;
+  }
+  if (now >= entry.resetAt) {
+    inviteRateMap.set(key, { count: 1, resetAt: now + INVITE_RATE_WINDOW_MS });
+    return false;
+  }
+  entry.count++;
+  return entry.count > INVITE_RATE_MAX;
 }

@@ -1,12 +1,17 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
+import { getClientIp, isInviteTokenRateLimited } from '@/lib/security';
 
 /** GET — проверить токен приглашения. Возвращает role и email (если задан). */
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ token: string }> }
 ) {
   try {
+    const ip = getClientIp(request);
+    if (isInviteTokenRateLimited(ip)) {
+      return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
+    }
     const { token } = await params;
     if (!token?.trim()) {
       return NextResponse.json({ error: 'Токен не указан' }, { status: 400 });

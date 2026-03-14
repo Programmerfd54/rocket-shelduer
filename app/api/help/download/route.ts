@@ -24,7 +24,7 @@ export async function GET(request: Request) {
         method: 'GET',
         ipAddress: getClientIp(request),
         userAgent: request.headers.get('user-agent') ?? undefined,
-        details: `Подозрительный параметр file: ${file?.slice(0, 200) ?? 'null'}`,
+        details: `Подозрительный параметр file: ${file?.slice(0, 100) ?? 'null'}`,
         blocked: true,
         userId: user.id,
       });
@@ -42,7 +42,7 @@ export async function GET(request: Request) {
         method: 'GET',
         ipAddress: getClientIp(request),
         userAgent: request.headers.get('user-agent') ?? undefined,
-        details: `Путь вне каталога загрузок: ${file.slice(0, 200)}`,
+        details: `Путь вне каталога загрузок: ${file.slice(0, 100)}`,
         blocked: true,
         userId: user.id,
       });
@@ -52,11 +52,12 @@ export async function GET(request: Request) {
     if (!fs.existsSync(resolvedPath) || !fs.statSync(resolvedPath).isFile()) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 });
     }
-    
+    // Экранирование filename для защиты от header injection (CRLF, кавычки)
+    const safeFilename = file.replace(/[\r\n"\\]/g, '_');
     const buf = fs.readFileSync(resolvedPath);
     return new NextResponse(buf, {
       headers: {
-        'Content-Disposition': `attachment; filename="${file}"`,
+        'Content-Disposition': `attachment; filename="${safeFilename}"`,
         'Content-Type': 'application/octet-stream',
       },
     });

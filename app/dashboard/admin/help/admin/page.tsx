@@ -91,7 +91,7 @@ export default function HelpAdminPage() {
       }
       const meData = await meRes.json()
       if (meData.user?.role !== 'ADMIN') {
-        router.push('/dashboard/help')
+        router.push('/dashboard/admin/help')
         return
       }
       setIsAdmin(true)
@@ -389,7 +389,7 @@ export default function HelpAdminPage() {
       <header className="sticky top-0 z-10 border-b border-border/60 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
         <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-4">
           <div className="flex items-center gap-4">
-            <Link href="/dashboard/help" className="text-muted-foreground hover:text-foreground transition-colors">
+            <Link href="/dashboard/admin/help" className="text-muted-foreground hover:text-foreground transition-colors">
               <ArrowLeft className="h-5 w-5" />
             </Link>
             <div>
@@ -397,7 +397,7 @@ export default function HelpAdminPage() {
               <p className="text-xs text-muted-foreground">Настройки и контент для раздела «Справка»</p>
             </div>
           </div>
-          <Link href="/dashboard/help">
+          <Link href="/dashboard/admin/help">
             <Button variant="ghost" size="sm">Открыть справку</Button>
           </Link>
         </div>
@@ -523,7 +523,7 @@ export default function HelpAdminPage() {
               <div className="flex items-center justify-between">
                 <span className="font-medium">{cat.title}</span>
                 <div className="flex gap-2">
-                  <Link href={`/dashboard/help/admin/catalogs/${cat.id}`}>
+                  <Link href={`/dashboard/admin/help/admin/catalogs/${cat.id}`}>
                     <Button variant="ghost" size="sm">Редактировать</Button>
                   </Link>
                   <Button variant="ghost" size="sm" className="text-destructive" onClick={() => setDeleteCatalogTarget(cat)}>

@@ -120,9 +120,7 @@ export default function LoginPage() {
                   />
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  <a href="/forgot-password" className="text-primary hover:underline">Забыли пароль?</a>
-                  {' · '}
-                  Сброс через администратора или в настройках.
+                  Сброс пароля — через администратора или в настройках.
                 </p>
               </div>
 
