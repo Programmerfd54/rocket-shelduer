@@ -47,11 +47,12 @@ COPY --from=builder /app/prisma ./prisma
 # Scripts for create-superuser
 COPY --from=builder /app/scripts ./scripts
 
-# package.json for prisma/tsx (standalone has minimal node_modules)
+# package.json + prisma/tsx
 COPY --from=builder /app/package.json ./
 
-# Install prisma + tsx for migrate and create-superuser (minimal)
+# Prisma: standalone не включает его. Устанавливаем и генерируем в runner.
 RUN npm install prisma@5.22.0 tsx --omit=dev --ignore-scripts
+RUN npx prisma generate
 
 RUN addgroup --system --gid 1001 nodejs \
     && adduser --system --uid 1001 nextjs \
