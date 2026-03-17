@@ -495,13 +495,15 @@ export async function POST(request: Request) {
   } catch (error) {
     const ip = getClientIp(request);
     const userAgent = request.headers.get('user-agent') ?? undefined;
+    const errMsg = error instanceof Error ? error.message : String(error);
+    console.error('[POST /api/workspace] Error:', errMsg);
     await logSecurityEvent({
       type: SecurityEventType.WORKSPACE_AUTH_FAILED,
       path: '/api/workspace',
       method: 'POST',
       ipAddress: ip,
       userAgent,
-      details: 'Ошибка подключения к пространству (неверные данные или недоступный сервер)',
+      details: errMsg.slice(0, 500),
       blocked: true,
     });
     return NextResponse.json(

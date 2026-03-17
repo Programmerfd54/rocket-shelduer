@@ -140,12 +140,15 @@ export function WorkspaceDialog({ onSuccess, userRole = 'USER', disableAddButton
                 type="url"
                 value={formData.workspaceUrl}
                 onChange={(e) => setFormData({ ...formData, workspaceUrl: e.target.value })}
-                placeholder={userRole === 'VOL' ? 'https://rocketchat-yar-feb-26.21-school.ru' : 'https://rocketchat.example.com'}
+                placeholder={userRole === 'VOL' ? 'https://rocketchat-yar-mar-26.21-school.ru/rocketchat' : 'https://rocketchat.example.com'}
                 className="rounded-lg border-border/80"
               />
+              <p className="text-xs text-muted-foreground">
+                Для 21-school укажите URL с путём <code className="bg-muted px-1 rounded">/rocketchat</code>, например: https://rocketchat-yar-mar-26.21-school.ru/rocketchat
+              </p>
               {userRole === 'VOL' && (
                 <p className="text-xs text-muted-foreground">
-                  Для волонтёра разрешено только: https://rocketchat-yar-[месяц]-26.21-school.ru (например, feb, mar)
+                  Для волонтёра разрешено только: https://rocketchat-yar-[месяц]-26.21-school.ru/rocketchat (например, feb, mar)
                 </p>
               )}
             </div>
