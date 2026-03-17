@@ -1,7 +1,6 @@
 # ============ Stage 1: Build ============
 FROM node:20 AS builder
 
-# Build tools for native modules (sharp, etc.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     python3 \
@@ -22,6 +21,9 @@ COPY . .
 RUN npx prisma generate
 RUN npm run build
 
+# Удаляем devDependencies для уменьшения размера
+RUN npm prune --omit=dev
+
 # ============ Stage 2: Runner ============
 FROM node:20-slim AS runner
 
@@ -36,23 +38,13 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
-# Copy standalone output
-COPY --from=builder /app/.next/standalone ./
-COPY --from=builder /app/.next/static ./.next/static
-COPY --from=builder /app/public ./public
-
-# Prisma schema and migrations for migrate deploy
-COPY --from=builder /app/prisma ./prisma
-
-# Scripts for create-superuser
-COPY --from=builder /app/scripts ./scripts
-
-# package.json + prisma/tsx
+# Копируем только нужное для production
+COPY --from=builder /app/.next ./.next
+COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./
-
-# Prisma: standalone не включает его. Устанавливаем и генерируем в runner.
-RUN npm install prisma@5.22.0 tsx --omit=dev --ignore-scripts
-RUN npx prisma generate
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/scripts ./scripts
 
 RUN addgroup --system --gid 1001 nodejs \
     && adduser --system --uid 1001 nextjs \
@@ -65,4 +57,4 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -sf "http://localhost:3000/api/health?secret=${HEALTH_CHECK_SECRET}" || exit 1
 
-CMD ["sh", "-c", "npx prisma migrate deploy && npx tsx scripts/create-superuser.ts && node server.js"]
+CMD ["sh", "-c", "npx prisma migrate deploy && npx tsx scripts/create-superuser.ts && exec npm start"]
