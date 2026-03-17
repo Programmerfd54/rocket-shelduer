@@ -10,7 +10,11 @@ services:
     restart: unless-stopped
 
   cron:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.cron
+    environment:
+      APP_HOST: web
     env_file:
       - .env
     depends_on:

@@ -3,3 +3,27 @@ node_modules
 .git
 *.md
 .env*.local
+.env
+.env.*
+!.env.example
+
+# Docs and dev
+docs
+*.log
+coverage
+.idea
+.vscode
+
+# Tests
+__tests__
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx
+
+# Misc
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+.gitignore
+README*

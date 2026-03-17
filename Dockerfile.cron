@@ -1,0 +1,6 @@
+# Минимальный образ для cron — alpine + curl, ~10MB вместо 2.7GB
+FROM alpine:3.19
+RUN apk add --no-cache curl
+# APP_HOST=app (deploy) или web (root docker-compose)
+ENV APP_HOST=app
+CMD ["sh", "-c", "while true; do curl -sf -H \"Authorization: Bearer $${CRON_SECRET}\" http://$${APP_HOST}:3000/api/cron/send-messages || true; sleep 60; done"]

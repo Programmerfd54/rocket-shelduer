@@ -903,7 +903,7 @@ export default function CalendarPage() {
                     </span>
 
                     {/* Intensive period indicator */}
-                    {isInIntensive && (
+                    {isInIntensive && intensiveColor && (
                       <div 
                         className="absolute top-1 right-1 w-2 h-2 rounded-full"
                         style={{ backgroundColor: intensiveColor }}

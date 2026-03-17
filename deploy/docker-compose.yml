@@ -36,7 +36,6 @@ services:
         condition: service_healthy
     ports:
       - "80:3000"
-    command: sh -c "npx prisma migrate deploy && npm run create-superuser && exec npm start"
     networks:
       - app-network
     restart: unless-stopped
@@ -48,15 +47,11 @@ services:
   cron:
     build:
       context: ..
-      dockerfile: Dockerfile
-      args:
-        - NODE_ENV=production
-        - NPM_CONFIG_REGISTRY=https://registry.npmjs.org/
+      dockerfile: Dockerfile.cron
     env_file:
       - ../.env
     environment:
-      DATABASE_URL: postgresql://postgres:password@postgres:5432/rocketchat_scheduler
-      NODE_ENV: production
+      CRON_SECRET: ${CRON_SECRET}
     depends_on:
       app:
         condition: service_started
