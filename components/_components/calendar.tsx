@@ -66,6 +66,11 @@ export default function CalendarPage() {
   const isSupOrAdm = currentUser?.role === 'SUPPORT' || currentUser?.role === 'ADM' || currentUser?.role === 'ADMIN'
   const hasActiveFilters = filterRole !== 'all' || filterWorkspaceId !== 'all' || filterStatus !== 'all'
 
+  // Цвет по типу пространства: многопользовательское (общий) — красный, индивидуальное — голубой
+  const selectedWorkspace = workspaces.find((w: any) => w.id === filterWorkspaceId)
+  const isSharedCalendar = filterWorkspaceId === 'all' || selectedWorkspace?.isMultiUser === true
+  const calendarAccentColor = isSharedCalendar ? '#ef4444' : '#3b82f6'
+
   useEffect(() => {
     if (workspaceIdFromUrl) setFilterWorkspaceId(workspaceIdFromUrl)
   }, [workspaceIdFromUrl])
@@ -224,17 +229,18 @@ export default function CalendarPage() {
   const getIntensivePeriodsForDate = (date: Date) => {
     return workspaces.filter((ws: any) => {
       if (!ws.startDate || !ws.endDate || ws.isArchived) return false
-      
+      if (filterWorkspaceId !== 'all' && ws.id !== filterWorkspaceId) return false
+
       // Normalize dates to start of day for comparison
       const startDate = new Date(ws.startDate)
       startDate.setHours(0, 0, 0, 0)
-      
+
       const endDate = new Date(ws.endDate)
       endDate.setHours(23, 59, 59, 999)
-      
+
       const checkDate = new Date(date.getFullYear(), date.getMonth(), date.getDate())
       checkDate.setHours(0, 0, 0, 0)
-      
+
       return checkDate >= startDate && checkDate <= endDate
     })
   }
@@ -408,8 +414,19 @@ export default function CalendarPage() {
       <div className="flex flex-wrap items-center justify-between gap-4 print:flex-nowrap">
         <div>
           <h1 className="text-3xl font-bold">Календарь</h1>
-          <p className="text-muted-foreground mt-1">
+          <p className="text-muted-foreground mt-1 flex items-center gap-2">
             Визуализация запланированных сообщений
+            <span
+              className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium"
+              style={{
+                backgroundColor: `${calendarAccentColor}20`,
+                color: calendarAccentColor,
+                border: `1px solid ${calendarAccentColor}40`,
+              }}
+            >
+              <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: calendarAccentColor }} />
+              {isSharedCalendar ? 'Общий календарь' : 'Индивидуальный'}
+            </span>
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 no-print">
@@ -856,10 +873,8 @@ export default function CalendarPage() {
                   selectedDate?.toDateString() === date.toDateString()
                 const isInIntensive = intensivePeriods.length > 0
 
-                // Get the first intensive period color (or use primary if multiple)
-                const intensiveColor = isInIntensive 
-                  ? (intensivePeriods[0]?.color || '#ef4444')
-                  : null
+                // Цвет по типу календаря: общий (все воркспейсы) — красный, индивидуальный — голубой
+                const intensiveColor = isInIntensive ? calendarAccentColor : null
 
                 return (
                   <button
@@ -966,8 +981,8 @@ export default function CalendarPage() {
                 <>
                   <div className="h-4 w-px bg-border" />
                   <div className="flex items-center gap-2">
-                    <div className="w-3 h-3 rounded-full border-2 border-foreground/20" style={{ backgroundColor: '#ef444410' }} />
-                    <span>Период интенсива</span>
+                    <div className="w-3 h-3 rounded-full border-2 border-foreground/20" style={{ backgroundColor: `${calendarAccentColor}20` }} />
+                    <span>Период интенсива ({isSharedCalendar ? 'общий' : 'индивидуальный'})</span>
                   </div>
                 </>
               )}

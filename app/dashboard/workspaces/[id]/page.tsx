@@ -182,6 +182,8 @@ export default function WorkspaceDetailPage() {
   const [checkingConnection, setCheckingConnection] = useState(false)
   const [unarchiveLoading, setUnarchiveLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
+  /** Ошибка загрузки (сеть, сервер) — показываем баннер с повтором */
+  const [loadError, setLoadError] = useState<{ message: string; isNetworkError?: boolean } | null>(null)
   const [messageFilterFromStats, setMessageFilterFromStats] = useState<string | null>(null)
   /** Фильтр по автору сообщений (многопользовательское пространство) */
   const [messageFilterByUserId, setMessageFilterByUserId] = useState<string | null>(null)
@@ -681,6 +683,7 @@ export default function WorkspaceDetailPage() {
   }, [workspace])
 
   const loadData = async () => {
+    setLoadError(null)
     try {
       // Load workspace
       const workspaceResponse = await fetch(`/api/workspace/${workspaceId}`)
@@ -733,17 +736,47 @@ export default function WorkspaceDetailPage() {
           setSelectedMessageChannelId((prev) => prev || msgs[0].channelId)
         }
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const err = error instanceof Error ? error : new Error(String(error))
+      const msg = err.message || 'Ошибка загрузки'
+      const isNetworkError =
+        msg.includes('Failed to fetch') ||
+        msg.includes('NetworkError') ||
+        msg.includes('ERR_NETWORK') ||
+        msg.includes('network') ||
+        msg.includes('Load failed')
+
       console.error('Failed to load workspace:', error)
-      toast.error('Ошибка загрузки', {
-        description: error.message,
+      setLoadError({
+        message: isNetworkError
+          ? 'Проверьте подключение к интернету и повторите попытку'
+          : msg,
+        isNetworkError,
+      })
+      toast.error(isNetworkError ? 'Нет подключения' : 'Ошибка загрузки', {
+        description: isNetworkError ? 'Проверьте интернет и нажмите «Повторить»' : msg,
         action: { label: 'Повторить', onClick: () => loadData() },
       })
-      router.push('/dashboard/workspaces')
+      // Редирект только при 404 (пространство не найдено), не при сетевых ошибках
+      if (!isNetworkError && msg.toLowerCase().includes('not found')) {
+        router.push('/dashboard/workspaces')
+      }
     } finally {
       setLoading(false)
     }
   }
+
+  // Автоповтор при восстановлении сети
+  useEffect(() => {
+    const onOnline = () => {
+      if (loadError?.isNetworkError) {
+        setLoadError(null)
+        loadData()
+      }
+    }
+    window.addEventListener('online', onOnline)
+    return () => window.removeEventListener('online', onOnline)
+  }, [loadError?.isNetworkError])
 
   const checkExternalMessageStatuses = async (msgs: any[]) => {
     const toCheck = (msgs || []).filter(
@@ -1610,7 +1643,7 @@ export default function WorkspaceDetailPage() {
     )
   }
 
-  if (!workspace) return null
+  if (!workspace && !loadError) return null
 
   return (
     <div className="min-h-screen bg-background">
@@ -1619,12 +1652,44 @@ export default function WorkspaceDetailPage() {
           items={[
             { label: 'Дашборд', href: '/dashboard' },
             { label: 'Пространства', href: '/dashboard/workspaces' },
-            { label: workspace.workspaceName, current: true },
+            { label: workspace?.workspaceName ?? 'Пространство', current: true },
           ]}
           className="-ml-2"
         />
 
-        {workspace?.isArchived && (
+        {loadError && (
+          <Alert className="rounded-xl border-destructive/40 bg-destructive/10 dark:bg-destructive/20 overflow-visible">
+            <AlertTriangle className="h-5 w-5 shrink-0 text-destructive" />
+            <div className="col-start-2 w-full min-w-0 space-y-3">
+              <AlertTitle className="text-base leading-tight w-full">
+                {loadError.isNetworkError ? 'Нет подключения к серверу' : 'Ошибка загрузки'}
+              </AlertTitle>
+              <AlertDescription className="mt-1 text-sm text-muted-foreground w-full max-w-none">
+                {loadError.message}
+              </AlertDescription>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-2 border-destructive/50 hover:bg-destructive/20"
+                onClick={() => loadData()}
+                disabled={loading}
+              >
+                {loading ? <Spinner className="h-4 w-4" /> : <RefreshCw className="h-4 w-4" />}
+                Повторить
+              </Button>
+            </div>
+          </Alert>
+        )}
+
+        {loadError && !workspace && (
+          <p className="text-sm text-muted-foreground">
+            <Link href="/dashboard/workspaces" className="text-primary hover:underline">← Вернуться к списку пространств</Link>
+          </p>
+        )}
+
+        {workspace && (
+        <>
+        {workspace.isArchived && (
           <Alert className="rounded-xl border-amber-500/40 bg-amber-500/10 dark:bg-amber-950/20 overflow-visible">
             <Archive className="h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400" />
             <div className="col-start-2 w-full min-w-0 space-y-3">
@@ -3858,7 +3923,7 @@ export default function WorkspaceDetailPage() {
         </Card>
 
         {/* Message Dialog */}
-        {showMessageDialog && selectedChannel && (
+        {workspace && showMessageDialog && selectedChannel && (
           <MessageDialog
             open={showMessageDialog}
             onOpenChange={(open) => {
@@ -3868,7 +3933,7 @@ export default function WorkspaceDetailPage() {
                 setTemplateCopiedBody(null)
               }
             }}
-            workspaceId={workspace?.id ?? workspaceId}
+            workspaceId={workspace.id}
             channelId={selectedChannel.id}
             channelName={selectedChannel.name || selectedChannel.displayName}
             editingMessage={editingMessage}
@@ -3878,6 +3943,8 @@ export default function WorkspaceDetailPage() {
             initialDate={scheduleFromTemplate?.date}
             currentUserRole={currentUserRole}
           />
+        )}
+        </>
         )}
       </div>
     </div>
