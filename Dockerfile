@@ -16,7 +16,7 @@ RUN npm config set fetch-retry-mintimeout 20000 \
     && npm config set fetch-retries 5 \
     && npm config set registry https://registry.npmjs.org/
 
-RUN npm ci
+RUN npm install --include=optional
 
 COPY . .
 RUN npx prisma generate
