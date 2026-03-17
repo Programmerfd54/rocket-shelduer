@@ -1,6 +1,6 @@
-# Деплой на 10.76.52.21
+# Деплой
 
-Развёртывание в контейнерах: **PostgreSQL** + **Node.js (Next.js)**. Ссылки приглашений и `PUBLIC_APP` указывают на `http://10.76.52.21` (порт 80, в адресе не отображается).
+Развёртывание в контейнерах: **PostgreSQL** + **Node.js (Next.js)**. По умолчанию: `https://sheduler.yar.21-school.ru`, приложение слушает порт **4001** (nginx проксирует на него).
 
 **На самой машине ничего не ставится:** Node.js, npm, PostgreSQL и все зависимости работают только внутри контейнеров. На хосте нужны только **Docker** и **Docker Compose** (и git, если клонируете репо с другой машины). Так машина не засоряется.
 
@@ -25,7 +25,7 @@
 
 **Важно:** на сервере без нормального интернета **не используйте** `build --no-cache`. Из-за этого Docker пересоберёт всё с нуля, `npm install` снова пойдет в сеть и упадёт по таймауту. Для обновления кода достаточно `up -d --build` — подхватятся изменения и пересоберутся только нужные слои (кэш `npm install` сохранится).
 
-**После запуска:** открыть в браузере **http://10.76.52.21**, войти как **admin** / **admin** и сменить пароль в настройках.
+**После запуска:** открыть в браузере **https://sheduler.yar.21-school.ru** (через nginx) или **http://IP:4001**, войти как **admin** / **admin** и сменить пароль в настройках.
 
 **Остановка:** `docker compose -f deploy/docker-compose.yml down`
 
@@ -43,13 +43,13 @@
 - `JWT_SECRET`, `ENCRYPTION_KEY` — случайные строки
 - `CRON_SECRET`, `HEALTH_CHECK_SECRET` (случайные строки)
 - `DATABASE_URL=postgresql://postgres:password@postgres:5432/rocketchat_scheduler` (хост `postgres` — имя сервиса в docker-compose)
-- `NEXT_PUBLIC_APP_URL` и `APP_URL` = `http://10.76.52.21`
-- `COOKIE_SECURE=false` (для входа по HTTP)
+- `NEXT_PUBLIC_APP_URL` и `APP_URL` = `https://sheduler.yar.21-school.ru`
+- `COOKIE_SECURE=true` (для HTTPS)
 
-При необходимости поменять хост приложения:
+При необходимости поменять хост:
 
 ```bash
-APP_HOST=10.76.52.21 ./deploy/generate-env.sh > .env
+APP_HOST=другой-хост.ru ./deploy/generate-env.sh > .env
 ```
 
 ## 2. Запуск контейнеров
@@ -74,7 +74,7 @@ docker compose -f deploy/docker-compose.yml up -d --build
   - `npm run create-superuser` (логин `admin`, пароль `admin` — сменить после входа)
   - `npm start`
 
-Приложение доступно по адресу: **http://10.76.52.21** (без порта в адресе).
+Приложение слушает порт **4001**. Nginx должен проксировать на `http://127.0.0.1:4001` (или `http://IP:4001`).
 
 ## 3. Проверка
 
