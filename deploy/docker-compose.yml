@@ -1,3 +1,6 @@
+# restart: unless-stopped — контейнеры автоматически поднимаются после перезагрузки машины
+# Данные БД в volume pgdata сохраняются между перезапусками
+
 services:
   postgres:
     image: postgres:16-alpine

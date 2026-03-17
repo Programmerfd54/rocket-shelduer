@@ -29,6 +29,8 @@
 
 **Остановка:** `docker compose -f deploy/docker-compose.yml down`
 
+**Автозапуск после перезагрузки:** контейнеры уже настроены с `restart: unless-stopped` — после перезагрузки машины Docker сам поднимет их. Данные БД хранятся в volume `pgdata` и сохраняются. Убедитесь, что Docker запускается при загрузке: `sudo systemctl enable docker` (обычно уже включено).
+
 ---
 
 ## 1. Генерация .env

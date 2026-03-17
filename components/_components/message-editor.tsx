@@ -39,7 +39,7 @@ export default function MessageEditor({
   value,
   onChange,
   placeholder = "Введите текст сообщения...",
-  maxLength = 4000,
+  maxLength = 5000,
   emojis = [],
   workspaceId,
   workspaceUrl,
@@ -167,7 +167,7 @@ export default function MessageEditor({
   const otherEmojis = emojis.slice(20)
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3 min-w-0">
       {/* Toolbar */}
       <div className="flex items-center gap-1 p-2 rounded-xl border border-border/80 bg-muted/30">
         {/* Emoji Picker */}
@@ -407,7 +407,7 @@ export default function MessageEditor({
         }}
         placeholder={placeholder}
         rows={8}
-        className="resize-none font-mono text-sm rounded-xl border-border/80 bg-background focus-visible:ring-2 focus-visible:ring-primary/20"
+        className="resize-none font-mono text-sm rounded-xl border-border/80 bg-background focus-visible:ring-2 focus-visible:ring-primary/20 min-w-0 w-full break-words"
         onSelect={(e) => {
           const target = e.target as HTMLTextAreaElement
           setSelectedRange({

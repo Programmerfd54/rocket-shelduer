@@ -2930,7 +2930,7 @@ export default function WorkspaceDetailPage() {
                     </div>
                     {workspaceTemplatesOpenIds.has(t.id) && (
                       <div className="px-4 pb-4 pt-0 pl-14">
-                        <pre className="text-xs rounded-xl p-4 bg-muted/30 overflow-x-auto whitespace-pre-wrap font-sans border border-border/60">
+                        <pre className="text-xs rounded-xl p-4 bg-muted/30 overflow-x-auto whitespace-pre-wrap font-sans border border-border/60 max-w-full break-words">
                           {t.body}
                         </pre>
                         <Button variant="ghost" size="sm" className="mt-2 rounded-lg" onClick={() => { navigator.clipboard.writeText(t.body); setTemplateCopiedBody(t.body); toast.success('Текст скопирован.'); }}>
@@ -3123,7 +3123,7 @@ export default function WorkspaceDetailPage() {
                     </div>
                     {workspaceTemplatesOpenIds.has(t.id) && (
                       <div className="px-4 pb-4 pt-0 pl-14">
-                        <pre className="text-xs rounded-xl p-4 bg-muted/30 overflow-x-auto whitespace-pre-wrap font-sans border border-border/60">
+                        <pre className="text-xs rounded-xl p-4 bg-muted/30 overflow-x-auto whitespace-pre-wrap font-sans border border-border/60 max-w-full break-words">
                           {t.body}
                         </pre>
                         <Button variant="ghost" size="sm" className="mt-2 rounded-lg" onClick={() => { navigator.clipboard.writeText(t.body); setTemplateCopiedBody(t.body); toast.success('Текст скопирован.'); }}>

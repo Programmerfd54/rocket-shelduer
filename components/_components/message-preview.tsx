@@ -152,7 +152,7 @@ export default function MessagePreview({
               </div>
               
               <div 
-                className="text-sm text-foreground break-words [&_strong]:font-semibold [&_em]:italic [&_code]:bg-muted/80 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded-md [&_code]:text-xs [&_code]:font-mono [&_pre]:bg-muted/80 [&_pre]:p-3 [&_pre]:rounded-xl [&_pre]:overflow-x-auto [&_pre]:my-2 [&_pre]:border [&_pre]:border-border/60 [&_del]:line-through [&_a]:text-primary [&_a]:hover:underline [&_img]:inline-block [&_img]:w-5 [&_img]:h-5 [&_img]:align-middle [&_span]:inline-flex [&_span]:items-center [&_span]:gap-1"
+                className="text-sm text-foreground break-words [&_strong]:font-semibold [&_em]:italic [&_code]:bg-muted/80 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded-md [&_code]:text-xs [&_code]:font-mono [&_pre]:bg-muted/80 [&_pre]:p-3 [&_pre]:rounded-xl [&_pre]:overflow-x-auto [&_pre]:max-w-full [&_pre]:my-2 [&_pre]:border [&_pre]:border-border/60 [&_del]:line-through [&_a]:text-primary [&_a]:hover:underline [&_img]:inline-block [&_img]:w-5 [&_img]:h-5 [&_img]:align-middle [&_span]:inline-flex [&_span]:items-center [&_span]:gap-1"
                 dangerouslySetInnerHTML={{ __html: parsedMessage }}
               />
             </div>

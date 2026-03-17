@@ -345,8 +345,8 @@ export default function MessageDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[620px] rounded-xl border-border/80 shadow-lg" onKeyDown={handleKeyDown}>
-        <form onSubmit={handleSubmit}>
+      <DialogContent className="sm:max-w-[620px] max-h-[90vh] overflow-y-auto rounded-xl border-border/80 shadow-lg" onKeyDown={handleKeyDown}>
+        <form onSubmit={handleSubmit} className="min-w-0 overflow-hidden">
           <DialogHeader className="space-y-1.5 pb-2 border-b border-border/60">
             <DialogTitle className="text-lg font-semibold tracking-tight">
               {editingMessage ? 'Редактировать сообщение' : 'Создать отложенное сообщение'}
@@ -390,7 +390,7 @@ export default function MessageDialog({
               </div>
             )}
 
-            <Tabs defaultValue="edit" className="w-full">
+            <Tabs defaultValue="edit" className="w-full min-w-0">
               <TabsList className="grid w-full grid-cols-2 h-10 rounded-lg bg-muted/50 p-1">
                 <TabsTrigger value="edit" className="rounded-md data-[state=active]:bg-background data-[state=active]:shadow-sm">
                   Редактор
@@ -406,16 +406,16 @@ export default function MessageDialog({
                   <Label htmlFor="message">Текст сообщения</Label>
                   <span className={cn(
                     "text-xs text-muted-foreground",
-                    formData.message.length > 4000 && "text-destructive font-medium"
+                    formData.message.length > 5000 && "text-destructive font-medium"
                   )}>
-                    {formData.message.length} / 4000 символов
+                    {formData.message.length} / 5000 символов
                   </span>
                 </div>
                 <MessageEditor
                   value={formData.message}
                   onChange={(value) => setFormData({ ...formData, message: value })}
                   placeholder="Введите текст сообщения..."
-                  maxLength={4000}
+                  maxLength={5000}
                   emojis={emojis}
                   workspaceId={workspaceId}
                   workspaceUrl={workspaceUrl}
