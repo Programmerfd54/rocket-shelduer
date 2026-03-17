@@ -50,8 +50,6 @@ services:
       dockerfile: Dockerfile.cron
     env_file:
       - ../.env
-    environment:
-      CRON_SECRET: ${CRON_SECRET}
     depends_on:
       app:
         condition: service_started
