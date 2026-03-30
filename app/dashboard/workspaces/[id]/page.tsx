@@ -9,11 +9,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { 
-  ArrowLeft, 
-  Hash, 
-  MessageSquare, 
-  Plus, 
+import {
+  ArrowLeft,
+  Hash,
+  MessageSquare,
+  MessageSquarePlus,
+  Plus,
   Search,
   RefreshCw,
   Clock,
@@ -26,7 +27,15 @@ import {
   Users,
   UserPlus,
   LogIn,
-  AlertTriangle
+  AlertTriangle,
+  LayoutGrid,
+  List,
+  Sparkles,
+  Filter,
+  Info,
+  Shield,
+  Lightbulb,
+  Layers,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import MessageDialog from '@/components/_components/message-dialog'
@@ -71,53 +80,76 @@ import { cn, getInitials, generateAvatarColor, getChannelTagColors, messageStatu
 import { Breadcrumbs } from '@/components/common/Breadcrumbs'
 import { EmptyState } from '@/components/common/EmptyState'
 import { VirtualList } from '@/components/_components/VirtualList'
-import { Trash2, RotateCcw, ChevronDown, ChevronRight, ChevronUp, Copy, FileText, KeyRound, Eye } from 'lucide-react'
+import { Trash2, RotateCcw, ChevronDown, ChevronRight, ChevronUp, Copy, FileText, KeyRound, Eye, ClipboardList } from 'lucide-react'
 import { Calendar, ExternalLink } from 'lucide-react'
-import { ResetAccountTab } from '@/components/_components/workspace/ResetAccountTab'
-import { UserAccessTab } from '@/components/_components/workspace/UserAccessTab'
+import { AccountsAndStatusTab } from '@/components/_components/workspace/AccountsAndStatusTab'
 import { SpaceSettingsTab } from '@/components/_components/workspace/SpaceSettingsTab'
 import { WorkspaceCalendar } from '@/components/_components/workspace/WorkspaceCalendar'
 
+/** Акцент слева как в Linear / Vercel — без тяжёлых рамок */
 const TAB_COLORS = {
   blue: {
-    active: 'bg-blue-500/15 border-blue-400/60 text-blue-700 dark:text-blue-300',
+    active:
+      'bg-background shadow-[0_1px_2px_rgba(0,0,0,0.04)] ring-1 ring-border/50 border-l-[3px] border-l-blue-500 text-foreground',
     icon: 'text-blue-600 dark:text-blue-400',
-    inactive: 'border-transparent hover:border-blue-300/40 hover:bg-blue-500/5 text-muted-foreground hover:text-foreground',
+    inactive:
+      'border-l-[3px] border-l-transparent hover:bg-muted/70 text-muted-foreground hover:text-foreground',
   },
   emerald: {
-    active: 'bg-emerald-500/15 border-emerald-400/60 text-emerald-700 dark:text-emerald-300',
+    active:
+      'bg-background shadow-[0_1px_2px_rgba(0,0,0,0.04)] ring-1 ring-border/50 border-l-[3px] border-l-emerald-500 text-foreground',
     icon: 'text-emerald-600 dark:text-emerald-400',
-    inactive: 'border-transparent hover:border-emerald-300/40 hover:bg-emerald-500/5 text-muted-foreground hover:text-foreground',
+    inactive:
+      'border-l-[3px] border-l-transparent hover:bg-muted/70 text-muted-foreground hover:text-foreground',
   },
   amber: {
-    active: 'bg-amber-500/15 border-amber-400/60 text-amber-700 dark:text-amber-300',
+    active:
+      'bg-background shadow-[0_1px_2px_rgba(0,0,0,0.04)] ring-1 ring-border/50 border-l-[3px] border-l-amber-500 text-foreground',
     icon: 'text-amber-600 dark:text-amber-400',
-    inactive: 'border-transparent hover:border-amber-300/40 hover:bg-amber-500/5 text-muted-foreground hover:text-foreground',
+    inactive:
+      'border-l-[3px] border-l-transparent hover:bg-muted/70 text-muted-foreground hover:text-foreground',
   },
   violet: {
-    active: 'bg-violet-500/15 border-violet-400/60 text-violet-700 dark:text-violet-300',
+    active:
+      'bg-background shadow-[0_1px_2px_rgba(0,0,0,0.04)] ring-1 ring-border/50 border-l-[3px] border-l-violet-500 text-foreground',
     icon: 'text-violet-600 dark:text-violet-400',
-    inactive: 'border-transparent hover:border-violet-300/40 hover:bg-violet-500/5 text-muted-foreground hover:text-foreground',
+    inactive:
+      'border-l-[3px] border-l-transparent hover:bg-muted/70 text-muted-foreground hover:text-foreground',
   },
   rose: {
-    active: 'bg-rose-500/15 border-rose-400/60 text-rose-700 dark:text-rose-300',
+    active:
+      'bg-background shadow-[0_1px_2px_rgba(0,0,0,0.04)] ring-1 ring-border/50 border-l-[3px] border-l-rose-500 text-foreground',
     icon: 'text-rose-600 dark:text-rose-400',
-    inactive: 'border-transparent hover:border-rose-300/40 hover:bg-rose-500/5 text-muted-foreground hover:text-foreground',
+    inactive:
+      'border-l-[3px] border-l-transparent hover:bg-muted/70 text-muted-foreground hover:text-foreground',
   },
   orange: {
-    active: 'bg-orange-500/15 border-orange-400/60 text-orange-700 dark:text-orange-300',
+    active:
+      'bg-background shadow-[0_1px_2px_rgba(0,0,0,0.04)] ring-1 ring-border/50 border-l-[3px] border-l-orange-500 text-foreground',
     icon: 'text-orange-600 dark:text-orange-400',
-    inactive: 'border-transparent hover:border-orange-300/40 hover:bg-orange-500/5 text-muted-foreground hover:text-foreground',
+    inactive:
+      'border-l-[3px] border-l-transparent hover:bg-muted/70 text-muted-foreground hover:text-foreground',
   },
   cyan: {
-    active: 'bg-cyan-500/15 border-cyan-400/60 text-cyan-700 dark:text-cyan-300',
+    active:
+      'bg-background shadow-[0_1px_2px_rgba(0,0,0,0.04)] ring-1 ring-border/50 border-l-[3px] border-l-cyan-500 text-foreground',
     icon: 'text-cyan-600 dark:text-cyan-400',
-    inactive: 'border-transparent hover:border-cyan-300/40 hover:bg-cyan-500/5 text-muted-foreground hover:text-foreground',
+    inactive:
+      'border-l-[3px] border-l-transparent hover:bg-muted/70 text-muted-foreground hover:text-foreground',
   },
   teal: {
-    active: 'bg-teal-500/15 border-teal-400/60 text-teal-700 dark:text-teal-300',
+    active:
+      'bg-background shadow-[0_1px_2px_rgba(0,0,0,0.04)] ring-1 ring-border/50 border-l-[3px] border-l-teal-500 text-foreground',
     icon: 'text-teal-600 dark:text-teal-400',
-    inactive: 'border-transparent hover:border-teal-300/40 hover:bg-teal-500/5 text-muted-foreground hover:text-foreground',
+    inactive:
+      'border-l-[3px] border-l-transparent hover:bg-muted/70 text-muted-foreground hover:text-foreground',
+  },
+  indigo: {
+    active:
+      'bg-background shadow-[0_1px_2px_rgba(0,0,0,0.04)] ring-1 ring-border/50 border-l-[3px] border-l-indigo-500 text-foreground',
+    icon: 'text-indigo-600 dark:text-indigo-400',
+    inactive:
+      'border-l-[3px] border-l-transparent hover:bg-muted/70 text-muted-foreground hover:text-foreground',
   },
 } as const
 
@@ -142,11 +174,16 @@ function TabNavButton({
       type="button"
       onClick={onClick}
       className={cn(
-        'w-full flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium transition-all border-2',
+        'w-full flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors duration-150 border border-transparent',
         active ? c.active : c.inactive
       )}
     >
-      <span className={cn('shrink-0 flex items-center justify-center w-7 h-7 rounded-md', active ? c.icon : 'text-muted-foreground', active && 'bg-background/80')}>
+      <span
+        className={cn(
+          'shrink-0 flex items-center justify-center w-7 h-7 rounded-md',
+          active ? cn(c.icon, 'bg-muted/50') : 'text-muted-foreground'
+        )}
+      >
         {icon}
       </span>
       <span className="truncate flex-1 text-left">{label}</span>
@@ -228,7 +265,13 @@ export default function WorkspaceDetailPage() {
   const [selectedChannel, setSelectedChannel] = useState<any>(null)
   const [editingMessage, setEditingMessage] = useState<any>(null)
   /** Подстановка из шаблона (страница «Шаблоны» → Запланировать) */
-  const [scheduleFromTemplate, setScheduleFromTemplate] = useState<{ body: string; time: string; date?: string } | null>(null)
+  const [scheduleFromTemplate, setScheduleFromTemplate] = useState<{
+    body: string
+    time: string
+    date?: string
+    userTemplateId?: string
+  } | null>(null)
+  const [channelPickerOpen, setChannelPickerOpen] = useState(false)
   /** Текст, скопированный из шаблона на этой странице — подставляется в форму при открытии диалога сообщения */
   const [templateCopiedBody, setTemplateCopiedBody] = useState<string | null>(null)
 
@@ -323,6 +366,7 @@ export default function WorkspaceDetailPage() {
     time: string
     title: string | null
     body: string
+    lastSentAt?: string | null
   }[]>([])
   const [addUsersProgress, setAddUsersProgress] = useState<{ current: number; total: number; added: number; errors: number; skipped: number } | null>(null)
   const [usersAddChannelId, setUsersAddChannelId] = useState<string>('')
@@ -367,18 +411,24 @@ export default function WorkspaceDetailPage() {
   }, [currentUserRole])
 
   const allowedTabsList = useMemo(() => {
-    if (currentUserRole === 'ADMIN') return ['channels', 'messages', 'templates', 'emoji-import', 'reset-account', 'user-access']
+    if (currentUserRole === 'ADMIN') return ['channels', 'messages', 'templates', 'emoji-import', 'accounts-status']
     if (currentUserRole === 'SUPPORT') {
-      if (!tabRestrictions) return ['channels', 'messages', 'templates', 'emoji-import', 'reset-account', 'user-access']
+      if (!tabRestrictions) return ['channels', 'messages', 'templates', 'emoji-import', 'accounts-status']
       const t = ['channels', 'messages']
       if (tabRestrictions.templates) t.push('templates')
       if (tabRestrictions.emojiImport) t.push('emoji-import')
-      t.push('reset-account', 'user-access')
+      t.push('accounts-status')
       return t
     }
     if (currentUserRole === 'ADM') {
-      if (!tabRestrictions) return ['channels', 'messages', 'templates', 'user-access']
-      return ['channels', 'messages', ...(tabRestrictions.templates ? ['templates'] : []), 'user-access']
+      if (!tabRestrictions) return ['channels', 'messages', 'templates', 'emoji-import', 'accounts-status']
+      return [
+        'channels',
+        'messages',
+        ...(tabRestrictions.templates ? ['templates'] : []),
+        ...(tabRestrictions.emojiImport ? ['emoji-import'] : []),
+        'accounts-status',
+      ]
     }
     return ['channels', 'messages']
   }, [currentUserRole, tabRestrictions])
@@ -439,14 +489,16 @@ export default function WorkspaceDetailPage() {
     
     // Загружаем активную вкладку из localStorage
     const savedTab = localStorage.getItem(`activeTab_${workspaceId}`)
+    const migratedTab =
+      savedTab === 'reset-account' || savedTab === 'user-access' ? 'accounts-status' : savedTab
     const allowedTabs =
       currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN'
-        ? ['channels', 'messages', 'templates', 'emoji-import']
+        ? ['channels', 'messages', 'templates', 'emoji-import', 'accounts-status']
         : currentUserRole === 'ADM'
-          ? ['channels', 'messages', 'templates']
+          ? ['channels', 'messages', 'templates', 'emoji-import', 'accounts-status']
           : ['channels', 'messages']
-    if (savedTab && allowedTabs.includes(savedTab)) {
-      setActiveTab(savedTab)
+    if (migratedTab && allowedTabs.includes(migratedTab)) {
+      setActiveTab(migratedTab)
     }
     // Статус последнего импорта эмодзи для этого пространства
     const savedImport = localStorage.getItem(`lastEmojiImport_${workspaceId}`)
@@ -478,10 +530,12 @@ export default function WorkspaceDetailPage() {
   // Синхронизация вкладки при смене роли или workspace (учитываем ограничения вкладок для SUP/ADM)
   useEffect(() => {
     const savedTab = localStorage.getItem(`activeTab_${workspaceId}`)
-    if (savedTab && allowedTabsList.includes(savedTab)) {
-      setActiveTab(savedTab)
+    const migrated =
+      savedTab === 'reset-account' || savedTab === 'user-access' ? 'accounts-status' : savedTab
+    if (migrated && allowedTabsList.includes(migrated)) {
+      setActiveTab(migrated)
     } else if (currentUserRole === 'VOL' || currentUserRole === 'USER') {
-      setActiveTab((prev) => (['emoji-import', 'templates', 'reset-account', 'user-access'].includes(prev) ? 'channels' : prev))
+      setActiveTab((prev) => (['emoji-import', 'templates', 'accounts-status'].includes(prev) ? 'channels' : prev))
     }
   }, [currentUserRole, workspaceId, allowedTabsList])
   
@@ -494,7 +548,9 @@ export default function WorkspaceDetailPage() {
 
   // URL hash → tab: #messages, #channels и т.д.
   useEffect(() => {
-    const hash = typeof window !== 'undefined' ? window.location.hash.slice(1) : ''
+    const raw = typeof window !== 'undefined' ? window.location.hash.slice(1) : ''
+    const hash =
+      raw === 'reset-account' || raw === 'user-access' ? 'accounts-status' : raw
     if (hash && allowedTabsList.includes(hash)) setActiveTab(hash)
   }, [currentUserRole, allowedTabsList])
   const handleTabChange = (value: string) => {
@@ -573,7 +629,7 @@ export default function WorkspaceDetailPage() {
   }, [workspaceId])
 
   useEffect(() => {
-    if (activeTab === 'emoji-import') loadAddedUsers()
+    if (activeTab === 'emoji-import' || activeTab === 'accounts-status') loadAddedUsers()
   }, [activeTab, loadAddedUsers])
 
   const loadAssignments = useCallback(async () => {
@@ -642,7 +698,15 @@ export default function WorkspaceDetailPage() {
     try {
       const raw = sessionStorage.getItem('schedule-from-template')
       if (!raw) return
-      const payload = JSON.parse(raw) as { workspaceId: string; channelId?: string; channelName?: string; body: string; time: string; date?: string }
+      const payload = JSON.parse(raw) as {
+        workspaceId: string
+        channelId?: string
+        channelName?: string
+        body: string
+        time: string
+        date?: string
+        userTemplateId?: string
+      }
       if (payload.workspaceId !== workspaceId) return
       sessionStorage.removeItem('schedule-from-template')
       const ch = payload.channelId
@@ -653,7 +717,12 @@ export default function WorkspaceDetailPage() {
         return
       }
       setSelectedChannel({ id: (ch as any)._id || (ch as any).id, name: (ch as any).name || (ch as any).displayName })
-      setScheduleFromTemplate({ body: payload.body || '', time: payload.time || '09:00', date: payload.date })
+      setScheduleFromTemplate({
+        body: payload.body || '',
+        time: payload.time || '09:00',
+        date: payload.date,
+        userTemplateId: payload.userTemplateId,
+      })
       setShowMessageDialog(true)
       setActiveTab('messages')
     } catch (_) {
@@ -810,6 +879,23 @@ export default function WorkspaceDetailPage() {
     setSelectedChannel(channel)
     setEditingMessage(null)
     setShowMessageDialog(true)
+  }
+
+  const openCreateScheduledMessage = () => {
+    if (!channels.length) {
+      toast.error('Нет каналов — перезагрузите список каналов или проверьте подключение')
+      return
+    }
+    if (channels.length === 1) {
+      handleChannelSelect((channels as any[])[0])
+      return
+    }
+    setChannelPickerOpen(true)
+  }
+
+  const pickChannelAndOpenDialog = (ch: any) => {
+    setChannelPickerOpen(false)
+    handleChannelSelect(ch)
   }
   
   const toggleFavoriteChannel = (channelId: string, e: React.MouseEvent) => {
@@ -1450,6 +1536,87 @@ export default function WorkspaceDetailPage() {
       .sort((a, b) => (a.name || a.email).localeCompare(b.name || b.email))
   }, [messages])
 
+  /** Статус шаблона в этом пространстве: пользовательский шаблон или общий (id из расписания) */
+  const templateSendInfoInWorkspace = useMemo(() => {
+    const byTemplate = new Map<string, { statuses: Set<string> }>()
+    const lastSentAt = new Map<string, string>()
+    /** Ближайшее время из отложенных (PENDING) сообщений по шаблону */
+    const pendingScheduledFor = new Map<string, string>()
+    for (const msg of messages as any[]) {
+      const tid = (msg.sourceUserTemplateId || msg.sourceOfficialTemplateId) as string | undefined
+      if (!tid) continue
+      if (!byTemplate.has(tid)) byTemplate.set(tid, { statuses: new Set() })
+      byTemplate.get(tid)!.statuses.add(msg.status)
+      if (msg.status === 'SENT' && msg.sentAt) {
+        const prev = lastSentAt.get(tid)
+        if (!prev || new Date(msg.sentAt) > new Date(prev)) lastSentAt.set(tid, msg.sentAt)
+      }
+      if (msg.status === 'PENDING' && msg.scheduledFor) {
+        const prev = pendingScheduledFor.get(tid)
+        const t = new Date(msg.scheduledFor).getTime()
+        if (!prev || t < new Date(prev).getTime()) pendingScheduledFor.set(tid, msg.scheduledFor)
+      }
+    }
+    const out = new Map<
+      string,
+      { state: 'SENT' | 'PENDING' | 'FAILED'; lastSentAt?: string | null; pendingScheduledFor?: string | null }
+    >()
+    for (const [tid, { statuses }] of byTemplate) {
+      if (statuses.has('SENT')) {
+        out.set(tid, { state: 'SENT', lastSentAt: lastSentAt.get(tid) ?? null })
+      } else if (statuses.has('PENDING')) {
+        out.set(tid, {
+          state: 'PENDING',
+          lastSentAt: null,
+          pendingScheduledFor: pendingScheduledFor.get(tid) ?? null,
+        })
+      } else if (statuses.has('FAILED')) {
+        out.set(tid, { state: 'FAILED', lastSentAt: null })
+      }
+    }
+    return out
+  }, [messages])
+
+  const renderTemplateWorkspaceStatusBadge = (templateId: string) => {
+    const w = templateSendInfoInWorkspace.get(templateId)
+    if (w?.state === 'SENT') {
+      return (
+        <Badge variant="secondary" className="shrink-0 text-xs font-normal bg-emerald-500/15 text-emerald-800 dark:text-emerald-200 border-emerald-500/30">
+          Отправлено
+          {w.lastSentAt ? (
+            <span className="ml-1 opacity-80 tabular-nums">
+              {new Date(w.lastSentAt).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+            </span>
+          ) : null}
+        </Badge>
+      )
+    }
+    if (w?.state === 'PENDING') {
+      return (
+        <Badge variant="secondary" className="shrink-0 text-xs font-normal bg-sky-500/15 text-sky-900 dark:text-sky-100 border-sky-500/30">
+          Сообщение запланировано
+          {w.pendingScheduledFor ? (
+            <span className="ml-1 opacity-80 tabular-nums">
+              {new Date(w.pendingScheduledFor).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+            </span>
+          ) : null}
+        </Badge>
+      )
+    }
+    if (w?.state === 'FAILED') {
+      return (
+        <Badge variant="destructive" className="shrink-0 text-xs font-normal">
+          Ошибка отправки
+        </Badge>
+      )
+    }
+    return (
+      <Badge variant="outline" className="shrink-0 text-xs font-normal text-muted-foreground">
+        Не отправлялось в этом пространстве
+      </Badge>
+    )
+  }
+
   // Список сообщений выбранного канала: с внешним статусом, хронологически по scheduledFor
   const filteredMessagesByChannel = useMemo(() => {
     if (!selectedMessageChannelId) return []
@@ -1474,10 +1641,10 @@ export default function WorkspaceDetailPage() {
     return (
       <Card
         key={channel.id}
-        className="group relative overflow-hidden rounded-xl border border-border/70 bg-card shadow-sm hover:shadow-md hover:border-border/80 transition-all duration-200 cursor-pointer"
+        className="group relative overflow-hidden rounded-xl border border-border/40 bg-card shadow-sm transition-all duration-200 cursor-pointer hover:-translate-y-0.5 hover:shadow-md hover:border-border/60"
         onClick={() => handleChannelSelect(channel)}
       >
-        <div className={cn("absolute left-0 top-0 bottom-0 w-1 shrink-0", tagColors.bar.replace('border-', 'bg-'))} />
+        <div className={cn("absolute left-0 top-0 bottom-0 w-[3px] shrink-0", tagColors.bar.replace('border-', 'bg-'))} />
         <CardContent className="p-4 pl-5">
           <div className="flex items-start justify-between gap-2 mb-3">
             <div className="min-w-0 flex-1">
@@ -1533,10 +1700,10 @@ export default function WorkspaceDetailPage() {
     return (
       <Card
         key={channel.id}
-        className="group relative overflow-hidden rounded-xl border border-border/70 bg-card shadow-sm hover:shadow-md hover:border-border/80 transition-all duration-200 cursor-pointer"
+        className="group relative overflow-hidden rounded-xl border border-border/40 bg-card shadow-sm transition-all duration-200 cursor-pointer hover:-translate-y-0.5 hover:shadow-md hover:border-border/60"
         onClick={() => handleChannelSelect(channel)}
       >
-        <div className={cn("absolute left-0 top-0 bottom-0 w-1 shrink-0", tagColors.bar.replace('border-', 'bg-'))} />
+        <div className={cn("absolute left-0 top-0 bottom-0 w-[3px] shrink-0", tagColors.bar.replace('border-', 'bg-'))} />
         <CardContent className="py-2.5 px-4 pl-5 flex flex-row items-center gap-4 flex-wrap">
           <Hash className={cn("w-4 h-4 shrink-0 opacity-70", tagColors.text)} />
           <span className={cn("font-semibold text-sm truncate min-w-0 max-w-[220px]", tagColors.text)}>
@@ -1576,7 +1743,7 @@ export default function WorkspaceDetailPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-background">
+      <div className="min-h-[100dvh] bg-background">
         <div className="container max-w-7xl mx-auto px-3 sm:px-4 lg:px-6 py-4 sm:py-6 space-y-4 sm:space-y-6">
           <div className="space-y-6">
             <Skeleton className="h-9 w-40" />
@@ -1646,7 +1813,7 @@ export default function WorkspaceDetailPage() {
   if (!workspace && !loadError) return null
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="relative min-h-[100dvh] pb-10 bg-background">
       <div className="container max-w-7xl mx-auto px-3 sm:px-4 lg:px-6 py-4 sm:py-6 space-y-4 sm:space-y-6">
         <Breadcrumbs
           items={[
@@ -1734,13 +1901,13 @@ export default function WorkspaceDetailPage() {
         )}
 
         <div className="grid gap-4 lg:grid-cols-1">
-          {/* Блок: Информация о пространстве + Действия — в стиле result-ai.tech */}
-          <Card className="rounded-2xl border border-border/80 bg-card shadow-[0_1px_3px_rgba(0,0,0,0.06)] overflow-hidden">
-            <div className="px-4 py-3 bg-gradient-to-b from-muted/20 to-transparent border-b border-border/60">
-              <h2 className="text-base font-semibold text-foreground tracking-tight">Пространство и действия</h2>
-              <p className="text-sm text-muted-foreground mt-0.5">Подключение к Rocket.Chat и быстрые действия</p>
+          <Card className="rounded-2xl border border-border/50 bg-card/90 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_-4px_rgba(0,0,0,0.06)] dark:shadow-[0_0_0_1px_rgba(255,255,255,0.06),0_8px_24px_-4px_rgba(0,0,0,0.35)] overflow-hidden backdrop-blur-sm">
+            <div className="px-5 py-4 border-b border-border/50 bg-gradient-to-b from-muted/40 to-muted/10">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">Обзор</p>
+              <h2 className="text-lg font-semibold text-foreground tracking-tight mt-1">Пространство и действия</h2>
+              <p className="text-sm text-muted-foreground mt-1">Подключение к Rocket.Chat и быстрые действия</p>
             </div>
-            <CardContent className="p-4">
+            <CardContent className="p-5 sm:p-6">
               <div className="flex flex-col sm:flex-row sm:items-start gap-4">
                 <div
                   className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl flex items-center justify-center shadow-lg ring-2 ring-background shrink-0"
@@ -1750,7 +1917,7 @@ export default function WorkspaceDetailPage() {
                 </div>
                 <div className="space-y-3 min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
-                    <h1 className="text-xl sm:text-2xl font-bold tracking-tight truncate">{workspace.workspaceName}</h1>
+                    <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight truncate">{workspace.workspaceName}</h1>
                     {currentUserRole === 'VOL' && userVolunteerIntensive && workspace.workspaceUrl?.toLowerCase().includes(userVolunteerIntensive.toLowerCase()) && (
                       <Badge variant="secondary" className="bg-primary/10 text-primary shrink-0 rounded-full text-xs">Ваш интенсив</Badge>
                     )}
@@ -1812,7 +1979,7 @@ export default function WorkspaceDetailPage() {
                     </p>
                   )}
                 </div>
-                <div className="flex flex-col gap-4 shrink-0 border-t sm:border-t-0 sm:border-l border-border/70 pt-4 sm:pt-0 sm:pl-6">
+                <div className="flex flex-col gap-4 shrink-0 border-t sm:border-t-0 sm:border-l border-border/50 pt-4 sm:pt-0 sm:pl-6">
                   <div className="flex flex-wrap items-center gap-2">
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -2089,25 +2256,50 @@ export default function WorkspaceDetailPage() {
           )}
 
           {(currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && workspaceActionLog && (workspaceActionLog.lastEmojiImport || workspaceActionLog.lastUsersAdd) && (
-            <Card className="rounded-2xl border border-border/80 bg-card shadow-[0_1px_3px_rgba(0,0,0,0.06)] overflow-hidden">
-              <div className="px-4 py-3 bg-gradient-to-b from-muted/20 to-transparent border-b border-border/60">
-                <h2 className="text-base font-semibold text-foreground tracking-tight">Последние действия по пространству</h2>
-                <p className="text-sm text-muted-foreground mt-0.5">Импорт эмодзи и добавление пользователей</p>
+            <Card className="rounded-2xl border border-border/50 bg-card shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_-4px_rgba(0,0,0,0.06)] dark:shadow-[0_0_0_1px_rgba(255,255,255,0.06)] overflow-hidden">
+              <div className="px-5 py-4 border-b border-border/50 bg-gradient-to-b from-muted/40 to-muted/10">
+                <div className="flex items-start gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                    <Sparkles className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-semibold text-foreground tracking-tight">Последние действия по пространству</h2>
+                    <p className="text-sm text-muted-foreground mt-0.5">Импорт эмодзи и добавление пользователей</p>
+                  </div>
+                </div>
               </div>
-              <CardContent className="p-4">
-                <div className="flex flex-col sm:flex-row sm:flex-wrap gap-3 text-sm">
+              <CardContent className="p-4 sm:p-5">
+                <div className="grid gap-3 sm:grid-cols-2">
                   {workspaceActionLog.lastEmojiImport && (
-                    <div className="flex items-center gap-2 rounded-xl border border-border/70 bg-muted/20 px-4 py-3 w-full sm:w-auto">
-                      <span className="text-muted-foreground">Импорт эмодзи:</span>
-                      <strong className="text-foreground">{workspaceActionLog.lastEmojiImport.userName || workspaceActionLog.lastEmojiImport.userEmail}</strong>
-                      <span className="text-muted-foreground text-xs ml-auto">{new Date(workspaceActionLog.lastEmojiImport.at).toLocaleString('ru-RU')}</span>
+                    <div className="flex gap-3 rounded-xl border border-border/50 bg-background/80 p-4 shadow-sm ring-1 ring-border/30">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-violet-500/10 text-violet-600 dark:text-violet-400">
+                        <Smile className="h-5 w-5" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Импорт эмодзи</p>
+                        <p className="font-semibold text-foreground truncate mt-0.5">
+                          {workspaceActionLog.lastEmojiImport.userName || workspaceActionLog.lastEmojiImport.userEmail}
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-1 tabular-nums">
+                          {new Date(workspaceActionLog.lastEmojiImport.at).toLocaleString('ru-RU')}
+                        </p>
+                      </div>
                     </div>
                   )}
                   {workspaceActionLog.lastUsersAdd && (
-                    <div className="flex items-center gap-2 rounded-xl border border-border/70 bg-muted/20 px-4 py-3 w-full sm:w-auto">
-                      <span className="text-muted-foreground">Добавление пользователей:</span>
-                      <strong className="text-foreground">{workspaceActionLog.lastUsersAdd.userName || workspaceActionLog.lastUsersAdd.userEmail}</strong>
-                      <span className="text-muted-foreground text-xs ml-auto">{new Date(workspaceActionLog.lastUsersAdd.at).toLocaleString('ru-RU')}</span>
+                    <div className="flex gap-3 rounded-xl border border-border/50 bg-background/80 p-4 shadow-sm ring-1 ring-border/30">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-sky-500/10 text-sky-600 dark:text-sky-400">
+                        <Users className="h-5 w-5" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Добавление пользователей</p>
+                        <p className="font-semibold text-foreground truncate mt-0.5">
+                          {workspaceActionLog.lastUsersAdd.userName || workspaceActionLog.lastUsersAdd.userEmail}
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-1 tabular-nums">
+                          {new Date(workspaceActionLog.lastUsersAdd.at).toLocaleString('ru-RU')}
+                        </p>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -2117,18 +2309,23 @@ export default function WorkspaceDetailPage() {
 
           {/* Назначенные администраторы: в многопользовательском пространстве только SUP/ADMIN; в индивидуальном — все, кто видит пространство */}
           {canSeeAssignments && (currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN' || workspaceAssignments.length === 0) && (
-            <Card className="rounded-2xl border border-border/80 bg-card shadow-[0_1px_3px_rgba(0,0,0,0.06)] overflow-hidden">
-              <div className="px-4 py-3 bg-gradient-to-b from-muted/20 to-transparent border-b border-border/60 flex items-center justify-between flex-wrap gap-3">
+            <Card className="rounded-2xl border border-border/50 bg-card shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_-4px_rgba(0,0,0,0.06)] dark:shadow-[0_0_0_1px_rgba(255,255,255,0.06)] overflow-hidden">
+              <div className="px-5 py-4 border-b border-border/50 bg-gradient-to-b from-muted/40 to-muted/10 flex items-center justify-between flex-wrap gap-3">
                 <button
                   type="button"
-                  className="flex items-center gap-2 text-base font-semibold text-foreground tracking-tight hover:opacity-80 transition-opacity"
+                  className="flex items-center gap-2.5 text-base font-semibold text-foreground tracking-tight hover:opacity-80 transition-opacity text-left"
                   onClick={() => setAssignmentsCollapsed((c) => !c)}
                 >
-                  {assignmentsCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                  Назначенные администраторы
-                  {workspaceAssignments.length > 0 && (
-                    <span className="text-muted-foreground font-normal text-sm">({workspaceAssignments.length})</span>
-                  )}
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                    <Shield className="h-4 w-4" />
+                  </div>
+                  <span className="flex items-center gap-2">
+                    {assignmentsCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+                    Назначенные администраторы
+                    {workspaceAssignments.length > 0 && (
+                      <span className="text-muted-foreground font-normal text-sm">({workspaceAssignments.length})</span>
+                    )}
+                  </span>
                 </button>
                 {(currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && (
                   <Tooltip>
@@ -2147,20 +2344,33 @@ export default function WorkspaceDetailPage() {
                 )}
               </div>
               {!assignmentsCollapsed && (
-                <CardContent className="p-4">
+                <CardContent className="p-4 sm:p-5">
                   {(currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && (
-                    <p className="text-sm text-muted-foreground mb-4 rounded-xl bg-muted/20 border border-border/60 px-4 py-3">
-                      {currentUserRole === 'ADMIN'
-                        ? 'Назначьте ADM, SUP или VOL на это пространство — они увидят его в списке с пометкой «Назначено» и смогут подключиться своими учётными данными Rocket.Chat.'
-                        : 'Назначьте ADM или VOL на это пространство — они увидят его в списке с пометкой «Назначено».'}
-                    </p>
+                    <div className="flex gap-3 rounded-xl border border-border/50 bg-muted/30 px-4 py-3 mb-4 ring-1 ring-border/30">
+                      <Info className="h-5 w-5 shrink-0 text-muted-foreground mt-0.5" />
+                      <p className="text-sm text-muted-foreground leading-relaxed">
+                        {currentUserRole === 'ADMIN'
+                          ? 'Назначьте ADM, SUP или VOL на это пространство — они увидят его в списке с пометкой «Назначено» и смогут подключиться своими учётными данными Rocket.Chat.'
+                          : 'Назначьте ADM или VOL на это пространство — они увидят его в списке с пометкой «Назначено».'}
+                      </p>
+                    </div>
                   )}
                   {workspaceAssignments.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">Никого не назначено.</p>
+                    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border/60 bg-muted/20 py-12 px-4 text-center">
+                      <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-background shadow-sm ring-1 ring-border/50 mb-3">
+                        <UserPlus className="h-7 w-7 text-muted-foreground" />
+                      </div>
+                      <p className="text-sm font-medium text-foreground">Никого не назначено</p>
+                      <p className="text-xs text-muted-foreground mt-1.5 max-w-sm">
+                        {(currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN')
+                          ? 'Нажмите «Назначить», чтобы добавить администратора — он увидит пространство в списке с меткой «Назначено».'
+                          : 'Назначения появятся здесь, когда их добавит поддержка или администратор.'}
+                      </p>
+                    </div>
                   ) : (
                     <ul className="space-y-3">
                       {workspaceAssignments.map((a) => (
-                        <li key={a.id} className="flex items-center justify-between rounded-xl border border-border/70 bg-muted/10 px-4 py-3 hover:bg-muted/20 transition-colors">
+                        <li key={a.id} className="flex items-center justify-between rounded-xl border border-border/50 bg-background/80 px-4 py-3 shadow-sm ring-1 ring-border/30 hover:bg-muted/30 transition-colors">
                           <div>
                             <span className="font-medium">{a.user.name || a.user.email}</span>
                             <span className="text-muted-foreground text-sm ml-2">({a.user.role})</span>
@@ -2214,16 +2424,23 @@ export default function WorkspaceDetailPage() {
 
           {/* Участники пространства: владелец + назначенные — имя, логин, роль (для всех, кто видит пространство) */}
           {canSeeAssignments && (workspaceOwner || workspaceAssignments.length > 0) && (
-            <Card className="rounded-2xl border border-border/80 bg-card shadow-[0_1px_3px_rgba(0,0,0,0.06)] overflow-hidden">
-              <div className="px-4 py-3 bg-gradient-to-b from-muted/20 to-transparent border-b border-border/60">
-                <h2 className="text-base font-semibold text-foreground tracking-tight">Участники пространства</h2>
-                <p className="text-sm text-muted-foreground mt-0.5">С кем работаете — владелец и назначенные пользователи</p>
+            <Card className="rounded-2xl border border-border/50 bg-card shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_-4px_rgba(0,0,0,0.06)] dark:shadow-[0_0_0_1px_rgba(255,255,255,0.06)] overflow-hidden">
+              <div className="px-5 py-4 border-b border-border/50 bg-gradient-to-b from-muted/40 to-muted/10">
+                <div className="flex items-start gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-teal-500/10 text-teal-600 dark:text-teal-400">
+                    <Users className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-semibold text-foreground tracking-tight">Участники пространства</h2>
+                    <p className="text-sm text-muted-foreground mt-0.5">С кем работаете — владелец и назначенные пользователи</p>
+                  </div>
+                </div>
               </div>
               <CardContent className="p-0">
-                <div className="overflow-x-auto rounded-b-2xl">
+                <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
-                      <tr className="border-b border-border/70 bg-muted/20">
+                      <tr className="border-b border-border/50 bg-muted/35">
                         <th className="text-left font-medium py-3.5 px-5 text-muted-foreground">Имя</th>
                         <th className="text-left font-medium py-3.5 px-5 text-muted-foreground">Логин</th>
                         <th className="text-left font-medium py-3.5 px-5 text-muted-foreground">Роль</th>
@@ -2345,66 +2562,71 @@ export default function WorkspaceDetailPage() {
             </DialogContent>
           </Dialog>
 
-          {/* Сводная панель — ожидает, отправлено, ошибки */}
-          <Card className="border-2 border-border/80 bg-card shadow-md overflow-hidden">
-            <div className="px-4 py-3 border-b-2 border-border/70 bg-muted/20 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-foreground">Сводка сообщений</h2>
-              <Link href={`/dashboard/calendar?workspaceId=${workspaceId}`} className="text-xs text-primary hover:underline">
+          <Card className="rounded-2xl border border-border/50 bg-card/90 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_-4px_rgba(0,0,0,0.06)] dark:shadow-[0_0_0_1px_rgba(255,255,255,0.06),0_8px_24px_-4px_rgba(0,0,0,0.35)] overflow-hidden backdrop-blur-sm">
+            <div className="px-5 py-3.5 border-b border-border/50 bg-gradient-to-b from-muted/40 to-muted/10 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">Аналитика</p>
+                <h2 className="text-sm font-semibold text-foreground mt-0.5">Сводка сообщений</h2>
+              </div>
+              <Link
+                href={`/dashboard/calendar?workspaceId=${workspaceId}`}
+                className="text-xs font-medium text-primary hover:text-primary/80 transition-colors shrink-0"
+              >
                 Календарь →
               </Link>
             </div>
-            <CardContent className="p-3 sm:p-4">
-              <div className="grid grid-cols-4 gap-2 sm:gap-3">
+            <CardContent className="p-4 sm:p-5">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3">
                 <button
                   type="button"
-                  className="flex items-center gap-2.5 rounded-xl border-2 border-slate-300/50 bg-slate-50 dark:bg-slate-900/50 p-3.5 text-left transition-all hover:bg-slate-100 dark:hover:bg-slate-800/50 hover:border-slate-400/60 focus:outline-none focus:ring-2 focus:ring-slate-400/30"
+                  className="group flex items-center gap-2.5 rounded-xl border border-border/50 bg-muted/20 p-3.5 text-left transition-colors hover:bg-muted/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-l-[3px] border-l-zinc-400/80 dark:border-l-zinc-500"
                   onClick={() => { setActiveTab('messages'); setMessageFilterFromStats('all'); if (typeof window !== 'undefined') window.history.replaceState(null, '', `${window.location.pathname}#messages`) }}
                 >
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-200/80 dark:bg-slate-700/50">
-                    <MessageSquare className="w-4 h-4 text-slate-600 dark:text-slate-400" />
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-background/80 ring-1 ring-border/50">
+                    <MessageSquare className="w-4 h-4 text-muted-foreground" />
                   </div>
                   <div className="min-w-0">
-                    <p className="text-xl font-bold leading-tight">{messages.length}</p>
+                    <p className="text-xl font-semibold tabular-nums leading-tight tracking-tight">{messages.length}</p>
                     <p className="text-xs text-muted-foreground font-medium">Всего</p>
                   </div>
                 </button>
                 <button
                   type="button"
-                  className="flex items-center gap-2.5 rounded-xl border-2 border-amber-400/60 bg-amber-50 dark:bg-amber-950/30 p-3.5 text-left transition-all hover:bg-amber-100 dark:hover:bg-amber-900/30 hover:border-amber-500/70 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+                  className="group flex items-center gap-2.5 rounded-xl border border-amber-500/25 bg-amber-500/[0.06] dark:bg-amber-500/10 p-3.5 text-left transition-colors hover:bg-amber-500/[0.1] focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/40 focus-visible:ring-offset-2 border-l-[3px] border-l-amber-500"
                   onClick={() => { setActiveTab('messages'); setMessageFilterFromStats('PENDING'); if (typeof window !== 'undefined') window.history.replaceState(null, '', `${window.location.pathname}#messages`) }}
                 >
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-200/80 dark:bg-amber-800/50">
-                    <Clock className="w-4 h-4 text-amber-700 dark:text-amber-300" />
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-background/80 ring-1 ring-amber-500/20">
+                    <Clock className="w-4 h-4 text-amber-600 dark:text-amber-400" />
                   </div>
                   <div className="min-w-0">
-                    <p className="text-xl font-bold leading-tight text-amber-800 dark:text-amber-200">{stats.pending}</p>
-                    <p className="text-xs text-amber-700/80 dark:text-amber-300/80 font-medium">Ожидает</p>
+                    <p className="text-xl font-semibold tabular-nums leading-tight tracking-tight text-amber-900 dark:text-amber-100">{stats.pending}</p>
+                    <p className="text-xs text-amber-800/90 dark:text-amber-200/90 font-medium">Ожидает</p>
                   </div>
                 </button>
                 <button
                   type="button"
-                  className="flex items-center gap-2.5 rounded-xl border-2 border-emerald-400/60 bg-emerald-50 dark:bg-emerald-950/30 p-3.5 text-left transition-all hover:bg-emerald-100 dark:hover:bg-emerald-900/30 hover:border-emerald-500/70 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+                  className="group flex items-center gap-2.5 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.06] dark:bg-emerald-500/10 p-3.5 text-left transition-colors hover:bg-emerald-500/[0.1] focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40 focus-visible:ring-offset-2 border-l-[3px] border-l-emerald-500"
                   onClick={() => { setActiveTab('messages'); setMessageFilterFromStats('SENT'); if (typeof window !== 'undefined') window.history.replaceState(null, '', `${window.location.pathname}#messages`) }}
                 >
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-emerald-200/80 dark:bg-emerald-800/50">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-700 dark:text-emerald-300" />
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-background/80 ring-1 ring-emerald-500/20">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                   </div>
                   <div className="min-w-0">
-                    <p className="text-xl font-bold leading-tight text-emerald-800 dark:text-emerald-200">{stats.sent}</p>
-                    <p className="text-xs text-emerald-700/80 dark:text-emerald-300/80 font-medium">Отправлено</p>
+                    <p className="text-xl font-semibold tabular-nums leading-tight tracking-tight text-emerald-900 dark:text-emerald-100">{stats.sent}</p>
+                    <p className="text-xs text-emerald-800/90 dark:text-emerald-200/90 font-medium">Отправлено</p>
                   </div>
                 </button>
                 <button
                   type="button"
-                  className="flex items-center gap-2.5 rounded-xl border-2 border-rose-400/60 bg-rose-50 dark:bg-rose-950/30 p-3.5 text-left transition-all hover:bg-rose-100 dark:hover:bg-rose-900/30 hover:border-rose-500/70 focus:outline-none focus:ring-2 focus:ring-rose-500/30"
+                  className="group flex items-center gap-2.5 rounded-xl border border-rose-500/25 bg-rose-500/[0.06] dark:bg-rose-500/10 p-3.5 text-left transition-colors hover:bg-rose-500/[0.1] focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-500/40 focus-visible:ring-offset-2 border-l-[3px] border-l-rose-500"
                   onClick={() => { setActiveTab('messages'); setMessageFilterFromStats('FAILED'); if (typeof window !== 'undefined') window.history.replaceState(null, '', `${window.location.pathname}#messages`) }}
                 >
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-rose-200/80 dark:bg-rose-800/50">
-                    <XCircle className="w-4 h-4 text-rose-700 dark:text-rose-300" />
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-background/80 ring-1 ring-rose-500/20">
+                    <XCircle className="w-4 h-4 text-rose-600 dark:text-rose-400" />
                   </div>
                   <div className="min-w-0">
-                    <p className="text-xl font-bold leading-tight text-rose-800 dark:text-rose-200">{stats.failed}</p>
-                    <p className="text-xs text-rose-700/80 dark:text-rose-300/80 font-medium">Ошибки</p>
+                    <p className="text-xl font-semibold tabular-nums leading-tight tracking-tight text-rose-900 dark:text-rose-100">{stats.failed}</p>
+                    <p className="text-xs text-rose-800/90 dark:text-rose-200/90 font-medium">Ошибки</p>
                   </div>
                 </button>
               </div>
@@ -2413,16 +2635,16 @@ export default function WorkspaceDetailPage() {
         </div>
 
         {/* Tabs block */}
-        <Card className="rounded-2xl border border-border/80 bg-card shadow-[0_1px_3px_rgba(0,0,0,0.06)] overflow-hidden">
-          <div className="px-4 py-3 bg-gradient-to-b from-muted/20 to-transparent border-b border-border/60">
-            <h2 className="text-base font-semibold text-foreground tracking-tight">Каналы, сообщения и настройки</h2>
-            <p className="text-sm text-muted-foreground mt-0.5">Управление каналами, планирование сообщений и настройки пространства</p>
+        <Card className="rounded-2xl border border-border/50 bg-card/90 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_-4px_rgba(0,0,0,0.06)] dark:shadow-[0_0_0_1px_rgba(255,255,255,0.06),0_8px_24px_-4px_rgba(0,0,0,0.35)] overflow-hidden backdrop-blur-sm">
+          <div className="px-5 py-4 border-b border-border/50 bg-gradient-to-b from-muted/40 to-muted/10">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">Рабочая область</p>
+            <h2 className="text-lg font-semibold text-foreground tracking-tight mt-1">Каналы, сообщения и настройки</h2>
+            <p className="text-sm text-muted-foreground mt-1">Управление каналами, планирование сообщений и настройки пространства</p>
           </div>
-          <div className="p-4">
-        <div className="flex flex-col lg:flex-row gap-4">
-          {/* Сайдбар навигации с цветами и обводками */}
+          <div className="p-4 sm:p-5">
+        <div className="flex flex-col lg:flex-row gap-5">
           <aside className="lg:w-52 shrink-0">
-            <nav className="rounded-xl bg-muted/20 border-2 border-border/70 p-2 space-y-1.5 lg:sticky lg:top-24">
+            <nav className="rounded-xl bg-muted/30 ring-1 ring-border/50 p-2 space-y-1 lg:sticky lg:top-24">
               <TabNavButton
                 active={activeTab === 'channels'}
                 onClick={() => handleTabChange('channels')}
@@ -2455,7 +2677,8 @@ export default function WorkspaceDetailPage() {
                   color="amber"
                 />
               )}
-              {(currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && (currentUserRole === 'ADMIN' || tabRestrictions === null || tabRestrictions.emojiImport) && (
+              {(currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN' || currentUserRole === 'ADM') &&
+                (currentUserRole === 'ADMIN' || tabRestrictions === null || tabRestrictions.emojiImport) && (
                 <TabNavButton
                   active={activeTab === 'emoji-import'}
                   onClick={() => handleTabChange('emoji-import')}
@@ -2464,22 +2687,13 @@ export default function WorkspaceDetailPage() {
                   color="violet"
                 />
               )}
-              {(currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && (
-                <TabNavButton
-                  active={activeTab === 'reset-account'}
-                  onClick={() => handleTabChange('reset-account')}
-                  icon={<RotateCcw className="w-4 h-4" />}
-                  label="Сброс учётки"
-                  color="orange"
-                />
-              )}
               {(currentUserRole === 'ADM' || currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && (
                 <TabNavButton
-                  active={activeTab === 'user-access'}
-                  onClick={() => handleTabChange('user-access')}
-                  icon={<LogIn className="w-4 h-4" />}
-                  label="Состояние входа"
-                  color="cyan"
+                  active={activeTab === 'accounts-status'}
+                  onClick={() => handleTabChange('accounts-status')}
+                  icon={<ClipboardList className="w-4 h-4" />}
+                  label="Сбор и состояние"
+                  color="indigo"
                 />
               )}
             </nav>
@@ -2488,92 +2702,104 @@ export default function WorkspaceDetailPage() {
           <div className="flex-1 min-w-0">
         <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-6">
           {/* Channels Tab */}
-          <TabsContent value="channels" className="space-y-5 mt-0">
-            <div className="flex flex-col gap-3">
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-                <div className="relative flex-1">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                  <Input
-                    placeholder="Поиск каналов..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="pl-10 h-10 bg-background border-muted/70"
-                  />
-                </div>
-                <Button 
-                  variant="outline" 
-                  onClick={loadData}
-                  className="h-10 border-muted/70 hover:bg-muted/50"
-                >
-                  <RefreshCw className="w-4 h-4 mr-2" />
-                  Перезагрузить
-                </Button>
-              </div>
-              
-              <div className="flex flex-wrap items-center gap-3">
-                {/* Переключатель Все / Мои добавленные */}
-                {favoriteChannelIds.size > 0 && (
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm text-muted-foreground">Отображение:</span>
-                    <div className="inline-flex rounded-lg border border-muted/70 bg-background p-1">
-                      <button
-                        onClick={() => setChannelView('all')}
-                        className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
-                          channelView === 'all'
-                            ? 'bg-primary text-primary-foreground'
-                            : 'text-muted-foreground hover:text-foreground'
-                        }`}
-                      >
-                        Все
-                      </button>
-                      <button
-                        onClick={() => setChannelView('favorites')}
-                        className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
-                          channelView === 'favorites'
-                            ? 'bg-primary text-primary-foreground'
-                            : 'text-muted-foreground hover:text-foreground'
-                        }`}
-                      >
-                        Мои добавленные
-                      </button>
-                    </div>
+          <TabsContent value="channels" className="space-y-6 mt-0">
+            <div className="rounded-2xl border border-border/40 bg-card p-1 shadow-[0_1px_0_0_hsl(var(--border))]">
+              <div className="p-3 sm:p-4 space-y-4">
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+                    <Input
+                      placeholder="Поиск каналов..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="pl-10 h-11 rounded-xl border-border/50 bg-background focus-visible:ring-2 focus-visible:ring-ring/30"
+                    />
                   </div>
-                )}
-                <Select value={channelSort} onValueChange={(v: 'name' | 'messages' | 'public_first') => setChannelSort(v)}>
-                  <SelectTrigger className="w-[200px] h-9 border-muted/70">
-                    <SelectValue placeholder="Сортировка" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="name">По имени</SelectItem>
-                    <SelectItem value="messages">По кол-ву сообщений (RC)</SelectItem>
-                    <SelectItem value="public_first">Публичные сначала</SelectItem>
-                  </SelectContent>
-                </Select>
-                <div className="inline-flex rounded-lg border border-muted/70 bg-background p-1">
-                  <button
-                    onClick={() => setChannelViewMode('grid')}
-                    className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
-                      channelViewMode === 'grid' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'
-                    }`}
-                    title="Сетка"
+                  <Button
+                    variant="outline"
+                    onClick={loadData}
+                    className="h-11 shrink-0 gap-2 rounded-xl border-border/50 bg-background hover:bg-muted/60"
                   >
-                    Сетка
-                  </button>
-                  <button
-                    onClick={() => setChannelViewMode('list')}
-                    className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
-                      channelViewMode === 'list' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'
-                    }`}
-                    title="Список"
-                  >
-                    Список
-                  </button>
+                    <RefreshCw className="w-4 h-4" />
+                    Перезагрузить
+                  </Button>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3 pt-1 border-t border-border/40">
+                  {favoriteChannelIds.size > 0 && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Обзор</span>
+                      <div className="inline-flex rounded-xl bg-muted/60 p-1">
+                        <button
+                          type="button"
+                          onClick={() => setChannelView('all')}
+                          className={`px-3 py-1.5 text-sm font-medium rounded-lg transition-all inline-flex items-center gap-1.5 ${
+                            channelView === 'all'
+                              ? 'bg-background text-foreground shadow-sm'
+                              : 'text-muted-foreground hover:text-foreground'
+                          }`}
+                        >
+                          Все
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setChannelView('favorites')}
+                          className={`px-3 py-1.5 text-sm font-medium rounded-lg transition-all inline-flex items-center gap-1.5 ${
+                            channelView === 'favorites'
+                              ? 'bg-background text-foreground shadow-sm'
+                              : 'text-muted-foreground hover:text-foreground'
+                          }`}
+                        >
+                          <Star className="w-3.5 h-3.5 opacity-70" />
+                          Избранное
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  <Select value={channelSort} onValueChange={(v: 'name' | 'messages' | 'public_first') => setChannelSort(v)}>
+                    <SelectTrigger className="w-[min(100%,220px)] h-9 rounded-lg border-border/50 bg-background">
+                      <SelectValue placeholder="Сортировка" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="name">По имени</SelectItem>
+                      <SelectItem value="messages">По кол-ву сообщений (RC)</SelectItem>
+                      <SelectItem value="public_first">Публичные сначала</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <div className="inline-flex rounded-xl bg-muted/60 p-1">
+                    <button
+                      type="button"
+                      onClick={() => setChannelViewMode('grid')}
+                      className={`px-3 py-1.5 text-sm font-medium rounded-lg transition-all inline-flex items-center gap-1.5 ${
+                        channelViewMode === 'grid'
+                          ? 'bg-background text-foreground shadow-sm'
+                          : 'text-muted-foreground hover:text-foreground'
+                      }`}
+                      title="Сетка"
+                    >
+                      <LayoutGrid className="w-3.5 h-3.5" />
+                      Сетка
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setChannelViewMode('list')}
+                      className={`px-3 py-1.5 text-sm font-medium rounded-lg transition-all inline-flex items-center gap-1.5 ${
+                        channelViewMode === 'list'
+                          ? 'bg-background text-foreground shadow-sm'
+                          : 'text-muted-foreground hover:text-foreground'
+                      }`}
+                      title="Список"
+                    >
+                      <List className="w-3.5 h-3.5" />
+                      Список
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
 
             {filteredChannels.length === 0 ? (
-              <Card className="border-dashed border-muted/70">
+              <Card className="border-dashed border-border/50 bg-card/50">
                 <CardContent className="py-20 text-center">
                   <div className="w-16 h-16 bg-muted/50 rounded-2xl flex items-center justify-center mx-auto mb-4">
                     <Hash className="w-8 h-8 text-muted-foreground" />
@@ -2594,7 +2820,12 @@ export default function WorkspaceDetailPage() {
                   <div className="space-y-6">
                     {channelsPublic.length > 0 && (
                       <div>
-                        <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">Публичные</h3>
+                        <div className="flex items-center gap-2 mb-4">
+                          <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Публичные</h3>
+                          <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium tabular-nums text-muted-foreground">
+                            {channelsPublic.length}
+                          </span>
+                        </div>
                         {channelViewMode === 'grid' ? (
                           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                             {channelsPublic.map((channel: any) => renderChannelCard(channel))}
@@ -2614,7 +2845,12 @@ export default function WorkspaceDetailPage() {
                     )}
                     {channelsPrivate.length > 0 && (
                       <div>
-                        <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">Приватные</h3>
+                        <div className="flex items-center gap-2 mb-4">
+                          <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Приватные</h3>
+                          <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium tabular-nums text-muted-foreground">
+                            {channelsPrivate.length}
+                          </span>
+                        </div>
                         {channelViewMode === 'grid' ? (
                           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                             {channelsPrivate.map((channel: any) => renderChannelCard(channel))}
@@ -2655,21 +2891,50 @@ export default function WorkspaceDetailPage() {
           </TabsContent>
 
           {/* Messages Tab */}
-          <TabsContent value="messages" className="space-y-5 mt-0">
+          <TabsContent value="messages" className="space-y-6 mt-0">
+            <div className="rounded-2xl border border-border/40 bg-card pl-0 shadow-[0_1px_0_0_hsl(var(--border))] flex flex-col sm:flex-row sm:items-stretch overflow-hidden">
+              <div className="hidden sm:block w-1 bg-primary shrink-0" aria-hidden />
+              <div className="flex flex-col sm:flex-row flex-1 gap-4 p-4 sm:p-5 sm:items-center sm:justify-between min-w-0">
+                <div className="flex gap-4 min-w-0">
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+                    <MessageSquarePlus className="h-6 w-6" strokeWidth={1.75} />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">Новое сообщение</p>
+                    <p className="text-base font-semibold tracking-tight text-foreground mt-0.5">Отложенная отправка</p>
+                    <p className="text-sm text-muted-foreground mt-1 leading-snug">
+                      Канал можно выбрать в диалоге — вкладка «Каналы» не обязательна
+                    </p>
+                  </div>
+                </div>
+                <Button type="button" variant="default" size="lg" className="shrink-0 gap-2 rounded-xl h-11 px-5" onClick={openCreateScheduledMessage}>
+                  <Plus className="w-4 h-4" />
+                  Создать
+                </Button>
+              </div>
+            </div>
             {currentUserRole === 'VOL' && messages.length > 0 && (
               <p className="text-sm text-muted-foreground">
                 Показаны только ваши запланированные сообщения
               </p>
             )}
-            <div className="space-y-3">
+            <div
+              className={cn(
+                'rounded-2xl border border-border/40 bg-card/80 overflow-hidden divide-y divide-border/40 shadow-[0_1px_0_0_hsl(var(--border))]',
+                messageAuthors.length < 2 && 'divide-y-0'
+              )}
+            >
               {messageAuthors.length >= 2 && (
-                <div className="flex flex-wrap items-center gap-2 rounded-lg border border-muted/70 bg-muted/20 p-3">
-                  <span className="text-sm font-medium text-muted-foreground shrink-0">Автор:</span>
+                <div className="flex flex-wrap items-center gap-2.5 p-3.5 sm:p-4">
+                  <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground shrink-0">
+                    <Users className="h-3.5 w-3.5" />
+                    Автор
+                  </span>
                   <div className="flex flex-wrap gap-1.5">
                     <Button
                       variant={!messageFilterByUserId ? 'default' : 'outline'}
                       size="sm"
-                      className="h-8 rounded-md text-xs"
+                      className="h-8 rounded-lg text-xs font-medium"
                       onClick={() => setMessageFilterByUserId(null)}
                     >
                       Все
@@ -2679,7 +2944,7 @@ export default function WorkspaceDetailPage() {
                         key={u.id}
                         variant={messageFilterByUserId === u.id ? 'default' : 'outline'}
                         size="sm"
-                        className="h-8 rounded-md text-xs"
+                        className="h-8 rounded-lg text-xs font-medium"
                         onClick={() => setMessageFilterByUserId(u.id)}
                       >
                         {u.name || u.email || u.username || u.id}
@@ -2689,13 +2954,16 @@ export default function WorkspaceDetailPage() {
                   </div>
                 </div>
               )}
-              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-muted/70 bg-muted/20 p-3">
-                <span className="text-sm font-medium text-muted-foreground shrink-0">Период:</span>
+              <div className="flex flex-wrap items-center gap-2.5 p-3.5 sm:p-4">
+                <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground shrink-0">
+                  <Filter className="h-3.5 w-3.5" />
+                  Период
+                </span>
                 <div className="flex flex-wrap gap-1.5">
                   <Button
                     variant={messagePeriodFilter === 'all' ? 'default' : 'outline'}
                     size="sm"
-                    className="h-8 rounded-md text-xs"
+                    className="h-8 rounded-lg text-xs font-medium"
                     onClick={() => setMessagePeriodFilter('all')}
                   >
                     Все
@@ -2703,7 +2971,7 @@ export default function WorkspaceDetailPage() {
                   <Button
                     variant={messagePeriodFilter === '2weeks' ? 'default' : 'outline'}
                     size="sm"
-                    className="h-8 rounded-md text-xs"
+                    className="h-8 rounded-lg text-xs font-medium"
                     onClick={() => setMessagePeriodFilter('2weeks')}
                     title="Ближайшие 2 недели"
                   >
@@ -2713,7 +2981,7 @@ export default function WorkspaceDetailPage() {
                     <Button
                       variant={messagePeriodFilter === 'intensive' ? 'default' : 'outline'}
                       size="sm"
-                      className="h-8 rounded-md text-xs"
+                      className="h-8 rounded-lg text-xs font-medium"
                       onClick={() => setMessagePeriodFilter('intensive')}
                       title={`${new Date(workspace.startDate).toLocaleDateString('ru-RU')} – ${new Date(workspace.endDate).toLocaleDateString('ru-RU')}`}
                     >
@@ -2732,16 +3000,7 @@ export default function WorkspaceDetailPage() {
                   <Button
                     className="mt-4 rounded-lg gap-2 shadow-sm"
                     size="sm"
-                    onClick={() => {
-                      if (channels.length === 1) {
-                        handleChannelSelect(channels[0])
-                      } else if (channels.length > 1) {
-                        setActiveTab('channels')
-                        toast.info('Выберите канал для создания сообщения')
-                      } else {
-                        toast.error('Нет каналов — перезагрузите список каналов или проверьте подключение')
-                      }
-                    }}
+                    onClick={() => openCreateScheduledMessage()}
                   >
                     <Plus className="w-4 h-4" />
                     Запланировать первое
@@ -2749,13 +3008,23 @@ export default function WorkspaceDetailPage() {
                 }
               />
             ) : (
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                {/* Список каналов с сообщениями */}
-                <Card className="lg:col-span-1 border-muted/70">
-                  <CardContent className="p-4">
-                    <h3 className="font-semibold text-sm mb-4 text-muted-foreground uppercase tracking-wide">
-                      Каналы с сообщениями
-                    </h3>
+              <div className="grid grid-cols-1 lg:grid-cols-5 gap-4 lg:gap-5">
+                <Card className="lg:col-span-2 border-border/40 shadow-[0_1px_0_0_hsl(var(--border))] lg:sticky lg:top-20 lg:self-start">
+                  <div className="border-b border-border/40 px-4 py-3 flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+                        <Layers className="h-4 w-4" strokeWidth={1.75} />
+                      </div>
+                      <div className="min-w-0">
+                        <h3 className="text-sm font-semibold text-foreground tracking-tight leading-none">Каналы</h3>
+                        <p className="text-[11px] text-muted-foreground mt-0.5">С запланированными сообщениями</p>
+                      </div>
+                    </div>
+                    <Badge variant="secondary" className="shrink-0 text-[10px] font-medium tabular-nums">
+                      {channelsWithMessages.length}
+                    </Badge>
+                  </div>
+                  <CardContent className="p-3">
                     <VirtualList
                       items={channelsWithMessages}
                       height="min(50vh, 400px)"
@@ -2764,23 +3033,30 @@ export default function WorkspaceDetailPage() {
                       renderItem={(channel: any) => (
                         <div className="pb-2">
                           <button
+                            type="button"
                             onClick={() => setSelectedMessageChannelId(channel.channelId)}
-                            className={`w-full text-left p-3 rounded-lg transition-all ${
+                            className={cn(
+                              'w-full text-left rounded-xl px-3 py-2.5 transition-all border',
                               selectedMessageChannelId === channel.channelId
-                                ? 'bg-primary/10 border border-primary/20 text-primary'
-                                : 'hover:bg-muted/50 border border-transparent'
-                            }`}
+                                ? 'bg-primary/10 border-primary/25 text-foreground shadow-sm ring-1 ring-primary/15'
+                                : 'border-transparent hover:bg-muted/50 hover:border-border/50'
+                            )}
                           >
-                            <div className="flex items-center justify-between">
+                            <div className="flex items-center justify-between gap-2">
                               <div className="flex items-center gap-2 min-w-0 flex-1">
-                                <Hash className="w-4 h-4 shrink-0" />
-                                <span className="font-medium text-sm truncate">
-                                  {channel.channelName}
-                                </span>
+                                <Hash className="w-4 h-4 shrink-0 opacity-70" />
+                                <span className="font-medium text-sm truncate">{channel.channelName}</span>
                               </div>
-                              <Badge variant="secondary" className="ml-2 text-xs shrink-0">
+                              <span
+                                className={cn(
+                                  'text-[11px] font-semibold tabular-nums px-1.5 py-0.5 rounded-md shrink-0',
+                                  selectedMessageChannelId === channel.channelId
+                                    ? 'bg-primary/15 text-primary'
+                                    : 'bg-muted text-muted-foreground'
+                                )}
+                              >
                                 {channel.messageCount}
-                              </Badge>
+                              </span>
                             </div>
                           </button>
                         </div>
@@ -2789,10 +3065,9 @@ export default function WorkspaceDetailPage() {
                   </CardContent>
                 </Card>
 
-                {/* История сообщений выбранного канала */}
-                <div className="lg:col-span-2">
+                <div className="lg:col-span-3 min-w-0">
                   {selectedMessageChannelId ? (
-                    <div className="rounded-lg border border-muted/70 bg-card/50 backdrop-blur-sm">
+                    <div className="rounded-2xl border border-border/40 bg-card shadow-[0_1px_0_0_hsl(var(--border))] overflow-hidden min-h-[min(50vh,420px)]">
                       <CompactMessages
                         messages={filteredMessagesByChannel}
                         onEdit={handleEditMessage}
@@ -2802,15 +3077,44 @@ export default function WorkspaceDetailPage() {
                       />
                     </div>
                   ) : (
-                    <Card className="border-dashed border-muted/70">
-                      <CardContent className="py-16 text-center">
-                        <MessageSquare className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
-                        <p className="text-muted-foreground font-medium">
-                          Выберите канал для просмотра истории сообщений
-                        </p>
-                      </CardContent>
-                    </Card>
+                    <div className="rounded-2xl border border-dashed border-border/50 bg-muted/20 flex flex-col items-center justify-center py-16 px-6 text-center min-h-[min(40vh,320px)]">
+                      <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-background shadow-sm mb-4">
+                        <MessageSquare className="w-7 h-7 text-muted-foreground" strokeWidth={1.5} />
+                      </div>
+                      <p className="text-sm font-medium text-foreground">Выберите канал слева</p>
+                      <p className="text-xs text-muted-foreground mt-1 max-w-sm">
+                        История отложенных сообщений появится здесь
+                      </p>
+                    </div>
                   )}
+                </div>
+              </div>
+            )}
+            {messages.length > 0 && (
+              <div className="mt-4 rounded-2xl border border-border/50 bg-gradient-to-br from-muted/50 via-background to-muted/30 p-5 shadow-[0_1px_0_0_hsl(var(--border))] sm:p-6">
+                <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex gap-4 min-w-0">
+                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary shadow-inner ring-1 ring-primary/15">
+                      <Calendar className="h-6 w-6" strokeWidth={1.75} />
+                    </div>
+                    <div className="min-w-0 space-y-1">
+                      <p className="text-sm font-semibold text-foreground tracking-tight">
+                        Запланировать новое сообщение
+                      </p>
+                      <p className="text-xs text-muted-foreground leading-relaxed max-w-md">
+                        Выберите канал, время и текст — сообщение уйдёт в Rocket.Chat автоматически в нужный момент.
+                      </p>
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    size="lg"
+                    className="shrink-0 gap-2 rounded-xl px-6 h-12 font-semibold shadow-md shadow-primary/20 hover:shadow-lg hover:shadow-primary/25 transition-shadow w-full sm:w-auto"
+                    onClick={openCreateScheduledMessage}
+                  >
+                    <MessageSquarePlus className="w-5 h-5" />
+                    Запланировать сообщение
+                  </Button>
                 </div>
               </div>
             )}
@@ -2846,13 +3150,50 @@ export default function WorkspaceDetailPage() {
           {/* Шаблоны анонсов (ADM/SUP/ADMIN) — в стиле result-ai.tech: табы по дням, канал выделен, сворачиваемые дни */}
           {(currentUserRole === 'ADM' || currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && (
           <TabsContent value="templates" className="space-y-6 mt-0">
-            <Card className="rounded-2xl border border-border/80 bg-card shadow-[0_1px_3px_rgba(0,0,0,0.06)] overflow-hidden">
-              <div className="px-4 py-3 bg-gradient-to-b from-muted/20 to-transparent border-b border-border/60">
-                <p className="text-sm text-muted-foreground">
-                  Канал и примерное время указаны в каждом шаблоне. Копируйте текст и вставьте в запланированное сообщение в нужный канал (#adm / #announcements). Свои шаблоны можно редактировать на странице <Link href="/dashboard/admin/templates" className="text-primary underline font-medium">Шаблоны</Link> → вкладка «Мои шаблоны».
+            <div className="rounded-2xl border border-border/40 bg-card pl-0 shadow-[0_1px_0_0_hsl(var(--border))] overflow-hidden flex">
+              <div className="w-1 bg-amber-500/80 shrink-0" aria-hidden />
+              <div className="flex gap-3 sm:gap-4 p-4 sm:p-5 min-w-0">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-500/10 text-amber-700 dark:text-amber-400">
+                  <Lightbulb className="h-5 w-5" strokeWidth={1.75} />
+                </div>
+                <p className="text-sm text-muted-foreground leading-relaxed">
+                  <span className="font-semibold text-foreground">Статусы шаблонов.</span> Канал и время — в каждой строке. «Запланировано» / «отправлено» считаются по сообщениям с привязкой к шаблону в{' '}
+                  <span className="font-medium text-foreground">этом пространстве</span>. Копирование только текста статус не меняет. Свои шаблоны:{' '}
+                  <Link href="/dashboard/admin/templates" className="text-primary font-medium underline-offset-2 hover:underline">
+                    Шаблоны
+                  </Link>{' '}
+                  → «Мои шаблоны».
                 </p>
               </div>
-            </Card>
+            </div>
+
+            {(currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && workspaceAdmTemplates.length > 0 && (
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-2xl border border-border/40 bg-muted/30 px-4 py-3">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">Источник списка</p>
+                <div className="inline-flex rounded-xl bg-background/80 p-1 border border-border/40 shadow-sm">
+                  <button
+                    type="button"
+                    onClick={() => setWorkspaceShowAdmTemplates(false)}
+                    className={cn(
+                      'px-4 py-2 text-sm font-medium rounded-lg transition-all',
+                      !workspaceShowAdmTemplates ? 'bg-background shadow-sm text-foreground ring-1 ring-border/50' : 'text-muted-foreground hover:text-foreground'
+                    )}
+                  >
+                    Свои (SUP)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setWorkspaceShowAdmTemplates(true)}
+                    className={cn(
+                      'px-4 py-2 text-sm font-medium rounded-lg transition-all',
+                      workspaceShowAdmTemplates ? 'bg-background shadow-sm text-foreground ring-1 ring-border/50' : 'text-muted-foreground hover:text-foreground'
+                    )}
+                  >
+                    Шаблоны ADM
+                  </button>
+                </div>
+              </div>
+            )}
 
             {workspaceMyTemplates.length > 0 && (() => {
               const dayWeekdays = ['пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс'] as const
@@ -2871,9 +3212,9 @@ export default function WorkspaceDetailPage() {
               const renderMyTemplateRow = (t: (typeof workspaceMyTemplates)[0]) => {
                 const tagColors = getChannelTagColors(t.channel)
                 return (
-                  <div key={t.id} className="rounded-xl border border-border/70 bg-muted/5 hover:bg-muted/10 transition-colors overflow-hidden">
+                  <div key={t.id} className="rounded-xl border border-border/40 bg-card shadow-sm hover:border-border/60 hover:shadow transition-all overflow-hidden">
                     <div
-                      className="flex items-center gap-2 px-4 py-3 cursor-pointer flex-wrap"
+                      className="flex items-center gap-2 px-3 sm:px-4 py-3 cursor-pointer flex-wrap"
                       onClick={() => setWorkspaceTemplatesOpenIds((prev) => {
                         const next = new Set(prev)
                         if (next.has(t.id)) next.delete(t.id)
@@ -2881,10 +3222,10 @@ export default function WorkspaceDetailPage() {
                         return next
                       })}
                     >
-                      <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0 rounded-lg">
+                      <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0 rounded-lg text-muted-foreground">
                         {workspaceTemplatesOpenIds.has(t.id) ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                       </Button>
-                      <span className="text-muted-foreground tabular-nums w-12 shrink-0 text-sm">~{t.time}</span>
+                      <span className="text-muted-foreground tabular-nums w-12 shrink-0 text-sm font-medium">~{t.time}</span>
                       <div className={cn(
                         "inline-flex items-center gap-1.5 rounded-lg border-l-4 pl-2 pr-2.5 py-1 shrink-0 min-w-0",
                         tagColors.bar,
@@ -2895,10 +3236,11 @@ export default function WorkspaceDetailPage() {
                         <span className="font-medium text-xs truncate">#{t.channel}</span>
                       </div>
                       <span className="flex-1 truncate text-sm font-medium">{t.title || '(без названия)'}</span>
+                      {renderTemplateWorkspaceStatusBadge(t.id)}
                       <Button
                       variant="outline"
                       size="sm"
-                        className="shrink-0 rounded-lg border-border/80"
+                        className="shrink-0 rounded-lg"
                         onClick={async (e) => {
                           e.stopPropagation()
                           try {
@@ -2943,22 +3285,24 @@ export default function WorkspaceDetailPage() {
                 )
               }
               return (
-                <Card className="rounded-2xl border border-border/80 bg-card shadow-[0_1px_3px_rgba(0,0,0,0.06)] overflow-hidden">
-                  <div className="px-4 py-3 bg-gradient-to-b from-muted/20 to-transparent border-b border-border/60 flex flex-wrap items-center justify-between gap-3">
+                <Card className="rounded-2xl border border-border/40 bg-card shadow-[0_1px_0_0_hsl(var(--border))] overflow-hidden">
+                  <div className="px-4 py-3.5 border-b border-border/40 flex flex-wrap items-center justify-between gap-3">
                     <h3 className="text-base font-semibold text-foreground tracking-tight">Мои шаблоны</h3>
-                    <Link href="/dashboard/admin/templates" className="text-sm text-primary hover:underline font-medium">
-                      Редактировать на странице Шаблоны
+                    <Link href="/dashboard/admin/templates" className="text-sm text-primary font-medium hover:underline underline-offset-4">
+                      Редактировать
                     </Link>
                   </div>
                   <CardContent className="p-4">
-                    <div className="rounded-xl bg-muted/30 p-1.5 border border-border/60 mb-4">
+                    <div className="rounded-xl bg-muted/50 p-1 mb-4 border border-border/40">
                       <div className="flex flex-wrap gap-1">
                         <button
                           type="button"
                           onClick={() => setWorkspaceMyTemplatesSelectedDay('all')}
                           className={cn(
-                            "px-3 py-2 text-sm font-medium rounded-lg transition-colors",
-                            workspaceMyTemplatesSelectedDay === 'all' ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
+                            'px-3 py-2 text-sm font-medium rounded-lg transition-all',
+                            workspaceMyTemplatesSelectedDay === 'all'
+                              ? 'bg-background text-foreground shadow-sm ring-1 ring-border/50'
+                              : 'text-muted-foreground hover:text-foreground'
                           )}
                         >
                           Все дни
@@ -2969,8 +3313,10 @@ export default function WorkspaceDetailPage() {
                             type="button"
                             onClick={() => setWorkspaceMyTemplatesSelectedDay(day)}
                             className={cn(
-                              "px-3 py-2 text-sm font-medium rounded-lg transition-colors",
-                              workspaceMyTemplatesSelectedDay === day ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
+                              'px-3 py-2 text-sm font-medium rounded-lg transition-all',
+                              workspaceMyTemplatesSelectedDay === day
+                                ? 'bg-background text-foreground shadow-sm ring-1 ring-border/50'
+                                : 'text-muted-foreground hover:text-foreground'
                             )}
                           >
                             {getMyDayLabel(day)}
@@ -2984,10 +3330,10 @@ export default function WorkspaceDetailPage() {
                           const collapsed = workspaceMyTemplatesDayCollapsed.has(day)
                           const items = (myGrouped[day] ?? []).sort((a, b) => a.time.localeCompare(b.time))
                           return (
-                            <div key={day} className="rounded-xl border border-border/70 bg-muted/5 overflow-hidden">
+                            <div key={day} className="rounded-xl border border-border/40 bg-muted/20 overflow-hidden">
                               <button
                                 type="button"
-                                className="w-full flex items-center justify-between gap-2 px-4 py-3 font-medium text-sm hover:bg-muted/20 transition-colors"
+                                className="w-full flex items-center justify-between gap-2 px-4 py-3 font-medium text-sm hover:bg-muted/40 transition-colors"
                                 onClick={() => setWorkspaceMyTemplatesDayCollapsed((s) => {
                                   const next = new Set(s)
                                   if (next.has(day)) next.delete(day)
@@ -2996,8 +3342,8 @@ export default function WorkspaceDetailPage() {
                                 })}
                               >
                                 <span>{getMyDayLabel(day)}</span>
-                                <span className="text-muted-foreground text-xs">{items.length} анонсов</span>
-                                {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                                <span className="text-muted-foreground text-xs tabular-nums">{items.length} анонсов</span>
+                                {collapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
                               </button>
                               {!collapsed && (
                                 <div className="px-2 pb-2 pt-0 space-y-2">
@@ -3020,33 +3366,6 @@ export default function WorkspaceDetailPage() {
               )
             })()}
 
-            {(currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && workspaceAdmTemplates.length > 0 && (
-              <div className="rounded-xl bg-muted/30 p-1.5 border border-border/60 w-fit">
-                <div className="flex gap-1">
-                  <button
-                    type="button"
-                    onClick={() => setWorkspaceShowAdmTemplates(false)}
-                    className={cn(
-                      "px-3 py-2 text-sm font-medium rounded-lg transition-colors",
-                      !workspaceShowAdmTemplates ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
-                    )}
-                  >
-                    Свои (SUP)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setWorkspaceShowAdmTemplates(true)}
-                    className={cn(
-                      "px-3 py-2 text-sm font-medium rounded-lg transition-colors",
-                      workspaceShowAdmTemplates ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
-                    )}
-                  >
-                    Шаблоны ADM
-                  </button>
-                </div>
-              </div>
-            )}
-
             {workspaceTemplatesLoading ? (
               <div className="flex items-center justify-center py-12">
                 <Spinner className="h-8 w-8 text-muted-foreground" />
@@ -3063,9 +3382,9 @@ export default function WorkspaceDetailPage() {
               const renderSupAdmRow = (t: (typeof list)[0]) => {
                 const tagColors = getChannelTagColors(t.channel)
                 return (
-                  <div key={t.id} className="rounded-xl border border-border/70 bg-muted/5 hover:bg-muted/10 transition-colors overflow-hidden">
+                  <div key={t.id} className="rounded-xl border border-border/40 bg-card shadow-sm hover:border-border/60 hover:shadow transition-all overflow-hidden">
                     <div
-                      className="flex items-center gap-2 px-4 py-3 cursor-pointer flex-wrap"
+                      className="flex items-center gap-2 px-3 sm:px-4 py-3 cursor-pointer flex-wrap"
                       onClick={() => setWorkspaceTemplatesOpenIds((prev) => {
                         const next = new Set(prev)
                         if (next.has(t.id)) next.delete(t.id)
@@ -3073,10 +3392,10 @@ export default function WorkspaceDetailPage() {
                         return next
                       })}
                     >
-                      <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0 rounded-lg">
+                      <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0 rounded-lg text-muted-foreground">
                         {workspaceTemplatesOpenIds.has(t.id) ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                       </Button>
-                      <span className="text-muted-foreground tabular-nums w-12 shrink-0 text-sm">~{t.time}</span>
+                      <span className="text-muted-foreground tabular-nums w-12 shrink-0 text-sm font-medium">~{t.time}</span>
                       <div className={cn(
                         "inline-flex items-center gap-1.5 rounded-lg border-l-4 pl-2 pr-2.5 py-1 shrink-0 min-w-0",
                         tagColors.bar,
@@ -3088,6 +3407,7 @@ export default function WorkspaceDetailPage() {
                       </div>
                       {t.audience === 'mk' && <Badge variant="secondary" className="shrink-0 rounded-full text-xs">МК</Badge>}
                       <span className="flex-1 truncate text-sm font-medium">{t.title ?? t.dayLabel}</span>
+                      {renderTemplateWorkspaceStatusBadge(t.id)}
                       <Button
                         variant="outline"
                         size="sm"
@@ -3214,7 +3534,7 @@ export default function WorkspaceDetailPage() {
           )}
 
           {/* Настройка пространства: каналы, эмодзи, доп. настройки */}
-          {(currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && (
+          {(currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN' || currentUserRole === 'ADM') && (
           <TabsContent value="emoji-import" className="space-y-5 mt-0">
             <SpaceSettingsTab
               workspaceId={workspaceId}
@@ -3903,17 +4223,10 @@ export default function WorkspaceDetailPage() {
           </TabsContent>
           )}
 
-          {/* Сброс учётки (SUP/ADMIN) — вынесен в отдельный компонент для уменьшения перерисовок */}
-          {(currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && (
-          <TabsContent value="reset-account" className="space-y-5 mt-0">
-            <ResetAccountTab workspaceId={workspaceId} />
-          </TabsContent>
-          )}
-
-          {/* Состояние входа (ADM/SUP/ADMIN) — вынесен в отдельный компонент */}
+          {/* Сбор и состояние: сброс учётки + состояние входа (подвкладки) */}
           {(currentUserRole === 'ADM' || currentUserRole === 'SUPPORT' || currentUserRole === 'ADMIN') && (
-          <TabsContent value="user-access" className="space-y-5 mt-0">
-            <UserAccessTab workspaceId={workspaceId} currentUserRole={currentUserRole} />
+          <TabsContent value="accounts-status" className="space-y-5 mt-0">
+            <AccountsAndStatusTab workspaceId={workspaceId} currentUserRole={currentUserRole} />
           </TabsContent>
           )}
         </Tabs>
@@ -3923,6 +4236,29 @@ export default function WorkspaceDetailPage() {
         </Card>
 
         {/* Message Dialog */}
+        <Dialog open={channelPickerOpen} onOpenChange={setChannelPickerOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Выберите канал</DialogTitle>
+              <DialogDescription>Куда запланировать отложенное сообщение?</DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-2 max-h-[min(60vh,360px)] overflow-y-auto pr-1">
+              {(channels as { _id?: string; id?: string; name?: string; displayName?: string }[]).map((ch) => (
+                <Button
+                  key={ch._id || ch.id}
+                  type="button"
+                  variant="outline"
+                  className="justify-start gap-2 h-auto py-3 rounded-xl"
+                  onClick={() => pickChannelAndOpenDialog(ch)}
+                >
+                  <Hash className="h-4 w-4 shrink-0 opacity-70" />
+                  <span className="truncate">{ch.name || ch.displayName}</span>
+                </Button>
+              ))}
+            </div>
+          </DialogContent>
+        </Dialog>
+
         {workspace && showMessageDialog && selectedChannel && (
           <MessageDialog
             open={showMessageDialog}
@@ -3941,7 +4277,9 @@ export default function WorkspaceDetailPage() {
             initialMessage={scheduleFromTemplate?.body ?? templateCopiedBody ?? undefined}
             initialTime={scheduleFromTemplate?.time}
             initialDate={scheduleFromTemplate?.date}
+            sourceUserTemplateId={scheduleFromTemplate?.userTemplateId}
             currentUserRole={currentUserRole}
+            workspaceMessages={messages as any[]}
           />
         )}
         </>

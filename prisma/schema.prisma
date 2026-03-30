@@ -254,17 +254,24 @@ model ScheduledMessage {
   messageId_RC    String? // ID сообщения в Rocket.Chat (для редактирования)
   isRecurring     Boolean       @default(false)
   recurringConfig String?       @db.Text
+  // Создано из пользовательского шаблона (для статуса «отправлено» в шаблонах)
+  sourceUserTemplateId String?
+  /// id из lib/templates-data (общий шаблон SUP/ADM), не FK
+  sourceOfficialTemplateId String?
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
 
   user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   scheduledBy  User?               @relation("ScheduledByUser", fields: [scheduledById], references: [id], onDelete: SetNull)
   workspace    WorkspaceConnection @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  sourceUserTemplate UserTemplate? @relation(fields: [sourceUserTemplateId], references: [id], onDelete: SetNull)
 
   @@index([scheduledFor, status])
   @@index([userId, status])
   @@index([workspaceId, status]) // NEW: для фильтрации по workspace
   @@index([messageId_RC]) // Для поиска по messageId из Rocket.Chat
+  @@index([sourceUserTemplateId])
+  @@index([sourceOfficialTemplateId])
 }
 
 enum MessageStatus {
@@ -345,11 +352,13 @@ model UserTemplate {
   title        String?
   body         String   @db.Text
   tags         String[] @default([]) // теги: экзамен, групповой проект и т.д.
+  lastSentAt   DateTime? // последняя успешная отправка из этого шаблона
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
   user     User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
   versions UserTemplateVersion[]
+  scheduledFrom ScheduledMessage[]
 
   @@index([userId])
 }

@@ -245,7 +245,8 @@ export default function CompactMessages({ messages = [], onEdit, onDelete, onRet
           <VirtualList
             items={filteredMessages}
             height="min(60vh, 520px)"
-            estimateSize={viewMode === 'compact' ? 48 : 112}
+            estimateSize={viewMode === 'compact' ? 56 : 120}
+            gap={viewMode === 'compact' ? 8 : 12}
             getItemKey={(m: any) => m.id}
             renderItem={(message: any) => {
               const channelTagColors = getChannelTagColors(message.channelName || '')
@@ -257,7 +258,7 @@ export default function CompactMessages({ messages = [], onEdit, onDelete, onRet
               })
               if (viewMode === 'compact') {
                 return (
-                  <div className="pb-2">
+                  <div>
                     <Card className="border-border/80 bg-card rounded-lg shadow-sm hover:shadow-md hover:border-primary/20 transition-all overflow-hidden">
                       <CardContent className="py-2 px-3 flex items-center gap-2 flex-wrap">
                         <div className="shrink-0">{getStatusIcon(message.status)}</div>
@@ -299,7 +300,7 @@ export default function CompactMessages({ messages = [], onEdit, onDelete, onRet
                 )
               }
               return (
-                <div className="pb-3">
+                <div>
                   <Card className="border-border/80 bg-card rounded-xl shadow-sm hover:shadow-md hover:border-primary/20 transition-all overflow-hidden">
                     <CardContent className="p-4">
                       <div className="flex items-start gap-3">

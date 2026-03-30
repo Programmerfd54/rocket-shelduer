@@ -61,61 +61,61 @@ export function ResetAccountTab({ workspaceId }: { workspaceId: string }) {
   };
 
   return (
-    <Card className="rounded-2xl border-2 border-border/80 bg-card shadow-[0_2px_12px_rgba(0,0,0,0.06)] overflow-hidden">
-      <div className="px-4 py-3 border-b-2 border-border/70 bg-gradient-to-b from-orange-500/8 to-transparent">
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-orange-500/15 text-orange-600 dark:text-orange-400">
+    <Card className="rounded-2xl border border-border/50 bg-card shadow-sm ring-1 ring-border/40 overflow-hidden">
+      <div className="px-4 py-4 sm:px-5 border-b border-border/50 bg-gradient-to-b from-muted/40 to-muted/10">
+        <div className="flex items-start gap-3">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-primary/15">
             <RotateCcw className="h-5 w-5" />
           </div>
           <div>
-            <h3 className="font-semibold text-foreground">Сброс учётки</h3>
-            <p className="text-sm text-muted-foreground mt-0.5">
+            <h3 className="font-semibold text-foreground tracking-tight">Сброс учётки</h3>
+            <p className="text-sm text-muted-foreground mt-1 leading-relaxed">
               Введите логины (по одному на строку или через запятую). Пароль будет сброшен на значение, равное логину. При первом входе пользователю будет предложено задать новый пароль.
             </p>
-            <p className="text-xs text-muted-foreground mt-1">
+            <p className="text-xs text-muted-foreground mt-2">
               Без кредов RC — сброс только в приложении. С кредами администратора Rocket.Chat — сброс и в приложении, и в RC.
             </p>
           </div>
         </div>
       </div>
-      <CardContent className="pt-4 space-y-4">
-        <div className="rounded-xl border-2 border-amber-400/40 bg-amber-500/5 p-4 space-y-3">
-          <p className="text-sm font-medium flex items-center gap-2">
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/20 text-amber-600 dark:text-amber-400">
+      <CardContent className="pt-5 space-y-4">
+        <div className="rounded-xl border border-border/50 bg-muted/20 p-4 space-y-3 shadow-sm ring-1 ring-border/30">
+          <p className="text-sm font-medium flex items-center gap-2.5">
+            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-500/10 text-amber-700 dark:text-amber-400 ring-1 ring-amber-500/20">
               <KeyRound className="w-4 h-4" />
             </span>
             Креды администратора Rocket.Chat (опционально — для сброса пароля и в RC)
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <Label htmlFor="reset-admin-username" className="text-xs">Логин админа RC</Label>
+              <Label htmlFor="reset-admin-username" className="text-xs text-muted-foreground">Логин админа RC</Label>
               <Input
                 id="reset-admin-username"
                 type="text"
                 placeholder="admin"
                 value={adminUsername}
                 onChange={(e) => setAdminUsername(e.target.value)}
-                className="mt-1.5 h-9 border-2 border-amber-300/30 focus:border-amber-400/50 rounded-lg bg-background"
+                className="mt-1.5 h-9 border-border/60 rounded-lg bg-background shadow-sm"
                 disabled={loading}
               />
             </div>
             <div>
-              <Label htmlFor="reset-admin-password" className="text-xs">Пароль админа RC</Label>
+              <Label htmlFor="reset-admin-password" className="text-xs text-muted-foreground">Пароль админа RC</Label>
               <Input
                 id="reset-admin-password"
                 type="password"
                 placeholder="••••••••"
                 value={adminPassword}
                 onChange={(e) => setAdminPassword(e.target.value)}
-                className="mt-1.5 h-9 border-2 border-amber-300/30 focus:border-amber-400/50 rounded-lg bg-background"
+                className="mt-1.5 h-9 border-border/60 rounded-lg bg-background shadow-sm"
                 disabled={loading}
               />
             </div>
           </div>
         </div>
-        <div className="rounded-xl border-2 border-blue-400/40 bg-blue-500/5 p-4 space-y-2">
-          <Label htmlFor="reset-account-usernames" className="flex items-center gap-2 text-sm font-medium">
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-500/20 text-blue-600 dark:text-blue-400">
+        <div className="rounded-xl border border-border/50 bg-muted/20 p-4 space-y-2 shadow-sm ring-1 ring-border/30">
+          <Label htmlFor="reset-account-usernames" className="flex items-center gap-2.5 text-sm font-medium">
+            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-sky-500/10 text-sky-700 dark:text-sky-400 ring-1 ring-sky-500/20">
               <Users className="w-4 h-4" />
             </span>
             Логины (несколько — по одному на строку)
@@ -128,20 +128,20 @@ export function ResetAccountTab({ workspaceId }: { workspaceId: string }) {
               setUsernames(e.target.value);
               setResults([]);
             }}
-            className="min-h-[120px] font-mono text-sm resize-y border-2 border-blue-300/30 focus:border-blue-400/50 rounded-lg bg-background"
+            className="min-h-[120px] font-mono text-sm resize-y border-border/60 rounded-lg bg-background shadow-sm"
             disabled={loading}
           />
         </div>
         <Button
           onClick={handleSubmit}
           disabled={loading || !usernames.trim()}
-          className="gap-2 rounded-lg border-2 border-orange-400/50 bg-orange-500 hover:bg-orange-600 text-white shadow-sm"
+          className="gap-2 rounded-lg shadow-md"
         >
           {loading ? <Spinner className="w-4 h-4" /> : <RotateCcw className="w-4 h-4" />}
           Сбросить пароли
         </Button>
         {results.length > 0 && (
-          <div className="mt-4 rounded-xl border-2 border-emerald-400/40 bg-emerald-500/5 overflow-hidden">
+          <div className="mt-4 rounded-xl border border-emerald-500/30 bg-emerald-500/[0.04] overflow-hidden ring-1 ring-emerald-500/15">
             <div className="max-h-[280px] overflow-y-auto">
               <table className="w-full text-sm">
                 <thead className="bg-muted/30 sticky top-0">

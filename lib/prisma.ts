@@ -4,9 +4,17 @@ declare global {
   var prisma: PrismaClient | undefined;
 }
 
-export const prisma = global.prisma || new PrismaClient();
+/**
+ * В development не кэшируем клиент на global: после `prisma generate` старый singleton
+ * остаётся со схемой без новых полей до полного перезапуска процесса → PrismaClientValidationError.
+ * В production singleton нужен, чтобы не плодить подключения к БД.
+ */
+export const prisma =
+  process.env.NODE_ENV === 'production'
+    ? (global.prisma ?? new PrismaClient())
+    : new PrismaClient();
 
-if (process.env.NODE_ENV !== 'production') {
+if (process.env.NODE_ENV === 'production') {
   global.prisma = prisma;
 }
 

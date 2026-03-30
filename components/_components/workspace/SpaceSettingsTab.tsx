@@ -2,6 +2,9 @@
 
 import { useState, useEffect } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Badge } from '@/components/ui/badge'
+import { R2D2TabPanel } from '@/components/_components/workspace/R2D2TabPanel'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -91,6 +94,7 @@ type SettingKey =
   | 'permissionDeleteD'
 
 const RESTRICTED_WORKSPACE_HOST = 'rocketchat-student.21-school.ru'
+const STAFF_WORKSPACE_HOST = 'rocketchat-staff.21-school.ru'
 
 interface SettingBlockProps {
   keyId: SettingKey
@@ -135,9 +139,15 @@ interface SpaceSettingsTabProps {
 }
 
 export function SpaceSettingsTab({ workspaceId, workspaceUrl, channels, onChannelsRefresh, channelCreators = {}, settingAppliers = {}, onSpaceSettingsAction, children }: SpaceSettingsTabProps) {
-  const isRestrictedWorkspace = Boolean(
+  const isStaffWorkspace = Boolean(
+    workspaceUrl && workspaceUrl.toLowerCase().includes(STAFF_WORKSPACE_HOST)
+  )
+  const isStudentRestricted = Boolean(
     workspaceUrl && workspaceUrl.toLowerCase().includes(RESTRICTED_WORKSPACE_HOST)
   )
+  const isRestrictedWorkspace = isStudentRestricted || isStaffWorkspace
+  /** Скрыть каналы/настройки/импорт (student или staff); R2D2 для staff показываем отдельно. */
+  const hideFullSpaceSettings = isStudentRestricted || isStaffWorkspace
   const [channelName, setChannelName] = useState('')
   const [channelTopic, setChannelTopic] = useState('')
   const [channelDescription, setChannelDescription] = useState('')
@@ -343,35 +353,43 @@ export function SpaceSettingsTab({ workspaceId, workspaceUrl, channels, onChanne
     <div className="space-y-4">
       {/* Предупреждение: пространство 21-school.ru настраивать нельзя */}
       {isRestrictedWorkspace && (
-        <div className="rounded-xl border-2 border-amber-400/60 bg-amber-500/10 p-4 flex items-start gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-500/20 text-amber-600 dark:text-amber-400">
+        <div className="rounded-2xl border border-amber-500/35 bg-amber-500/[0.06] p-4 flex items-start gap-3 shadow-sm ring-1 ring-amber-500/15">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-500/15 text-amber-600 dark:text-amber-400 ring-1 ring-amber-500/20">
             <AlertTriangle className="h-5 w-5" />
           </div>
           <div>
             <h3 className="font-semibold text-amber-800 dark:text-amber-200">Это пространство настраивать нельзя</h3>
             <p className="text-sm text-amber-700 dark:text-amber-300 mt-0.5">
-              Пространство <span className="font-mono">{RESTRICTED_WORKSPACE_HOST}</span> — общий сервер Школы 21. Настройки каналов, эмодзи и параметров рабочего пространства здесь недоступны. Используйте собственный инстанс Rocket.Chat для настройки.
+              {isStaffWorkspace ? (
+                <>
+                  Пространство <span className="font-mono">{STAFF_WORKSPACE_HOST}</span>: массовые настройки и импорт здесь отключены. При необходимости введите одноразовый код 2FA при входе в Rocket.Chat (аутентификатор).
+                </>
+              ) : (
+                <>
+                  Пространство <span className="font-mono">{RESTRICTED_WORKSPACE_HOST}</span> — общий сервер Школы 21. Настройки каналов, эмодзи и параметров рабочего пространства здесь недоступны. Используйте собственный инстанс Rocket.Chat для настройки.
+                </>
+              )}
             </p>
           </div>
         </div>
       )}
 
       {/* Статус по всем шагам */}
-      {!isRestrictedWorkspace && (
-        <div className="rounded-xl border border-border/70 bg-card p-4 flex items-center gap-4">
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+      {!hideFullSpaceSettings && (
+        <div className="rounded-2xl border border-border/50 bg-card p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center gap-4 shadow-sm ring-1 ring-border/40">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-primary/20">
             <ListOrdered className="h-6 w-6" />
           </div>
           <div className="flex-1 min-w-0">
-            <h3 className="font-semibold text-foreground">Прогресс настройки</h3>
+            <h3 className="font-semibold text-foreground tracking-tight">Прогресс настройки</h3>
             <p className="text-sm text-muted-foreground mt-0.5">
-              Применено: <span className="font-semibold text-foreground">{appliedCount}</span> из {totalSettings} настроек
+              Применено: <span className="font-semibold tabular-nums text-foreground">{appliedCount}</span> из {totalSettings} настроек
             </p>
           </div>
-          <div className="flex-1 max-w-[200px]">
-            <div className="h-2 rounded-full bg-muted overflow-hidden">
+          <div className="w-full sm:flex-1 sm:max-w-[220px]">
+            <div className="h-2 rounded-full bg-muted overflow-hidden ring-1 ring-border/30">
               <div
-                className="h-full bg-primary transition-all duration-300"
+                className="h-full rounded-full bg-primary transition-all duration-300"
                 style={{ width: `${(appliedCount / totalSettings) * 100}%` }}
               />
             </div>
@@ -379,9 +397,50 @@ export function SpaceSettingsTab({ workspaceId, workspaceUrl, channels, onChanne
         </div>
       )}
 
-      {/* Шаг 1: Создание каналов */}
-      {!isRestrictedWorkspace && (
+      {/* Подвкладки: каналы / настройки / импорт / R2D2 */}
+      {!hideFullSpaceSettings && (
       <>
+      <Tabs defaultValue="channels" className="w-full space-y-4">
+        {/* ui/tabs задаёт TabsList height: 2.25rem — при padding и min-h триггеров ломается вертикаль; inline-style перебивает класс */}
+        <TabsList
+          style={{ height: 'auto', minHeight: '2.75rem' }}
+          className="grid w-full grid-cols-2 sm:grid-cols-4 gap-1 p-1 bg-muted/40 rounded-xl border border-border/50 items-stretch content-stretch ring-1 ring-border/30"
+        >
+          <TabsTrigger
+            value="channels"
+            className="rounded-lg text-xs sm:text-sm min-h-10 h-full! box-border px-2.5 py-2 flex items-center justify-center text-center shadow-none data-[state=active]:shadow-sm data-[state=active]:bg-background data-[state=active]:ring-1 data-[state=active]:ring-border/50"
+          >
+            Каналы
+          </TabsTrigger>
+          <TabsTrigger
+            value="settings"
+            className="rounded-lg text-xs sm:text-sm min-h-10 h-full! box-border px-2.5 py-2 flex items-center justify-center text-center shadow-none data-[state=active]:shadow-sm data-[state=active]:bg-background data-[state=active]:ring-1 data-[state=active]:ring-border/50"
+          >
+            Настройки RC
+          </TabsTrigger>
+          <TabsTrigger
+            value="import"
+            className="rounded-lg text-xs sm:text-sm min-h-10 h-full! box-border px-2.5 py-2 flex items-center justify-center text-center shadow-none data-[state=active]:shadow-sm data-[state=active]:bg-background data-[state=active]:ring-1 data-[state=active]:ring-border/50"
+          >
+            Импорт
+          </TabsTrigger>
+          <TabsTrigger
+            value="r2d2"
+            className="rounded-lg text-xs sm:text-sm min-h-10 h-full! box-border px-2.5 py-2 flex items-center justify-center gap-1.5 text-center shadow-none data-[state=active]:shadow-sm data-[state=active]:bg-background data-[state=active]:ring-1 data-[state=active]:ring-border/50"
+          >
+            <span className="inline-flex items-center gap-1.5 leading-none">
+              <span>R2D2</span>
+              <Badge
+                variant="secondary"
+                className="text-[10px] font-medium leading-none px-1.5 py-0.5 h-5 shrink-0 inline-flex items-center justify-center bg-cyan-500/20 text-cyan-800 dark:text-cyan-200 border-0"
+              >
+                new
+              </Badge>
+            </span>
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="channels" className="mt-0 space-y-4 focus-visible:outline-none">
       <Card className={cn(blockClass, 'border-l-2 border-l-blue-400/50 bg-card')}>
         <div className={cn(headerClass, 'bg-muted/20 border-border/60')}>
           <div className="flex items-center gap-2 shrink-0">
@@ -600,7 +659,9 @@ export function SpaceSettingsTab({ workspaceId, workspaceUrl, channels, onChanne
           </div>
         </CardContent>
       </Card>
+        </TabsContent>
 
+        <TabsContent value="settings" className="mt-0 space-y-4 focus-visible:outline-none">
       {/* Шаг 2: Скрыть системные сообщения кроме «Пользователь заглушен/не заглушен» */}
       <SettingBlock
         keyId="hideSystemMessages"
@@ -744,10 +805,23 @@ export function SpaceSettingsTab({ workspaceId, workspaceUrl, channels, onChanne
         onApply={() => applySetting('permissionDeleteD')}
         onCheck={() => checkSetting('permissionDeleteD')}
       />
+        </TabsContent>
 
-      {/* Шаг 10: Блок импорта эмодзи (передан как children) */}
+        <TabsContent value="import" className="mt-0 space-y-4 focus-visible:outline-none">
       {children}
+        </TabsContent>
+
+        <TabsContent value="r2d2" className="mt-0 focus-visible:outline-none">
+          <R2D2TabPanel workspaceId={workspaceId} />
+        </TabsContent>
+      </Tabs>
       </>
+      )}
+
+      {isStaffWorkspace && (
+        <div className="rounded-2xl border border-cyan-500/25 bg-gradient-to-br from-cyan-500/6 to-background p-3 sm:p-4 shadow-sm">
+          <R2D2TabPanel workspaceId={workspaceId} variant="embedded" />
+        </div>
       )}
     </div>
   )

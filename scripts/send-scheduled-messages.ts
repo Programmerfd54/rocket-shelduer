@@ -107,6 +107,13 @@ export async function sendScheduledMessages() {
           },
         });
 
+        if (message.sourceUserTemplateId) {
+          await prisma.userTemplate.updateMany({
+            where: { id: message.sourceUserTemplateId },
+            data: { lastSentAt: new Date() },
+          });
+        }
+
         sentCount++;
         console.log(`✓ Sent message ${message.id} to ${message.channelName}`);
 

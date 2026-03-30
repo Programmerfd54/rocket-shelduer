@@ -42,6 +42,19 @@ import { Breadcrumbs } from '@/components/common/Breadcrumbs'
 
 const MONTHS = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
 
+/** Бирюзовый акцент периода интенсива / пространства на календаре */
+const CALENDAR_WORKSPACE_TURQUOISE = '#14b8a6'
+
+function getDayMessageTone(dayMessages: { status?: string }[]) {
+  const hasFailed = dayMessages.some((m) => m.status === 'FAILED')
+  const hasPending = dayMessages.some((m) => m.status === 'PENDING')
+  const hasSent = dayMessages.some((m) => m.status === 'SENT')
+  if (hasFailed) return 'failed' as const
+  if (hasPending) return 'pending' as const
+  if (hasSent) return 'sent' as const
+  return 'none' as const
+}
+
 export default function CalendarPage() {
   const [externalStatuses, setExternalStatuses] = useState<Record<string, 'SYNCHRONIZED' | 'EDITED_IN_RC' | 'DELETED_IN_RC' | 'UNKNOWN'>>({})
 
@@ -66,10 +79,9 @@ export default function CalendarPage() {
   const isSupOrAdm = currentUser?.role === 'SUPPORT' || currentUser?.role === 'ADM' || currentUser?.role === 'ADMIN'
   const hasActiveFilters = filterRole !== 'all' || filterWorkspaceId !== 'all' || filterStatus !== 'all'
 
-  // Цвет по типу пространства: многопользовательское (общий) — красный, индивидуальное — голубой
   const selectedWorkspace = workspaces.find((w: any) => w.id === filterWorkspaceId)
   const isSharedCalendar = filterWorkspaceId === 'all' || selectedWorkspace?.isMultiUser === true
-  const calendarAccentColor = isSharedCalendar ? '#ef4444' : '#3b82f6'
+  const calendarAccentColor = CALENDAR_WORKSPACE_TURQUOISE
 
   useEffect(() => {
     if (workspaceIdFromUrl) setFilterWorkspaceId(workspaceIdFromUrl)
@@ -124,13 +136,6 @@ export default function CalendarPage() {
     })
   }, [messages, filterRole, filterWorkspaceId, filterStatus])
 
-
-
-  console.log(filteredMessages) 
-
-
-
-  
   const checkExternalMessageStatuses = async (messages: any[]) => {
     // Берём только отправленные сообщения, у которых есть messageId_RC
     const toCheck = messages.filter(
@@ -775,12 +780,20 @@ export default function CalendarPage() {
                             {slotMessages.slice(0, 2).map((msg: any) => {
                               const role = msg.user?.role || 'USER'
                               const roleColors = getRoleColor(role)
+                              const statusTint =
+                                msg.status === 'FAILED'
+                                  ? 'bg-rose-500/20 text-rose-900 dark:text-rose-100'
+                                  : msg.status === 'PENDING'
+                                    ? 'bg-amber-400/25 text-amber-950 dark:text-amber-100'
+                                    : msg.status === 'SENT'
+                                      ? 'bg-emerald-500/20 text-emerald-900 dark:text-emerald-100'
+                                      : cn(roleColors.light, roleColors.text)
                               const userName = msg.user?.name || msg.user?.email || msg.user?.username || '—'
                               const timeStr = new Date(msg.scheduledFor).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
                               const label = `${userName} · #${msg.channelName} ${timeStr}`
                               const workspaceId = msg.workspace?.id
                               const content = (
-                                <span className={cn('block text-xs rounded px-1 py-0.5 truncate', roleColors.light, roleColors.text)} title={label}>
+                                <span className={cn('block text-xs rounded px-1 py-0.5 truncate', statusTint)} title={label}>
                                   {label}
                                 </span>
                               )
@@ -873,8 +886,26 @@ export default function CalendarPage() {
                   selectedDate?.toDateString() === date.toDateString()
                 const isInIntensive = intensivePeriods.length > 0
 
-                // Цвет по типу календаря: общий (все воркспейсы) — красный, индивидуальный — голубой
-                const intensiveColor = isInIntensive ? calendarAccentColor : null
+                const tone = getDayMessageTone(dayMessages)
+                const intensiveColor = isInIntensive ? CALENDAR_WORKSPACE_TURQUOISE : null
+                const toneClasses =
+                  tone === 'failed'
+                    ? 'bg-rose-500/25 ring-1 ring-rose-400/40 border-rose-400/40'
+                    : tone === 'pending'
+                      ? 'bg-amber-400/35 ring-1 ring-amber-400/50 border-amber-400/50'
+                      : tone === 'sent'
+                        ? 'bg-emerald-500/30 ring-1 ring-emerald-400/40 border-emerald-400/50'
+                        : ''
+
+                const intensiveOnlyStyle =
+                  tone === 'none' && isInIntensive && intensiveColor
+                    ? !isToday && !isSelected
+                      ? {
+                          borderLeft: `4px solid ${intensiveColor}`,
+                          backgroundColor: `${intensiveColor}18`,
+                        }
+                      : { borderLeft: `4px solid ${intensiveColor}` }
+                    : undefined
 
                 return (
                   <button
@@ -882,16 +913,14 @@ export default function CalendarPage() {
                     onClick={() => setSelectedDate(date)}
                     className={cn(
                       "relative p-2 rounded-lg border text-center hover:bg-muted/50 transition-colors min-h-[80px]",
-                      isToday && "border-primary bg-primary/5",
-                      isSelected && "bg-primary/10 border-primary",
-                      !isToday && !isSelected && "border-border/80"
+                      toneClasses,
+                      tone === 'none' && isToday && "border-primary bg-primary/5",
+                      tone === 'none' && isSelected && "bg-primary/10 border-primary",
+                      tone !== 'none' && isToday && "ring-2 ring-primary/60",
+                      tone !== 'none' && isSelected && "ring-2 ring-primary",
+                      tone === 'none' && !isToday && !isSelected && "border-border/80"
                     )}
-                    style={isInIntensive && !isToday && !isSelected ? {
-                      borderLeft: `4px solid ${intensiveColor}`,
-                      backgroundColor: `${intensiveColor}15`,
-                    } : isInIntensive && (isToday || isSelected) ? {
-                      borderLeft: `4px solid ${intensiveColor}`,
-                    } : undefined}
+                    style={intensiveOnlyStyle}
                   >
                     <span
                       className={cn(
@@ -911,12 +940,18 @@ export default function CalendarPage() {
                       />
                     )}
 
-                    {/* Message indicators — цвет по роли автора */}
+                    {/* Полоски по статусу сообщения */}
                     {dayMessages.length > 0 && (
                       <div className="mt-1 space-y-1">
                         {dayMessages.slice(0, 3).map((msg: any) => {
-                          const role = msg.user?.role || 'USER'
-                          const roleColors = getRoleColor(role)
+                          const barClass =
+                            msg.status === 'FAILED'
+                              ? 'bg-rose-500'
+                              : msg.status === 'PENDING'
+                                ? 'bg-amber-400'
+                                : msg.status === 'SENT'
+                                  ? 'bg-emerald-500'
+                                  : 'bg-muted-foreground/50'
                           const userName = msg.user?.name || msg.user?.email || msg.user?.username || '—'
                           const timeStr = new Date(msg.scheduledFor).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
                           const msgPreview = (msg.message || '').slice(0, 60) + ((msg.message || '').length > 60 ? '…' : '')
@@ -926,7 +961,7 @@ export default function CalendarPage() {
                           return (
                             <div
                               key={msg.id}
-                              className={cn("h-1.5 rounded-full mx-auto", roleColors.bg)}
+                              className={cn("h-1.5 rounded-full mx-auto", barClass)}
                               style={{ width: '80%' }}
                               title={tooltip}
                             />
@@ -981,8 +1016,8 @@ export default function CalendarPage() {
                 <>
                   <div className="h-4 w-px bg-border" />
                   <div className="flex items-center gap-2">
-                    <div className="w-3 h-3 rounded-full border-2 border-foreground/20" style={{ backgroundColor: `${calendarAccentColor}20` }} />
-                    <span>Период интенсива ({isSharedCalendar ? 'общий' : 'индивидуальный'})</span>
+                    <div className="w-3 h-3 rounded-full border-2 border-teal-500/40" style={{ backgroundColor: `${CALENDAR_WORKSPACE_TURQUOISE}33` }} />
+                    <span>Период интенсива (бирюзовый фон дня, если нет сообщений)</span>
                   </div>
                 </>
               )}

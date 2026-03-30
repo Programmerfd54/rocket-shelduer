@@ -38,6 +38,8 @@ export function WorkspaceDialog({ onSuccess, userRole = 'USER', disableAddButton
     startDate: '',
     endDate: ''
   })
+  const [totpCode, setTotpCode] = useState('')
+  const [needsTotp, setNeedsTotp] = useState(false)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -54,10 +56,19 @@ export function WorkspaceDialog({ onSuccess, userRole = 'USER', disableAddButton
       const response = await fetch('/api/workspace', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData),
+        body: JSON.stringify({
+          ...formData,
+          ...(totpCode.trim() ? { totpCode: totpCode.trim() } : {}),
+        }),
       })
 
       const data = await response.json()
+
+      if (response.status === 400 && data.requiresTotp) {
+        setNeedsTotp(true)
+        toast.message('Нужен код 2FA', { description: 'Введите 6 цифр из приложения-аутентификатора и нажмите «Подключить» снова.' })
+        return
+      }
 
       if (!response.ok) {
         throw new Error(data.error || 'Failed to connect workspace')
@@ -72,6 +83,8 @@ export function WorkspaceDialog({ onSuccess, userRole = 'USER', disableAddButton
         startDate: '', 
         endDate: '' 
       })
+      setTotpCode('')
+      setNeedsTotp(false)
       setOpen(false)
       toast.success('Пространство успешно подключено!')
       onSuccess()
@@ -83,7 +96,17 @@ export function WorkspaceDialog({ onSuccess, userRole = 'USER', disableAddButton
   }
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !disableAddButton && setOpen(o)}>
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        if (disableAddButton) return
+        setOpen(o)
+        if (!o) {
+          setNeedsTotp(false)
+          setTotpCode('')
+        }
+      }}
+    >
       <DialogTrigger asChild>
         <Button size="sm" disabled={disableAddButton}>
           <Plus className="mr-2 h-4 w-4" />
@@ -229,6 +252,24 @@ export function WorkspaceDialog({ onSuccess, userRole = 'USER', disableAddButton
                 Включена 2-факторная аутентификация
               </Label>
             </div>
+
+            {(needsTotp || formData.has2FA) && (
+              <div className="grid gap-2">
+                <Label htmlFor="totpCode">Код 2FA (приложение-аутентификатор)</Label>
+                <Input
+                  id="totpCode"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  placeholder="000000"
+                  value={totpCode}
+                  onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 8))}
+                  className="rounded-lg border-border/80 font-mono tracking-widest"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Если Rocket.Chat запросил второй фактор — введите код и снова нажмите «Подключить».
+                </p>
+              </div>
+            )}
           </div>
 
           <DialogFooter className="border-t border-border/60 pt-4">

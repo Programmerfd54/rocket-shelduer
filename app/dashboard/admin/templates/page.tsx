@@ -83,6 +83,7 @@ type UserTemplate = {
   tags?: string[]
   createdAt: string
   updatedAt: string
+  lastSentAt?: string | null
 }
 
 const CHANNEL_OPTIONS = [
@@ -162,7 +163,12 @@ export default function TemplatesPage() {
   const [versions, setVersions] = useState<{ id: string; body: string; title: string | null; channel: string; time: string; intensiveDay: number | null; createdAt: string }[]>([])
   const [reverting, setReverting] = useState(false)
   const [scheduleDialogOpen, setScheduleDialogOpen] = useState(false)
-  const [scheduleTemplate, setScheduleTemplate] = useState<{ body: string; channel: string; time: string } | null>(null)
+  const [scheduleTemplate, setScheduleTemplate] = useState<{
+    body: string
+    channel: string
+    time: string
+    userTemplateId?: string
+  } | null>(null)
   const [workspaces, setWorkspaces] = useState<{ id: string; workspaceName: string }[]>([])
   const [scheduleWorkspaceId, setScheduleWorkspaceId] = useState('')
   const [scheduleChannels, setScheduleChannels] = useState<{ _id?: string; id?: string; name?: string; displayName?: string }[]>([])
@@ -194,7 +200,7 @@ export default function TemplatesPage() {
       })
   }, [])
 
-  const openScheduleDialog = useCallback((t: { body: string; channel: string; time: string }) => {
+  const openScheduleDialog = useCallback((t: { body: string; channel: string; time: string; userTemplateId?: string }) => {
     setScheduleTemplate(t)
     const today = new Date().toISOString().split('T')[0]
     setScheduleDate(today)
@@ -247,6 +253,7 @@ export default function TemplatesPage() {
         body: scheduleTemplate.body,
         time: scheduleTime,
         date: scheduleDate || undefined,
+        ...(scheduleTemplate.userTemplateId ? { userTemplateId: scheduleTemplate.userTemplateId } : {}),
       })
     )
     setScheduleDialogOpen(false)
@@ -885,7 +892,17 @@ export default function TemplatesPage() {
                                   <div key={t.id} className="flex items-center gap-2 px-4 py-3 hover:bg-muted/10 flex-wrap">
                                     <span className="text-muted-foreground tabular-nums w-12 shrink-0 text-sm">~{t.time}</span>
                                     <span className="flex-1 truncate text-sm font-medium">{t.title || '(без названия)'}</span>
-                                    <Button variant="outline" size="sm" className="rounded-lg border-border/80 shrink-0" onClick={() => openScheduleDialog({ body: t.body, channel: t.channel, time: t.time })}>
+                                    {ut?.lastSentAt ? (
+                                      <Badge variant="secondary" className="shrink-0 text-xs font-normal bg-emerald-500/15 text-emerald-800 dark:text-emerald-200 border-emerald-500/30">
+                                        Отправлено{' '}
+                                        {new Date(ut.lastSentAt).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                                      </Badge>
+                                    ) : (
+                                      <Badge variant="outline" className="shrink-0 text-xs font-normal text-muted-foreground">
+                                        Не отправлялся
+                                      </Badge>
+                                    )}
+                                    <Button variant="outline" size="sm" className="rounded-lg border-border/80 shrink-0" onClick={() => openScheduleDialog({ body: t.body, channel: t.channel, time: t.time, userTemplateId: t.id })}>
                                       <CalendarClock className="h-4 w-4 mr-1" />
                                       Запланировать
                                     </Button>
@@ -951,7 +968,17 @@ export default function TemplatesPage() {
                                     <span className="font-medium text-xs truncate">#{t.channel}</span>
                                   </div>
                                   <span className="flex-1 truncate text-sm font-medium">{t.title || '(без названия)'}</span>
-                                  <Button variant="outline" size="sm" className="rounded-lg border-border/80 shrink-0" onClick={() => openScheduleDialog({ body: t.body, channel: t.channel, time: t.time })}>
+                                  {ut?.lastSentAt ? (
+                                    <Badge variant="secondary" className="shrink-0 text-xs font-normal bg-emerald-500/15 text-emerald-800 dark:text-emerald-200 border-emerald-500/30">
+                                      Отправлено{' '}
+                                      {new Date(ut.lastSentAt).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                                    </Badge>
+                                  ) : (
+                                    <Badge variant="outline" className="shrink-0 text-xs font-normal text-muted-foreground">
+                                      Не отправлялся
+                                    </Badge>
+                                  )}
+                                  <Button variant="outline" size="sm" className="rounded-lg border-border/80 shrink-0" onClick={() => openScheduleDialog({ body: t.body, channel: t.channel, time: t.time, userTemplateId: t.id })}>
                                     <CalendarClock className="h-4 w-4 mr-1" />
                                     Запланировать
                                   </Button>

@@ -345,7 +345,7 @@ export async function POST(request: Request) {
       );
     }
     const body = await request.json();
-    const { workspaceName, workspaceUrl, username, password, has2FA, startDate, endDate } = body;
+    const { workspaceName, workspaceUrl, username, password, has2FA, startDate, endDate, totpCode } = body;
 
     if (!workspaceName || !workspaceUrl || !username || !password) {
       return NextResponse.json(
@@ -451,8 +451,33 @@ export async function POST(request: Request) {
       );
     }
 
+    const STAFF_HOST = 'rocketchat-staff.21-school.ru';
+    const isStaffHost = normalizedUrl.toLowerCase().includes(STAFF_HOST);
+
     const rcClient = new RocketChatClient(normalizedUrl);
-    const { authToken, userId: rcUserId } = await rcClient.login(username, password);
+    let authToken: string;
+    let rcUserId: string;
+    try {
+      const loginResult = await rcClient.login(
+        username,
+        password,
+        typeof totpCode === 'string' && totpCode.trim() ? totpCode.trim() : undefined
+      );
+      authToken = loginResult.authToken;
+      rcUserId = loginResult.userId;
+    } catch (loginErr: unknown) {
+      const e = loginErr as Error & { code?: string };
+      if (e?.message === 'TOTP_REQUIRED' || e?.code === 'totp-required') {
+        return NextResponse.json(
+          {
+            requiresTotp: true,
+            error: 'Требуется код двухфакторной аутентификации из приложения-аутентификатора.',
+          },
+          { status: 400 }
+        );
+      }
+      throw loginErr;
+    }
 
     const encryptedPassword = encryptPassword(password);
     const encryptedToken = encryptAuthToken(authToken);
@@ -464,7 +489,7 @@ export async function POST(request: Request) {
         workspaceUrl: normalizedUrl,
         username,
         encryptedPassword,
-        has2FA: has2FA || false,
+        has2FA: Boolean(has2FA) || isStaffHost,
         authToken: encryptedToken,
         userId_RC: rcUserId,
         isActive: true,

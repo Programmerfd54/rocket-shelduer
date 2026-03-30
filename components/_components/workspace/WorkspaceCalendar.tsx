@@ -51,8 +51,8 @@ export function WorkspaceCalendar({ messages, workspaceId }: WorkspaceCalendarPr
   const todayKey = `${today.getFullYear()}-${today.getMonth()}-${today.getDate()}`
 
   return (
-    <Card className="rounded-2xl border-2 border-border/80 bg-card shadow-sm overflow-hidden">
-      <div className="px-4 py-3 border-b border-border/70 bg-muted/20 flex items-center justify-between">
+    <Card className="rounded-2xl border-2 border-teal-500/25 bg-gradient-to-b from-teal-500/[0.12] via-teal-500/[0.06] to-card shadow-sm overflow-hidden">
+      <div className="px-4 py-3 border-b border-teal-500/20 bg-teal-500/10 flex items-center justify-between">
         <h3 className="text-sm font-semibold text-foreground">Календарь по статусам</h3>
         <Link href={`/dashboard/calendar?workspaceId=${workspaceId}`} className="text-xs text-primary hover:underline">
           Полный календарь →
@@ -86,19 +86,24 @@ export function WorkspaceCalendar({ messages, workspaceId }: WorkspaceCalendarPr
             const hasSent = (stat?.sent ?? 0) > 0
             const hasFailed = (stat?.failed ?? 0) > 0
             const total = (stat?.pending ?? 0) + (stat?.sent ?? 0) + (stat?.failed ?? 0)
+            // Жёлтый — есть ожидающие; зелёный — только отправленные (без ожидающих); красный — ошибки
+            const dayTone =
+              hasFailed
+                ? 'bg-rose-500/25 text-rose-800 dark:text-rose-200 ring-1 ring-rose-400/40'
+                : hasPending
+                  ? 'bg-amber-400/35 text-amber-950 dark:text-amber-100 ring-1 ring-amber-400/50'
+                  : hasSent
+                    ? 'bg-emerald-500/30 text-emerald-900 dark:text-emerald-100 ring-1 ring-emerald-400/40'
+                    : 'text-muted-foreground/70'
             return (
               <Link
                 key={key}
                 href={`/dashboard/calendar?workspaceId=${workspaceId}`}
                 className={cn(
-                  'min-h-[36px] flex flex-col items-center justify-center rounded-lg text-xs font-medium transition-colors hover:ring-2 hover:ring-primary/30',
-                  isToday && 'ring-2 ring-primary bg-primary/10',
+                  'min-h-[36px] flex flex-col items-center justify-center rounded-lg text-xs font-medium transition-colors hover:ring-2 hover:ring-teal-500/40',
+                  isToday && 'ring-2 ring-teal-600 bg-teal-500/15',
                   total === 0 && 'text-muted-foreground/60',
-                  total > 0 && !hasFailed && !hasPending && 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300',
-                  total > 0 && hasPending && !hasFailed && 'bg-amber-500/20 text-amber-700 dark:text-amber-300',
-                  total > 0 && hasFailed && 'bg-rose-500/20 text-rose-700 dark:text-rose-300',
-                  total > 0 && hasPending && hasSent && !hasFailed && 'bg-amber-500/25 text-amber-800 dark:text-amber-200',
-                  total > 0 && hasPending && hasFailed && 'bg-rose-500/25 text-rose-800 dark:text-rose-200'
+                  total > 0 && dayTone
                 )}
               >
                 <span>{day}</span>

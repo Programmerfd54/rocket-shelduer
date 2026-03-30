@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { requireAuth } from '@/lib/auth';
-import { isUnsafeId } from '@/lib/security';
+import { isUnsafeId, isValidOfficialTemplateId } from '@/lib/security';
 
 export async function GET(request: Request) {
   try {
@@ -116,7 +116,16 @@ export async function POST(request: Request) {
   try {
     const user = await requireAuth();
     const body = await request.json();
-    const { workspaceId, channelId, channelName, message, scheduledFor, asUserId } = body;
+    const {
+      workspaceId,
+      channelId,
+      channelName,
+      message,
+      scheduledFor,
+      asUserId,
+      sourceUserTemplateId,
+      sourceOfficialTemplateId,
+    } = body;
 
     if (!workspaceId || !channelId || !channelName || !message || !scheduledFor) {
       return NextResponse.json(
@@ -129,6 +138,21 @@ export async function POST(request: Request) {
     }
     if (asUserId && isUnsafeId(asUserId)) {
       return NextResponse.json({ error: 'Bad request' }, { status: 400 });
+    }
+    if (sourceUserTemplateId && isUnsafeId(sourceUserTemplateId)) {
+      return NextResponse.json({ error: 'Bad request' }, { status: 400 });
+    }
+    if (sourceOfficialTemplateId != null && typeof sourceOfficialTemplateId !== 'string') {
+      return NextResponse.json({ error: 'Bad request' }, { status: 400 });
+    }
+    if (sourceOfficialTemplateId && !isValidOfficialTemplateId(sourceOfficialTemplateId)) {
+      return NextResponse.json({ error: 'Bad request' }, { status: 400 });
+    }
+    if (sourceUserTemplateId && sourceOfficialTemplateId) {
+      return NextResponse.json(
+        { error: 'Укажите только один тип шаблона' },
+        { status: 400 }
+      );
     }
 
     const workspace = await prisma.workspaceConnection.findUnique({
@@ -220,6 +244,22 @@ export async function POST(request: Request) {
       );
     }
 
+    let templateIdToLink: string | undefined;
+    if (sourceUserTemplateId) {
+      const tpl = await prisma.userTemplate.findFirst({
+        where: { id: sourceUserTemplateId, userId: user.id },
+      });
+      if (!tpl) {
+        return NextResponse.json({ error: 'Шаблон не найден' }, { status: 404 });
+      }
+      templateIdToLink = tpl.id;
+    }
+
+    const officialIdToLink =
+      sourceOfficialTemplateId && !templateIdToLink
+        ? sourceOfficialTemplateId.trim()
+        : undefined;
+
     const scheduledMessage = await prisma.scheduledMessage.create({
       data: {
         userId: authorId,
@@ -230,6 +270,8 @@ export async function POST(request: Request) {
         message,
         scheduledFor: scheduledDate,
         status: 'PENDING',
+        ...(templateIdToLink ? { sourceUserTemplateId: templateIdToLink } : {}),
+        ...(officialIdToLink ? { sourceOfficialTemplateId: officialIdToLink } : {}),
       },
       include: {
         workspace: {

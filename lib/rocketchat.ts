@@ -45,18 +45,42 @@ interface RocketChatLoginResponse {
       this.baseUrl = baseUrl.replace(/\/$/, '');
     }
   
-    async login(username: string, password: string): Promise<{ authToken: string; userId: string }> {
+    /**
+     * @param totpCode — одноразовый код 2FA (приложение-аутентификатор), если требуется
+     */
+    async login(
+      username: string,
+      password: string,
+      totpCode?: string
+    ): Promise<{ authToken: string; userId: string }> {
       try {
+        const payload: Record<string, string> = { user: username, password };
+        if (totpCode?.trim()) {
+          payload.code = totpCode.trim();
+        }
+
         const response = await fetch(`${this.baseUrl}/api/v1/login`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ user: username, password }),
+          body: JSON.stringify(payload),
         });
-  
+
+        const errorData = await response.json().catch(() => ({}));
+
         if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
+          const errStr = JSON.stringify(errorData).toLowerCase();
+          const errType = String(errorData.errorType || errorData.error || '').toLowerCase();
+          if (
+            errType.includes('totp-required') ||
+            errStr.includes('totp-required') ||
+            (errStr.includes('totp') && errStr.includes('required'))
+          ) {
+            const e = new Error('TOTP_REQUIRED');
+            (e as Error & { code?: string }).code = 'totp-required';
+            throw e;
+          }
           const msg =
             errorData.message ||
             errorData.error ||
@@ -65,21 +89,24 @@ interface RocketChatLoginResponse {
             `Login failed: ${response.statusText}`;
           throw new Error(msg);
         }
-  
-        const data: RocketChatLoginResponse = await response.json();
-  
+
+        const data: RocketChatLoginResponse = errorData as RocketChatLoginResponse;
+
         if (!data.data?.authToken || !data.data?.userId) {
           throw new Error('Invalid login response');
         }
-  
+
         this.authToken = data.data.authToken;
         this.userId = data.data.userId;
-  
+
         return {
           authToken: this.authToken,
           userId: this.userId,
         };
       } catch (error) {
+        if (error instanceof Error && (error as Error & { code?: string }).code === 'totp-required') {
+          throw error;
+        }
         throw new Error(`Failed to login to Rocket.Chat: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
     }
@@ -559,8 +586,147 @@ interface RocketChatLoginResponse {
         name: u.name,
         emails: u.emails,
         lastLogin: u.lastLogin ?? undefined,
+        active: u.active !== false,
       }));
       return { users, total: data.total ?? users.length };
+    }
+
+    /** Все пользователи (постранично). */
+    async listAllUsers(
+      authToken: string,
+      userId: string
+    ): Promise<Array<{ _id: string; username?: string; name?: string; emails?: Array<{ address: string }>; lastLogin?: string; active?: boolean }>> {
+      const out: Array<{ _id: string; username?: string; name?: string; emails?: Array<{ address: string }>; lastLogin?: string; active?: boolean }> = [];
+      let offset = 0;
+      const page = 100;
+      for (;;) {
+        const { users, total } = await this.listUsers(authToken, userId, { count: page, offset });
+        out.push(...users);
+        if (users.length < page || out.length >= total) break;
+        offset += page;
+      }
+      return out;
+    }
+
+    /** Активировать / деактивировать пользователя (users.update с полем active). */
+    async setUserActiveStatus(
+      authToken: string,
+      userId: string,
+      targetUserId: string,
+      active: boolean
+    ): Promise<{ success: boolean; error?: string }> {
+      try {
+        const response = await fetch(`${this.baseUrl}/api/v1/users.update`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Auth-Token': authToken,
+            'X-User-Id': userId,
+          },
+          body: JSON.stringify({
+            userId: targetUserId,
+            data: { active },
+          }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) return { success: false, error: data.error || data.message || response.statusText };
+        return { success: data.success === true };
+      } catch (error: any) {
+        return { success: false, error: error?.message || 'users.update active failed' };
+      }
+    }
+
+    /** Исключить пользователя из публичного канала. */
+    async kickFromChannel(
+      authToken: string,
+      userId: string,
+      roomId: string,
+      targetUserId: string
+    ): Promise<{ success: boolean; error?: string }> {
+      try {
+        const response = await fetch(`${this.baseUrl}/api/v1/channels.kick`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Auth-Token': authToken,
+            'X-User-Id': userId,
+          },
+          body: JSON.stringify({ roomId, userId: targetUserId }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) return { success: false, error: data.error || data.message || response.statusText };
+        return { success: data.success === true };
+      } catch (error: any) {
+        return { success: false, error: error?.message || 'channels.kick failed' };
+      }
+    }
+
+    /** Исключить пользователя из приватной группы. */
+    async kickFromGroup(
+      authToken: string,
+      userId: string,
+      roomId: string,
+      targetUserId: string
+    ): Promise<{ success: boolean; error?: string }> {
+      try {
+        const response = await fetch(`${this.baseUrl}/api/v1/groups.kick`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Auth-Token': authToken,
+            'X-User-Id': userId,
+          },
+          body: JSON.stringify({ roomId, userId: targetUserId }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) return { success: false, error: data.error || data.message || response.statusText };
+        return { success: data.success === true };
+      } catch (error: any) {
+        return { success: false, error: error?.message || 'groups.kick failed' };
+      }
+    }
+
+    async kickFromRoom(
+      authToken: string,
+      userId: string,
+      roomId: string,
+      roomType: 'c' | 'p',
+      targetUserId: string
+    ): Promise<{ success: boolean; error?: string }> {
+      if (roomType === 'p') return this.kickFromGroup(authToken, userId, roomId, targetUserId);
+      return this.kickFromChannel(authToken, userId, roomId, targetUserId);
+    }
+
+    /** Найти пользователя по username (users.info). */
+    async getUserByUsername(
+      authToken: string,
+      userId: string,
+      username: string
+    ): Promise<{ _id: string; username?: string; lastLogin?: string; active?: boolean } | null> {
+      try {
+        const response = await fetch(
+          `${this.baseUrl}/api/v1/users.info?username=${encodeURIComponent(username.replace(/^@/, ''))}`,
+          {
+            method: 'GET',
+            headers: {
+              'X-Auth-Token': authToken,
+              'X-User-Id': userId,
+            },
+          }
+        );
+        if (!response.ok) return null;
+        const data = await response.json().catch(() => ({}));
+        const u = data.user;
+        if (!u?._id) return null;
+        return {
+          _id: u._id,
+          username: u.username,
+          lastLogin: u.lastLogin,
+          active: u.active,
+        };
+      } catch {
+        return null;
+      }
     }
 
     /** Обновить пароль пользователя в RC (users.update). Требуется право edit-other-user-password. */

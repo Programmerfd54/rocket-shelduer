@@ -32,6 +32,7 @@ export async function GET() {
         tags: t.tags ?? [],
         createdAt: t.createdAt.toISOString(),
         updatedAt: t.updatedAt.toISOString(),
+        lastSentAt: t.lastSentAt ? t.lastSentAt.toISOString() : null,
       })),
     });
   } catch (error) {

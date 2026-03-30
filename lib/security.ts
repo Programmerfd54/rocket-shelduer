@@ -73,6 +73,14 @@ export function isUnsafeId(value: string | null | undefined): boolean {
   return false;
 }
 
+/** id общего шаблона из lib/templates-data (напр. d1-09), не cuid */
+export function isValidOfficialTemplateId(value: string | null | undefined): boolean {
+  if (value == null || typeof value !== 'string') return false;
+  const s = value.trim();
+  if (s.length === 0 || s.length > 80) return false;
+  if (isPathTraversal(s)) return false;
+  return /^[a-zA-Z0-9._-]+$/.test(s);
+}
 
 /** Подозрительные паттерны: SQL-подобные конструкции, теги скриптов, опасные символы. */
 const SUSPICIOUS_PATTERNS = [
