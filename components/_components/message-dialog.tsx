@@ -198,7 +198,7 @@ export default function MessageDialog({
   const [templatePickerTab, setTemplatePickerTab] = useState<'common' | 'mine'>('common')
 
   const filterByChannel = useCallback(
-    (list: { channel: string }[]) => {
+    <T extends { channel: string },>(list: T[]): T[] => {
       const cn = normCh(channelName)
       return list.filter((t) => normCh(t.channel) === cn)
     },
@@ -211,7 +211,7 @@ export default function MessageDialog({
 
   const commonTemplateCount = filteredOfficialSup.length + filteredOfficialAdm.length
   const hasCommonTemplates = commonTemplateCount > 0
-  const hasMineTemplatesOnlyCount = filteredMine.length > 0
+  const hasMineTemplates = filteredMine.length > 0
 
   const selectedTemplateSummary = useMemo(() => {
     if (selectedTemplateValue === 'none') return null
@@ -230,9 +230,9 @@ export default function MessageDialog({
 
   useEffect(() => {
     if (!open || editingMessage) return
-    if (hasMineTemplatesOnlyCount > 0 && !hasCommonTemplates) setTemplatePickerTab('mine')
+    if (hasMineTemplates && !hasCommonTemplates) setTemplatePickerTab('mine')
     else setTemplatePickerTab('common')
-  }, [open, editingMessage, hasMineTemplatesOnlyCount, hasCommonTemplates])
+  }, [open, editingMessage, hasMineTemplates, hasCommonTemplates])
 
   const hasTemplatesForChannel =
     filteredOfficialSup.length + filteredOfficialAdm.length + filteredMine.length > 0
@@ -698,7 +698,7 @@ export default function MessageDialog({
                       )}
                     </div>
 
-                    {hasCommonTemplates && hasMineTemplatesOnlyCount > 0 ? (
+                    {hasCommonTemplates && hasMineTemplates ? (
                       <Tabs
                         value={templatePickerTab}
                         onValueChange={(v) => setTemplatePickerTab(v as 'common' | 'mine')}
