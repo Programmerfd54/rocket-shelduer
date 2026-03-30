@@ -1,6 +1,25 @@
-version: '3.8'
+# Запуск: из каталога с .env
+#   docker compose up -d --build
+# Полная пересборка с нуля (осторожно: удалит данные БД в volume):
+#   docker compose down -v && docker compose up -d --build
 
 services:
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-rocketchat_scheduler}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-rocketchat_scheduler}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   web:
     build: .
     ports:
@@ -8,6 +27,9 @@ services:
     env_file:
       - .env
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   cron:
     build:
@@ -25,3 +47,6 @@ services:
       sleep 60;
       done"
     restart: unless-stopped
+
+volumes:
+  postgres_data:
