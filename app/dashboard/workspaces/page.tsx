@@ -29,6 +29,7 @@ import { toast } from 'sonner'
 import { formatLocalDate } from '@/lib/utils'
 import { WorkspaceDialog } from '@/components/_components/workspace-dialog'
 import WorkspaceForm, { type Workspace } from '@/components/_components/WorkspaceForm'
+import { WorkspaceEditDialog } from '@/components/common/WorkspaceEditDialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Breadcrumbs } from '@/components/common/Breadcrumbs'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -48,6 +49,8 @@ export default function WorkspacesPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [sortBy, setSortBy] = useState<'name' | 'createdAt' | 'endDate' | 'lastConnected'>('createdAt')
   const [viewMode, setViewMode] = useState<'grid' | 'compact'>('grid')
+  const [settingsWorkspace, setSettingsWorkspace] = useState<Workspace | null>(null)
+
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(() => {
     if (typeof window === 'undefined') return new Set()
     try {
@@ -94,6 +97,15 @@ export default function WorkspacesPage() {
       })
     }
   }, [workspaces, router])
+
+  const handleWorkspaceSettings = (ws: Workspace) => {
+    if (userRole === 'VOL') return
+    if (ws.isAssigned) {
+      router.push(`/dashboard/workspaces/${ws.id}`)
+      return
+    }
+    setSettingsWorkspace(ws)
+  }
 
   const loadWorkspaces = async () => {
     try {
@@ -431,6 +443,7 @@ export default function WorkspacesPage() {
           groupNamesByWorkspaceId={groupNamesByWorkspaceId}
           isFavorite={isFavorite}
           onToggleFavorite={toggleFavorite}
+          onWorkspaceSettings={userRole !== 'VOL' ? handleWorkspaceSettings : undefined}
         />
       )}
 
@@ -470,6 +483,21 @@ export default function WorkspacesPage() {
             />
           </CardContent>
         </Card>
+      )}
+
+      {settingsWorkspace && (
+        <WorkspaceEditDialog
+          key={settingsWorkspace.id}
+          workspace={settingsWorkspace}
+          open={true}
+          onOpenChange={(o) => {
+            if (!o) setSettingsWorkspace(null)
+          }}
+          onSuccess={() => {
+            setSettingsWorkspace(null)
+            loadWorkspaces()
+          }}
+        />
       )}
     </div>
   )

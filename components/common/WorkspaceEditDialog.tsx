@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -30,10 +30,24 @@ import {
 interface WorkspaceEditDialogProps {
   workspace: any
   onSuccess: () => void
+  /** Внешнее управление открытием (например, кнопка «Настройки» на карточке в списке) */
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
 }
 
-export function WorkspaceEditDialog({ workspace, onSuccess }: WorkspaceEditDialogProps) {
-  const [open, setOpen] = useState(false)
+export function WorkspaceEditDialog({
+  workspace,
+  onSuccess,
+  open: openProp,
+  onOpenChange: onOpenChangeProp,
+}: WorkspaceEditDialogProps) {
+  const [internalOpen, setInternalOpen] = useState(false)
+  const isControlled = openProp !== undefined
+  const open = isControlled ? openProp : internalOpen
+  const setOpen = (next: boolean) => {
+    if (isControlled) onOpenChangeProp?.(next)
+    else setInternalOpen(next)
+  }
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [showArchiveDialog, setShowArchiveDialog] = useState(false)
   const [isArchiving, setIsArchiving] = useState(false)
@@ -46,6 +60,26 @@ export function WorkspaceEditDialog({ workspace, onSuccess }: WorkspaceEditDialo
     startDate: workspace.startDate ? new Date(workspace.startDate).toISOString().split('T')[0] : '',
     endDate: workspace.endDate ? new Date(workspace.endDate).toISOString().split('T')[0] : ''
   })
+
+  useEffect(() => {
+    setFormData({
+      workspaceName: workspace.workspaceName,
+      workspaceUrl: workspace.workspaceUrl,
+      username: workspace.username,
+      password: '',
+      has2FA: workspace.has2FA,
+      startDate: workspace.startDate ? new Date(workspace.startDate).toISOString().split('T')[0] : '',
+      endDate: workspace.endDate ? new Date(workspace.endDate).toISOString().split('T')[0] : ''
+    })
+  }, [
+    workspace.id,
+    workspace.workspaceName,
+    workspace.workspaceUrl,
+    workspace.username,
+    workspace.has2FA,
+    workspace.startDate,
+    workspace.endDate,
+  ])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -128,12 +162,14 @@ export function WorkspaceEditDialog({ workspace, onSuccess }: WorkspaceEditDialo
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button variant="outline" size="sm">
-          <Settings className="mr-2 h-4 w-4" />
-          Настройки
-        </Button>
-      </DialogTrigger>
+      {!isControlled && (
+        <DialogTrigger asChild>
+          <Button variant="outline" size="sm">
+            <Settings className="mr-2 h-4 w-4" />
+            Настройки
+          </Button>
+        </DialogTrigger>
+      )}
       <DialogContent className="sm:max-w-[500px]">
         <form onSubmit={handleSubmit}>
           <DialogHeader>

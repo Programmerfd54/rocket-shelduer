@@ -26,6 +26,7 @@ import {
   WifiOff,
   TrendingUp,
   Clock,
+  Settings,
 } from 'lucide-react'
 import { Spinner } from '@/components/ui/spinner'
 import { formatRelativeTime } from '@/lib/utils'
@@ -84,6 +85,8 @@ interface WorkspaceFormProps {
   groupNamesByWorkspaceId?: Record<string, string>
   isFavorite?: (workspaceId: string) => boolean
   onToggleFavorite?: (workspaceId: string) => void
+  /** Название, даты интенсива, URL, архив (владелец); у назначенных — открыть пространство для подключения к RC */
+  onWorkspaceSettings?: (workspace: Workspace) => void
 }
 
 function formatIntensiveDates(start?: Date | string | null, end?: Date | string | null): string | null {
@@ -208,6 +211,7 @@ export default function WorkspaceForm({
   groupNamesByWorkspaceId = {},
   isFavorite,
   onToggleFavorite,
+  onWorkspaceSettings,
 }: WorkspaceFormProps) {
   const [archiveTarget, setArchiveTarget] = useState<Workspace | null>(null)
   const [archiving, setArchiving] = useState(false)
@@ -431,6 +435,33 @@ export default function WorkspaceForm({
                           {workspace.messageCountPending}
                         </Badge>
                       )}
+                      {onWorkspaceSettings && (
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-8 w-8 p-0"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  onWorkspaceSettings(workspace)
+                                }}
+                                aria-label="Настройки пространства"
+                              >
+                                <Settings className="h-4 w-4" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p className="text-xs">
+                                {workspace.isAssigned
+                                  ? 'Открыть пространство (подключение к Rocket.Chat)'
+                                  : 'Название, даты, архив'}
+                              </p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      )}
                       <TooltipProvider>
                         <Tooltip>
                           <TooltipTrigger asChild>
@@ -568,20 +599,49 @@ export default function WorkspaceForm({
                       </div>
                     </div>
 
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 shrink-0 hover:bg-transparent"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        onToggleFavorite?.(workspace.id)
-                      }}
-                    >
-                      <Star className={cn(
-                        "h-5 w-5 transition-all duration-300",
-                        favorite ? "fill-yellow-400 text-yellow-400 scale-110" : "text-muted-foreground hover:text-yellow-400"
-                      )} />
-                    </Button>
+                    <div className="flex items-center gap-0.5 shrink-0">
+                      {onWorkspaceSettings && (
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 hover:bg-muted/80"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  onWorkspaceSettings(workspace)
+                                }}
+                                aria-label="Настройки пространства"
+                              >
+                                <Settings className="h-[18px] w-[18px] text-muted-foreground hover:text-foreground" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent side="bottom" className="max-w-[220px]">
+                              <p className="text-xs">
+                                {workspace.isAssigned
+                                  ? 'Открыть пространство: подключение к Rocket.Chat и работа с каналами'
+                                  : 'Название, даты интенсива, адрес сервера, архив'}
+                              </p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      )}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 shrink-0 hover:bg-transparent"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          onToggleFavorite?.(workspace.id)
+                        }}
+                      >
+                        <Star className={cn(
+                          "h-5 w-5 transition-all duration-300",
+                          favorite ? "fill-yellow-400 text-yellow-400 scale-110" : "text-muted-foreground hover:text-yellow-400"
+                        )} />
+                      </Button>
+                    </div>
                   </div>
                 </CardHeader>
 
@@ -747,6 +807,21 @@ export default function WorkspaceForm({
                   )}
 
                   <div className="flex flex-wrap gap-2 pt-2">
+                    {onWorkspaceSettings && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="gap-1.5 border-border/80"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          onWorkspaceSettings(workspace)
+                        }}
+                      >
+                        <Settings className="h-4 w-4 shrink-0" />
+                        <span className="hidden sm:inline">Настройки</span>
+                      </Button>
+                    )}
                     <Button 
                       onClick={(e) => { e.stopPropagation(); onOpenWorkspace(workspace) }} 
                       className="flex-1 min-w-[100px]" 

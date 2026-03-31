@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
+import { sameRcInstanceUrl } from '@/lib/workspace-rc';
 import { requireAuth, isUserEffectivelyBlocked } from '@/lib/auth';
 import { encryptPassword, encryptAuthToken } from '@/lib/encryption';
 import { RocketChatClient } from '@/lib/rocketchat';
@@ -72,7 +73,6 @@ export async function GET(request: Request) {
           select: { workspaceId: true },
         });
         const assignedIds = [...new Set(assignments.map((a) => a.workspaceId))];
-        const normalizeUrlList = (u: string) => (u || '').trim().replace(/\/+$/, '').toLowerCase();
         if (assignedIds.length > 0) {
           const assignedWorkspacesRaw = await prisma.workspaceConnection.findMany({
             where: { id: { in: assignedIds }, isArchived: archived },
@@ -93,10 +93,10 @@ export async function GET(request: Request) {
               color: true,
             },
           });
-          const assignedUrls = new Set(assignedWorkspacesRaw.map((w) => normalizeUrlList(w.workspaceUrl)));
-          // Свои подключения с тем же URL, что и у назначенного, не показываем — в списке только назначенное пространство
+          // Свои подключения к тому же инстансу RC, что и назначенное, не показываем (как и при точном совпадении URL)
           const ownFiltered = ownWorkspaces.filter(
-            (w) => !assignedUrls.has(normalizeUrlList(w.workspaceUrl))
+            (w) =>
+              !assignedWorkspacesRaw.some((a) => sameRcInstanceUrl(w.workspaceUrl, a.workspaceUrl))
           );
           workspaces = [
             ...ownFiltered.map((w) => ({ ...w, isAssigned: false as const })),
