@@ -783,6 +783,14 @@ export default function WorkspaceDetailPage() {
           toast.info('Требуется подключение', {
             description: 'Войдите в Rocket.Chat своими учётными данными, чтобы загрузить каналы.',
           })
+        } else if (channelsResponse.status === 401) {
+          toast.error('Нет активного входа в Rocket.Chat', {
+            description:
+              errorData.error === 'Workspace not authenticated'
+                ? 'Укажите логин и пароль в «Настройки» пространства или нажмите «Проверить подключение». После смены пароля в Rocket.Chat войдите заново.'
+                : errorData.details || errorData.error || 'Не удалось авторизоваться в Rocket.Chat для этого пространства.',
+            action: { label: 'Повторить', onClick: () => loadData() },
+          })
         } else {
           toast.error('Ошибка загрузки каналов', {
             description: errorData.details || 'Не удалось загрузить каналы',
