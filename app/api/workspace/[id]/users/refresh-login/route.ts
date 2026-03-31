@@ -48,10 +48,11 @@ export async function POST(
     } catch (loginError: any) {
       return NextResponse.json(
         {
+          code: 'RC_LOGIN_FAILED',
           error: 'Не удалось войти. Проверьте учётные данные администратора.',
           details: loginError?.message,
         },
-        { status: 401 }
+        { status: 403 }
       );
     }
 

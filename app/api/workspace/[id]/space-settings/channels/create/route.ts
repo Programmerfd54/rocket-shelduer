@@ -4,6 +4,7 @@ import { getSafeErrorMessage } from '@/lib/security';
 import { requireAuth } from '@/lib/auth';
 import { RocketChatClient } from '@/lib/rocketchat';
 import { getEffectiveConnectionForRc } from '@/lib/workspace-rc';
+import { rcNotConnectedResponse } from '@/lib/rc-http';
 import { applyHideSystemMessages, getHideSystemMessagesValuesAsync } from '@/lib/space-settings-rc';
 
 /** POST — создать канал в Rocket.Chat (публичный или приватный) с topic и description. */
@@ -32,10 +33,9 @@ export async function POST(
 
     const effective = await getEffectiveConnectionForRc(user.id, workspaceId);
     if (!effective?.authToken || !effective.userId_RC) {
-      return NextResponse.json(
-        { error: 'Подключитесь к пространству (учётные данные Rocket.Chat)' },
-        { status: 401 }
-      );
+      return rcNotConnectedResponse({
+        error: 'Подключитесь к пространству (учётные данные Rocket.Chat)',
+      });
     }
 
     const baseUrl = effective.workspaceUrl.replace(/\/$/, '');

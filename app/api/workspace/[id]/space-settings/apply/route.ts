@@ -3,6 +3,7 @@ import prisma from '@/lib/prisma';
 import { getSafeErrorMessage } from '@/lib/security';
 import { requireAuth } from '@/lib/auth';
 import { getEffectiveConnectionForRc } from '@/lib/workspace-rc';
+import { rcNotConnectedResponse } from '@/lib/rc-http';
 import {
   type SettingKey,
   applyHideSystemMessages,
@@ -48,10 +49,7 @@ export async function POST(
 
     const effective = await getEffectiveConnectionForRc(user.id, workspaceId);
     if (!effective?.authToken || !effective.userId_RC) {
-      return NextResponse.json(
-        { error: 'Подключитесь к пространству' },
-        { status: 401 }
-      );
+      return rcNotConnectedResponse({ error: 'Подключитесь к пространству' });
     }
 
     const baseUrl = effective.workspaceUrl.replace(/\/$/, '');

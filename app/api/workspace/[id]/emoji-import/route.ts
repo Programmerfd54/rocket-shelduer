@@ -63,11 +63,12 @@ export async function POST(
     } catch (loginError: any) {
       return NextResponse.json(
         {
+          code: 'RC_LOGIN_FAILED',
           error:
             'Не удалось войти с указанными учётными данными. Проверьте логин и пароль администратора для этого сервера Rocket.Chat.',
           details: loginError?.message,
         },
-        { status: 401 }
+        { status: 403 }
       );
     }
 

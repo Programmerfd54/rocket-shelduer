@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/auth';
 import { getSafeErrorMessage } from '@/lib/security';
 import { getEffectiveConnectionForRc } from '@/lib/workspace-rc';
+import { rcNotConnectedResponse } from '@/lib/rc-http';
 import { applyThreadDefault } from '@/lib/space-settings-rc';
 
 /**
@@ -18,10 +19,7 @@ export async function POST(
 
     const effective = await getEffectiveConnectionForRc(user.id, workspaceId);
     if (!effective?.authToken || !effective.userId_RC) {
-      return NextResponse.json(
-        { error: 'Подключитесь к пространству' },
-        { status: 401 }
-      );
+      return rcNotConnectedResponse({ error: 'Подключитесь к пространству' });
     }
 
     const baseUrl = effective.workspaceUrl.replace(/\/$/, '');

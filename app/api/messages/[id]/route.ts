@@ -207,8 +207,8 @@ export async function PATCH(
       const editToken = workspace?.authToken ? decryptAuthToken(workspace.authToken) : null;
       if (!workspace || !editToken || !workspace.userId_RC) {
         return NextResponse.json(
-          { error: 'Workspace not authenticated' },
-          { status: 401 }
+          { error: 'Workspace not authenticated', code: 'RC_NOT_CONNECTED' },
+          { status: 403 }
         );
       }
 

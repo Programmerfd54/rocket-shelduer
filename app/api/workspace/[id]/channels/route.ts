@@ -3,6 +3,7 @@ import prisma from '@/lib/prisma';
 import { requireAuth } from '@/lib/auth';
 import { RocketChatClient } from '@/lib/rocketchat';
 import { getEffectiveConnectionForRc } from '@/lib/workspace-rc';
+import { rcNotConnectedResponse, rcUnauthorizedResponse } from '@/lib/rc-http';
 
 export async function GET(
   request: Request,
@@ -36,10 +37,7 @@ export async function GET(
 
     const effective = await getEffectiveConnectionForRc(user.id, id);
     if (!effective?.authToken || !effective.userId_RC) {
-      return NextResponse.json(
-        { error: 'Workspace not authenticated' },
-        { status: 401 }
-      );
+      return rcNotConnectedResponse();
     }
 
     try {
@@ -89,12 +87,9 @@ export async function GET(
       }
 
       if (rcError.message?.includes('Unauthorized')) {
-        return NextResponse.json(
-          { 
-            error: 'Ошибка авторизации',
-            details: 'Обновите credentials в настройках workspace'
-          },
-          { status: 401 }
+        return rcUnauthorizedResponse(
+          'Ошибка авторизации',
+          'Обновите credentials в настройках workspace'
         );
       }
 

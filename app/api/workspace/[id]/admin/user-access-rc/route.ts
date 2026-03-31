@@ -92,7 +92,10 @@ export async function POST(
               msg.toLowerCase().includes('unauthorized') || msg.toLowerCase().includes('invalid')
                 ? 'Проверьте логин и пароль. Если входите через OAuth/SSO — у аккаунта может не быть пароля для API.'
                 : msg ? `Ошибка Rocket.Chat: ${msg}` : 'Проверьте логин и пароль.';
-            return NextResponse.json({ error: 'Не удалось войти в Rocket.Chat. ' + hint, details: msg }, { status: 401 });
+            return NextResponse.json(
+              { code: 'RC_LOGIN_FAILED', error: 'Не удалось войти в Rocket.Chat. ' + hint, details: msg },
+              { status: 403 }
+            );
           }
         } else {
           return NextResponse.json(
@@ -113,7 +116,10 @@ export async function POST(
           msg.toLowerCase().includes('unauthorized') || msg.toLowerCase().includes('invalid')
             ? 'Проверьте логин и пароль. Если входите через OAuth/SSO — у аккаунта может не быть пароля для API.'
             : msg ? `Ошибка Rocket.Chat: ${msg}` : 'Проверьте логин и пароль.';
-        return NextResponse.json({ error: 'Не удалось войти в Rocket.Chat. ' + hint, details: msg }, { status: 401 });
+        return NextResponse.json(
+          { code: 'RC_LOGIN_FAILED', error: 'Не удалось войти в Rocket.Chat. ' + hint, details: msg },
+          { status: 403 }
+        );
       }
     } else {
       return NextResponse.json(

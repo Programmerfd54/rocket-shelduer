@@ -778,15 +778,20 @@ export default function WorkspaceDetailPage() {
         setChannels(channelsData.channels)
       } else {
         const errorData = await channelsResponse.json().catch(() => ({}))
-        if (channelsResponse.status === 401 && ws?.isAssigned) {
+        const rcNotConnected =
+          errorData.code === 'RC_NOT_CONNECTED' ||
+          errorData.error === 'Workspace not authenticated' ||
+          channelsResponse.status === 401 ||
+          channelsResponse.status === 403
+        if (rcNotConnected && ws?.isAssigned) {
           setConfirmAssignmentOpen(true)
           toast.info('Требуется подключение', {
             description: 'Войдите в Rocket.Chat своими учётными данными, чтобы загрузить каналы.',
           })
-        } else if (channelsResponse.status === 401) {
+        } else if (rcNotConnected) {
           toast.error('Нет активного входа в Rocket.Chat', {
             description:
-              errorData.error === 'Workspace not authenticated'
+              errorData.error === 'Workspace not authenticated' || errorData.code === 'RC_NOT_CONNECTED'
                 ? 'Укажите логин и пароль в «Настройки» пространства или нажмите «Проверить подключение». После смены пароля в Rocket.Chat войдите заново.'
                 : errorData.details || errorData.error || 'Не удалось авторизоваться в Rocket.Chat для этого пространства.',
             action: { label: 'Повторить', onClick: () => loadData() },
