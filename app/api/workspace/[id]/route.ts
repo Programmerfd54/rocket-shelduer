@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { requireAuth } from '@/lib/auth';
-import { encryptPassword } from '@/lib/encryption';
+import { encryptPassword, encryptAuthToken } from '@/lib/encryption';
+import { RocketChatClient } from '@/lib/rocketchat';
 import { logSecurityEvent, getClientIp, isSuspiciousInput, isUnsafeId, SecurityEventType } from '@/lib/security';
 import { sameRcInstanceUrl } from '@/lib/workspace-rc';
 
@@ -132,6 +133,7 @@ export async function PATCH(
       startDate,
       endDate,
       color,
+      totpCode,
     } = body;
 
     if (
@@ -167,11 +169,46 @@ export async function PATCH(
       updatedAt: new Date(),
     };
 
-    // Обновляем пароль только если он передан
+    // Смена пароля: сразу входим в Rocket.Chat и сохраняем токен (иначе каналы/API RC остаются без сессии)
     if (password) {
-      updateData.encryptedPassword = encryptPassword(password);
-      // Сбрасываем authToken при смене пароля
-      updateData.authToken = null;
+      const rcUrl = (workspaceUrl ?? workspace.workspaceUrl ?? '').trim();
+      const rcUser = (username ?? workspace.username ?? '').trim();
+      if (!rcUrl || !rcUser) {
+        return NextResponse.json(
+          { error: 'Укажите адрес сервера и логин Rocket.Chat вместе с паролем.' },
+          { status: 400 }
+        );
+      }
+      const rcClient = new RocketChatClient(rcUrl);
+      try {
+        const totp =
+          typeof totpCode === 'string' && totpCode.trim() ? totpCode.trim() : undefined;
+        const loginResult = await rcClient.login(rcUser, password, totp);
+        updateData.encryptedPassword = encryptPassword(password);
+        updateData.authToken = encryptAuthToken(loginResult.authToken);
+        updateData.userId_RC = loginResult.userId;
+        updateData.isActive = true;
+        updateData.lastConnected = new Date();
+      } catch (loginErr: unknown) {
+        const e = loginErr as Error & { code?: string };
+        if (e?.message === 'TOTP_REQUIRED' || e?.code === 'totp-required') {
+          return NextResponse.json(
+            {
+              requiresTotp: true,
+              error:
+                'Требуется код двухфакторной аутентификации из приложения-аутентификатора.',
+            },
+            { status: 400 }
+          );
+        }
+        return NextResponse.json(
+          {
+            error:
+              'Не удалось войти в Rocket.Chat с указанным паролем. Проверьте адрес сервера, логин и пароль.',
+          },
+          { status: 400 }
+        );
+      }
     }
 
     // Обновляем даты если переданы
