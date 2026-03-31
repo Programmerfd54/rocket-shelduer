@@ -22,8 +22,10 @@ services:
 
   web:
     build: .
+    # Снаружи 4001 — как в deploy/nginx-example.conf и Caddy на sheduler.yar.21-school.ru (прокси на 127.0.0.1:4001).
+    # Если прокси настроен на другой порт — поменяйте левую часть (например "3000:3000").
     ports:
-      - "3000:3000"
+      - "4001:3000"
     env_file:
       - .env
     restart: unless-stopped

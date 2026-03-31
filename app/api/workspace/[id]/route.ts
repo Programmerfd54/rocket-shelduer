@@ -3,6 +3,7 @@ import prisma from '@/lib/prisma';
 import { requireAuth } from '@/lib/auth';
 import { encryptPassword } from '@/lib/encryption';
 import { logSecurityEvent, getClientIp, isSuspiciousInput, isUnsafeId, SecurityEventType } from '@/lib/security';
+import { sameRcInstanceUrl } from '@/lib/workspace-rc';
 
 // GET - получить workspace по ID (владелец или ADM с назначением)
 export async function GET(
@@ -65,13 +66,13 @@ export async function GET(
         where: { userId: user.id, workspaceId: id },
       });
       if (assignment) {
-        const norm = (u: string) => (u || '').trim().replace(/\/+$/, '').toLowerCase();
-        const workspaceNorm = norm(workspace.workspaceUrl);
         const ownList = await prisma.workspaceConnection.findMany({
           where: { userId: user.id },
           select: { id: true, workspaceUrl: true },
         });
-        const ownConnection = ownList.find((c) => norm(c.workspaceUrl) === workspaceNorm);
+        const ownConnection = ownList.find((c) =>
+          sameRcInstanceUrl(c.workspaceUrl, workspace.workspaceUrl)
+        );
         const { userId: _u, ...rest } = workspace;
         return NextResponse.json({
           workspace: { ...rest, isAssigned: true, hasOwnConnection: !!ownConnection },

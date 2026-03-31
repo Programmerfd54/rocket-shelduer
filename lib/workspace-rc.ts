@@ -3,6 +3,34 @@ import { decryptAuthToken } from '@/lib/encryption';
 
 const normalizeUrl = (u: string) => (u || '').trim().replace(/\/+$/, '').toLowerCase();
 
+/** host:port для одного инстанса RC (учёт http/https и порта по умолчанию). */
+function hostPortKey(raw: string): string | null {
+  const u = (raw || '').trim();
+  if (!u) return null;
+  try {
+    const href = /^https?:\/\//i.test(u) ? u : `https://${u}`;
+    const url = new URL(href);
+    const port =
+      url.port ||
+      (url.protocol === 'https:' ? '443' : url.protocol === 'http:' ? '80' : '');
+    return `${url.hostname.toLowerCase()}:${port}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Один и тот же сервер Rocket.Chat: совпадает строка после trim/slash или тот же host:port.
+ * Нужно для многопользовательских пространств: после правки URL у владельца (протокол, слэш, порт)
+ * назначенный пользователь всё ещё находит «своё» подключение к тому же инстансу.
+ */
+export function sameRcInstanceUrl(a: string, b: string): boolean {
+  if (normalizeUrl(a) === normalizeUrl(b)) return true;
+  const ka = hostPortKey(a);
+  const kb = hostPortKey(b);
+  return ka != null && kb != null && ka === kb;
+}
+
 /**
  * Возвращает подключение для вызовов RC API.
  * authToken расшифровывается при чтении (хранится зашифрованным).
@@ -39,13 +67,15 @@ export async function getEffectiveConnectionForRc(
     return toConnection(workspace, decrypted);
   }
 
-  // Назначенное: есть ли у пользователя своё подключение к тому же URL?
-  const norm = normalizeUrl(workspace.workspaceUrl);
+  // Назначенное: есть ли у пользователя своё подключение к тому же инстансу RC?
   const ownList = await prisma.workspaceConnection.findMany({
     where: { userId },
     select: { id: true, workspaceUrl: true, authToken: true, userId_RC: true, userId: true, username: true },
   });
-  const own = ownList.find((c) => normalizeUrl(c.workspaceUrl) === norm && c.authToken && c.userId_RC);
+  const own = ownList.find(
+    (c) =>
+      sameRcInstanceUrl(c.workspaceUrl, workspace.workspaceUrl) && c.authToken && c.userId_RC
+  );
   if (own) {
     const ownDecrypted = decryptAuthToken(own.authToken);
     if (ownDecrypted) return toConnection(own, ownDecrypted);
