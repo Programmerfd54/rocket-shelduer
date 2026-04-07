@@ -54,18 +54,19 @@ export async function POST(
     const body = await request.json().catch(() => ({}));
     const adminUsername = (body.adminUsername ?? '').trim();
     const adminPassword = typeof body.adminPassword === 'string' ? body.adminPassword : '';
-    const filterUsernames = Array.isArray(body.usernames)
-      ? (body.usernames as string[]).map((u) => String(u).trim().toLowerCase()).filter(Boolean)
-      : null;
+    /** Порядок и написание как в запросе — для проверки по списку не полагаемся на users.list (у RC бывает неверный total / лимит страницы). */
+    const requestedUsernames = Array.isArray(body.usernames)
+      ? (body.usernames as string[]).map((u) => String(u).trim()).filter(Boolean)
+      : [];
 
     const baseUrl = workspace.workspaceUrl.replace(/\/$/, '');
     const rc = new RocketChatClient(baseUrl);
     let authToken: string;
     let rcUserId: string;
 
-    // 1. Если запрашивают полный список (пустой filterUsernames) — требуем креды админа RC.
+    // 1. Если запрашивают полный список (без логинов) — требуем креды админа RC.
     //    Без кредов можно только по конкретным логинам (через user-access API для добавленных).
-    if ((!filterUsernames || filterUsernames.length === 0) && (!adminUsername || !adminPassword)) {
+    if (requestedUsernames.length === 0 && (!adminUsername || !adminPassword)) {
       return NextResponse.json(
         { error: 'Для получения полного списка пользователей RC укажите логин и пароль администратора Rocket.Chat.' },
         { status: 400 }
@@ -74,7 +75,7 @@ export async function POST(
 
     // 2. Пробуем существующее подключение — работает, если вы владелец/назначены и подключены
     const effective = await getEffectiveConnectionForRc(currentUser.id, workspaceId);
-    if (effective?.authToken && effective?.userId_RC && (filterUsernames?.length ?? 0) > 0) {
+    if (effective?.authToken && effective?.userId_RC && requestedUsernames.length > 0) {
       try {
         await rc.listUsers(effective.authToken, effective.userId_RC, { count: 1, offset: 0 });
         authToken = effective.authToken;
@@ -128,16 +129,54 @@ export async function POST(
       );
     }
 
+    /** Явный список логинов — users.info по каждому (не users.list: у RC часто кривой total/размер страницы). */
+    if (requestedUsernames.length > 0) {
+      if (requestedUsernames.length > 100) {
+        return NextResponse.json({ error: 'Максимум 100 пользователей за запрос.' }, { status: 400 });
+      }
+      const results: Array<{
+        username: string;
+        email?: string;
+        lastLogin?: string | null;
+        rcUserId?: string;
+        found: boolean;
+        enteredWorkspace?: boolean;
+        lastEnteredAt?: string | null;
+        message?: string;
+      }> = [];
+      for (const name of requestedUsernames) {
+        const u = await rc.getUserByUsername(authToken, rcUserId, name);
+        if (u) {
+          const lastLogin = u.lastLogin ?? null;
+          results.push({
+            username: u.username ?? name,
+            email: u.email ?? '',
+            lastLogin,
+            rcUserId: u._id,
+            found: true,
+            enteredWorkspace: !!lastLogin,
+            lastEnteredAt: lastLogin,
+          });
+        } else {
+          results.push({
+            username: name,
+            found: false,
+            message: 'Не найден в Rocket.Chat',
+          });
+        }
+      }
+      return NextResponse.json({ results, total: results.length });
+    }
+
     const allUsers: Array<{ _id: string; username?: string; name?: string; emails?: Array<{ address: string }>; lastLogin?: string }> = [];
     let offset = 0;
     const pageSize = 100;
-    let total = 0;
-    do {
-      const { users, total: t } = await rc.listUsers(authToken, rcUserId, { count: pageSize, offset });
-      allUsers.push(...users);
-      total = t;
-      offset += pageSize;
-    } while (allUsers.length < total && offset < 5000);
+    while (offset < 5000) {
+      const { users: batch } = await rc.listUsers(authToken, rcUserId, { count: pageSize, offset });
+      if (batch.length === 0) break;
+      allUsers.push(...batch);
+      offset += batch.length;
+    }
 
     const normalized = allUsers.map((u) => ({
       rcUserId: u._id,
@@ -146,14 +185,8 @@ export async function POST(
       lastLogin: u.lastLogin ?? null,
     }));
 
-    let results = normalized;
-    if (filterUsernames && filterUsernames.length > 0) {
-      const set = new Set(filterUsernames);
-      results = normalized.filter((r) => set.has((r.username || '').toLowerCase()) || set.has((r.email || '').toLowerCase()));
-    }
-
     return NextResponse.json({
-      results: results.map((r) => ({
+      results: normalized.map((r) => ({
         username: r.username,
         email: r.email,
         lastLogin: r.lastLogin,
@@ -162,7 +195,7 @@ export async function POST(
         enteredWorkspace: !!r.lastLogin,
         lastEnteredAt: r.lastLogin,
       })),
-      total: results.length,
+      total: normalized.length,
     });
   } catch (error) {
     console.error('User access RC error:', error);

@@ -702,7 +702,13 @@ interface RocketChatLoginResponse {
       authToken: string,
       userId: string,
       username: string
-    ): Promise<{ _id: string; username?: string; lastLogin?: string; active?: boolean } | null> {
+    ): Promise<{
+      _id: string;
+      username?: string;
+      email?: string;
+      lastLogin?: string;
+      active?: boolean;
+    } | null> {
       try {
         const response = await fetch(
           `${this.baseUrl}/api/v1/users.info?username=${encodeURIComponent(username.replace(/^@/, ''))}`,
@@ -721,6 +727,7 @@ interface RocketChatLoginResponse {
         return {
           _id: u._id,
           username: u.username,
+          email: u.emails?.[0]?.address,
           lastLogin: u.lastLogin,
           active: u.active,
         };

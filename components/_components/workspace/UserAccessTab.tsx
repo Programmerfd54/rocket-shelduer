@@ -9,6 +9,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { LogIn, KeyRound, Users, Download, Search } from 'lucide-react';
 import { toast } from 'sonner';
 import { Spinner } from '@/components/ui/spinner';
+import { Progress } from '@/components/ui/progress';
 import {
   Select,
   SelectContent,
@@ -16,6 +17,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+
+/** Запросов к RC меньше, прогресс обновляется чаще, чем по одному пользователю. */
+const RC_CHECK_BATCH_SIZE = 8;
+/** GET с длинным query — режем список, чтобы не упираться в лимит URL и показывать прогресс. */
+const LOCAL_CHECK_BATCH_SIZE = 25;
 
 type Result = {
   username: string;
@@ -33,6 +39,8 @@ export function UserAccessTab({ workspaceId, currentUserRole = 'USER' }: { works
   const [adminUsername, setAdminUsername] = useState('');
   const [adminPassword, setAdminPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  /** Прогресс пошаговой проверки (null — нет или одна короткая операция без счётчика). */
+  const [checkProgress, setCheckProgress] = useState<{ done: number; total: number } | null>(null);
   const [results, setResults] = useState<Result[]>([]);
   const [addedList, setAddedList] = useState<Array<{ username: string; email: string }>>([]);
   const [addedListLoading, setAddedListLoading] = useState(false);
@@ -117,24 +125,90 @@ export function UserAccessTab({ workspaceId, currentUserRole = 'USER' }: { works
     }
     setLoading(true);
     setResults([]);
+    setCheckProgress(null);
     try {
       if (useRc) {
-        const res = await fetch(`/api/workspace/${workspaceId}/admin/user-access-rc`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            adminUsername: adminUsername.trim(),
-            adminPassword,
-            ...(raw.length > 0 && { usernames: raw }),
-          }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok && Array.isArray(data.results)) {
-          setResults(data.results);
-          toast.success(`Проверено: ${data.results.length} пользователей (Rocket.Chat)`);
+        if (raw.length === 0) {
+          const res = await fetch(`/api/workspace/${workspaceId}/admin/user-access-rc`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              adminUsername: adminUsername.trim(),
+              adminPassword,
+            }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && Array.isArray(data.results)) {
+            setResults(data.results);
+            toast.success(`Проверено: ${data.results.length} пользователей (Rocket.Chat)`);
+          } else {
+            toast.error(data.error ?? data.details ?? 'Ошибка запроса');
+          }
+        } else if (raw.length > RC_CHECK_BATCH_SIZE) {
+          const total = raw.length;
+          setCheckProgress({ done: 0, total });
+          const merged: Result[] = [];
+          for (let i = 0; i < raw.length; i += RC_CHECK_BATCH_SIZE) {
+            const chunk = raw.slice(i, i + RC_CHECK_BATCH_SIZE);
+            const res = await fetch(`/api/workspace/${workspaceId}/admin/user-access-rc`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                adminUsername: adminUsername.trim(),
+                adminPassword,
+                usernames: chunk,
+              }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || !Array.isArray(data.results)) {
+              toast.error(data.error ?? data.details ?? 'Ошибка запроса');
+              setResults(merged);
+              return;
+            }
+            merged.push(...(data.results as Result[]));
+            const done = merged.length;
+            setCheckProgress({ done, total });
+            setResults([...merged]);
+          }
+          toast.success(`Проверено: ${merged.length} пользователей (Rocket.Chat)`);
         } else {
-          toast.error(data.error ?? data.details ?? 'Ошибка запроса');
+          const res = await fetch(`/api/workspace/${workspaceId}/admin/user-access-rc`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              adminUsername: adminUsername.trim(),
+              adminPassword,
+              usernames: raw,
+            }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && Array.isArray(data.results)) {
+            setResults(data.results);
+            toast.success(`Проверено: ${data.results.length} пользователей (Rocket.Chat)`);
+          } else {
+            toast.error(data.error ?? data.details ?? 'Ошибка запроса');
+          }
         }
+      } else if (raw.length > LOCAL_CHECK_BATCH_SIZE) {
+        const total = raw.length;
+        setCheckProgress({ done: 0, total });
+        const merged: Result[] = [];
+        for (let i = 0; i < raw.length; i += LOCAL_CHECK_BATCH_SIZE) {
+          const chunk = raw.slice(i, i + LOCAL_CHECK_BATCH_SIZE);
+          const res = await fetch(
+            `/api/workspace/${workspaceId}/admin/user-access?usernames=${encodeURIComponent(chunk.join(','))}`
+          );
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !Array.isArray(data.results)) {
+            toast.error(data.error ?? 'Ошибка запроса');
+            setResults(merged);
+            return;
+          }
+          merged.push(...(data.results as Result[]));
+          setCheckProgress({ done: merged.length, total });
+          setResults([...merged]);
+        }
+        toast.success(`Проверено: ${merged.length} пользователей`);
       } else {
         const res = await fetch(`/api/workspace/${workspaceId}/admin/user-access?usernames=${encodeURIComponent(raw.join(','))}`);
         const data = await res.json().catch(() => ({}));
@@ -149,6 +223,7 @@ export function UserAccessTab({ workspaceId, currentUserRole = 'USER' }: { works
       toast.error('Ошибка запроса');
     } finally {
       setLoading(false);
+      setCheckProgress(null);
     }
   };
 
@@ -251,6 +326,26 @@ export function UserAccessTab({ workspaceId, currentUserRole = 'USER' }: { works
           {loading ? <Spinner className="w-4 h-4" /> : <LogIn className="w-4 h-4" />}
           Проверить
         </Button>
+        {loading && checkProgress && (
+          <div
+            className="rounded-xl border border-cyan-400/30 bg-cyan-500/5 px-4 py-3 space-y-2"
+            role="status"
+            aria-live="polite"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+              <span className="text-foreground font-medium tabular-nums">
+                Проверено: {checkProgress.done} из {checkProgress.total}
+              </span>
+              <span className="text-muted-foreground tabular-nums">
+                Осталось: {Math.max(0, checkProgress.total - checkProgress.done)}
+              </span>
+            </div>
+            <Progress
+              value={checkProgress.total > 0 ? (checkProgress.done / checkProgress.total) * 100 : 0}
+              className="h-2"
+            />
+          </div>
+        )}
         {results.length > 0 && (
           <div className="mt-4 rounded-xl border-2 border-emerald-400/40 bg-emerald-500/5 overflow-hidden">
             <div className="p-3 border-b border-border/50 flex flex-wrap items-center gap-3">
