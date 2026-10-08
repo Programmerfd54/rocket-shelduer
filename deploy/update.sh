@@ -80,7 +80,15 @@ case "$(env_get COOKIE_SECURE)" in false) info "COOKIE_SECURE=false — cookie �
 # ───────────────────────────── 3. Состояние ─────────────────────────────
 step "3/8 Что сейчас запущено"
 detect_app_service
-APP_CID="$(docker ps -aq --filter "label=com.docker.compose.project.working_dir=$ROOT" --filter "label=com.docker.compose.service=$APP_SERVICE" | head -n 1 || true)"
+COMPOSE_DIR="$(cd "$(dirname "$COMPOSE_FILE")" && pwd)"
+APP_CID="$(find_service_container "$COMPOSE_DIR" "$APP_SERVICE")"
+# Установка могла быть поднята из полного стека deploy/docker-compose.yml (сервис app) — подхватываем его автоматически
+if [ -z "$APP_CID" ] && [ "$COMPOSE_FILE" = "docker-compose.yml" ] && [ -f deploy/docker-compose.yml ] \
+   && [ -n "$(find_service_container "$ROOT/deploy" app)" ]; then
+  COMPOSE_FILE="deploy/docker-compose.yml"; COMPOSE_DIR="$ROOT/deploy"; detect_app_service
+  APP_CID="$(find_service_container "$COMPOSE_DIR" "$APP_SERVICE")"
+  info "Найдена установка из deploy/docker-compose.yml — обновляем её."
+fi
 export APP_CID
 OLD_IMAGE_ID=""; OLD_PORT=""; OLD_BIND=""
 if [ -n "$APP_CID" ]; then
@@ -200,15 +208,26 @@ NEW_CID="$(dc ps -q "$APP_SERVICE" | head -n 1)"
 IMAGE_NAME="$(docker inspect -f '{{.Config.Image}}' "$NEW_CID")"
 printf 'APP_IMAGE_NAME=%s\n' "$IMAGE_NAME" >> "$DEPLOY_DIR/last-deploy.env"
 
-# Возвращаем загрузки в тома и выставляем владельца процесса приложения (uid 1001)
+# Возвращаем загрузки в тома и выставляем владельца процесса приложения (uid 1001).
+# У контейнера приложения отброшены все capabilities (cap_drop: ALL), поэтому даже root внутри него не может менять
+# владельца файлов — делаем это одноразовым контейнером с явным CAP_CHOWN, примонтировав сам том.
 if [ -n "$UPLOADS_TMP" ] && [ "${SAVED:-0}" -gt 0 ]; then
   for p in "${UPLOAD_PATHS[@]}"; do
     name="$(basename "$p")"
     [ -d "$UPLOADS_TMP/$name" ] && [ -n "$(find "$UPLOADS_TMP/$name" -type f -print -quit)" ] || continue
-    docker cp "$UPLOADS_TMP/$name/." "$NEW_CID:$p/" 2>/dev/null || warn "Не удалось вернуть файлы в $p"
-    docker exec -u root "$NEW_CID" chown -R 1001:1001 "$p" 2>/dev/null || true
+    VOL="$(docker inspect -f "{{range .Mounts}}{{if eq .Destination \"$p\"}}{{.Name}}{{end}}{{end}}" "$NEW_CID")"
+    if [ -n "$VOL" ]; then
+      if docker run --rm -u 0 --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --entrypoint sh \
+           -v "$UPLOADS_TMP/$name":/src:ro -v "$VOL":/dst "$IMAGE_NAME" \
+           -c 'cp -a /src/. /dst/ && chown -R 1001:1001 /dst' 2>>"$DEPLOY_DIR/pg-tool.err"; then
+        ok "Загрузки возвращены в том ($name)"
+      else
+        warn "Не удалось вернуть файлы в том для $p (детали: .deploy/pg-tool.err). Файлы сохранены в $UPLOADS_TMP — скопируйте вручную."; UPLOADS_TMP=""
+      fi
+    else
+      docker cp "$UPLOADS_TMP/$name/." "$NEW_CID:$p/" 2>/dev/null && ok "Загрузки возвращены ($name)" || warn "Не удалось вернуть файлы в $p"
+    fi
   done
-  ok "Загрузки перенесены в постоянные тома"
 fi
 
 printf '  Ждём, пока приложение станет здоровым (до %s с; первый старт включает миграции)' "$HEALTH_TIMEOUT"

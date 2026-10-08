@@ -62,15 +62,18 @@ dc stop "$APP_SERVICE" >/dev/null 2>&1 || true
 if [ "$IMAGE_ONLY" = "0" ]; then
   step "Восстанавливаем БД из бэкапа"
   TMP_SQL="$DEPLOY_DIR/restore-$$.sql"
-  gzip -dc "$ROOT/$BACKUP_FILE" > "$TMP_SQL"
+  # Схема public очищается целиком (в ней могли появиться новые таблицы/типы, которых нет в бэкапе), затем накатывается
+  # дамп. Всё — в одной транзакции (-1) с остановкой на первой ошибке: при сбое БД останется в прежнем состоянии.
+  {
+    printf 'DROP SCHEMA IF EXISTS public CASCADE;\nCREATE SCHEMA public;\n'
+    gzip -dc "$ROOT/$BACKUP_FILE"
+  } > "$TMP_SQL"
   CLEAN_URL="$(clean_db_url "$DBURL")"
-  # APP_CID нужен только для способа «в сети приложения»; контейнер остановлен, поэтому пробуем способы 1 и 2
   PG_IN="$TMP_SQL"; PG_OUT=/dev/null; export PG_IN PG_OUT
-  if ! run_pg_tool psql "$CLEAN_URL" -q -v ON_ERROR_STOP=0; then
+  if ! run_pg_tool psql "$CLEAN_URL" -q -1 -v ON_ERROR_STOP=1; then
     rm -f "$TMP_SQL"
-    # способ 3 требует запущенного контейнера в сети приложения — временно запустим старый образ только ради сети
-    warn "Не удалось восстановить БД доступными способами. Ошибки: .deploy/pg-tool.err"
-    die "Восстановите БД вручную: gunzip -c $BACKUP_FILE | psql \"<DATABASE_URL без ?schema=...>\""
+    warn "Не удалось восстановить БД (транзакция откатилась — БД осталась как была). Ошибки: .deploy/pg-tool.err"
+    die "Восстановите БД вручную: (echo 'DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;'; gunzip -c $BACKUP_FILE) | psql -1 -v ON_ERROR_STOP=1 \"<DATABASE_URL без ?schema=...>\""
   fi
   rm -f "$TMP_SQL"; unset PG_IN PG_OUT
   ok "БД восстановлена"

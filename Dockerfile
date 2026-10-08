@@ -15,6 +15,9 @@ RUN npm config set fetch-retry-mintimeout 20000 \
     && npm config set fetch-retries 5 \
     && npm config set registry https://registry.npmjs.org/
 
+# postinstall запускает `prisma generate`, поэтому схема Prisma должна быть в образе ДО установки зависимостей
+COPY prisma ./prisma
+
 # npm ci: ставит ровно версии из package-lock.json (с проверкой integrity), не обновляя lock-файл
 RUN npm ci --include=optional
 

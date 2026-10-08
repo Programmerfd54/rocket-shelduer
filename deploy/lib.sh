@@ -57,7 +57,7 @@ detect_compose() {
 }
 
 # dc — docker compose с нужным файлом и без интерактивщины
-dc() { docker compose -f "$COMPOSE_FILE" "$@"; }
+dc() { docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"; }
 
 # Имя сервиса приложения в compose-файле: web (корневой docker-compose.yml) или app (deploy/docker-compose.yml)
 detect_app_service() {
@@ -66,6 +66,11 @@ detect_app_service() {
   if printf '%s\n' "$services" | grep -qx "web"; then APP_SERVICE=web
   elif printf '%s\n' "$services" | grep -qx "app"; then APP_SERVICE=app
   else die "В $COMPOSE_FILE нет сервиса web/app."; fi
+}
+
+# Контейнер сервиса $2 compose-проекта, запущенного из каталога $1 (по меткам compose; включая остановленные)
+find_service_container() {
+  docker ps -aq --filter "label=com.docker.compose.project.working_dir=$1" --filter "label=com.docker.compose.service=$2" | head -n 1 || true
 }
 
 # ---------- резервная копия БД ----------
@@ -112,13 +117,19 @@ run_pg_tool() {
 # ---------- проверка здоровья ----------
 # Ждёт, пока контейнер станет healthy (или просто запустится, если healthcheck отсутствует).
 wait_healthy() {
-  local cid="$1" timeout="${2:-240}" waited=0 status restarting
+  local cid="$1" timeout="${2:-240}" waited=0 status restarting stable=0
   while [ "$waited" -lt "$timeout" ]; do
     status=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$cid" 2>/dev/null || echo "gone")
     restarting=$(docker inspect -f '{{.State.Restarting}}' "$cid" 2>/dev/null || echo "false")
     case "$status" in
       healthy) return 0 ;;
       gone) return 2 ;;
+      none)
+        # В образе нет HEALTHCHECK (старая версия): считаем здоровым, если ~25 секунд подряд работает без перезапусков
+        if [ "$restarting" != "true" ] && [ "$(docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null)" = "true" ]; then
+          stable=$((stable + 1)); [ "$stable" -ge 9 ] && return 0
+        else stable=0; fi
+        ;;
     esac
     if [ "$restarting" = "true" ]; then return 3; fi
     if [ "$(docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null)" != "true" ]; then return 4; fi
