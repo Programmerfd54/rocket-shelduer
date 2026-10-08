@@ -5,9 +5,12 @@ import { useRouter } from 'next/navigation'
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { PasswordInput } from "@/components/ui/password-input"
+import { Field } from "@/components/ui/field"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { AuthShell } from '@/components/common/AuthShell'
 import { toast } from 'sonner'
-import { Send, Mail, Lock, Loader2, ArrowRight } from 'lucide-react'
+import { Loader2, CircleAlert } from 'lucide-react'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -16,16 +19,24 @@ export default function LoginPage() {
     password: '',
   })
   const [isLoading, setIsLoading] = useState(false)
+  const [touched, setTouched] = useState({ login: false, password: false })
+  const [formError, setFormError] = useState<string | null>(null)
+
+  const loginError = touched.login && !formData.login.trim() ? 'Введите логин' : undefined
+  const passwordError = touched.password && !formData.password ? 'Введите пароль' : undefined
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    setTouched({ login: true, password: true })
+    if (!formData.login.trim() || !formData.password) return
+    setFormError(null)
     setIsLoading(true)
 
     try {
       const response = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ login: formData.login, password: formData.password }),
+        body: JSON.stringify({ login: formData.login.trim(), password: formData.password }),
       })
 
       const data = await response.json()
@@ -39,119 +50,68 @@ export default function LoginPage() {
         return
       }
 
-      toast.success('Добро пожаловать!', {
-        description: 'Вход выполнен успешно'
-      })
       router.push('/dashboard')
     } catch (err: any) {
-      toast.error('Ошибка входа', {
-        description: err.message || 'Проверьте ваши данные и попробуйте снова'
-      })
+      const message = err.message || 'Проверьте логин и пароль и попробуйте снова'
+      setFormError(message)
+      toast.error('Не удалось войти', { description: message })
     } finally {
       setIsLoading(false)
     }
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-background via-background to-muted/20">
-      <div className="w-full max-w-md space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
-        {/* Logo & Title */}
-        <div className="text-center space-y-4">
-          <div className="flex justify-center">
-            <div className="relative">
-              <div className="w-16 h-16 bg-gradient-to-br from-red-600 to-red-700 rounded-2xl flex items-center justify-center shadow-2xl">
-                <Send className="w-8 h-8 text-white" />
-              </div>
-              <div className="absolute -bottom-1 -right-1 w-5 h-5 bg-green-500 rounded-full border-4 border-background" />
-            </div>
-          </div>
-          <div>
-            <h1 className="text-3xl font-bold bg-gradient-to-r from-foreground to-foreground/70 bg-clip-text text-transparent">
-              Rocket.Chat Scheduler
-            </h1>
-            <p className="text-muted-foreground mt-2">
-              Планируйте сообщения легко и удобно
-            </p>
-          </div>
-        </div>
+    <AuthShell
+      title="Вход"
+      description="Введите логин и пароль, которые выдал администратор."
+      footer="Нет доступа? Попросите Lead_SUP прислать приглашение."
+    >
+      <form onSubmit={handleSubmit} className="space-y-4" noValidate>
+        {formError && (
+          <Alert variant="destructive">
+            <CircleAlert aria-hidden />
+            <AlertDescription>{formError}</AlertDescription>
+          </Alert>
+        )}
 
-        {/* Login Card */}
-        <Card className="border-muted shadow-xl">
-          <CardHeader className="space-y-1 pb-4">
-            <CardTitle className="text-2xl">Вход в систему</CardTitle>
-            <CardDescription>
-              Введите ваши учетные данные
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="login">Логин</Label>
-                <div className="relative">
-                  <Mail className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    id="login"
-                    type="text"
-                    autoComplete="username"
-                    required
-                    value={formData.login}
-                    onChange={(e) => setFormData({ ...formData, login: e.target.value })}
-                    className="pl-10 h-11"
-                    placeholder="d.solyanov"
-                    disabled={isLoading}
-                  />
-                </div>
-              </div>
+        <Field label="Логин" htmlFor="login" error={loginError}>
+          <Input
+            id="login"
+            type="text"
+            autoComplete="username"
+            autoFocus
+            value={formData.login}
+            onChange={(e) => setFormData({ ...formData, login: e.target.value })}
+            onBlur={() => setTouched((t) => ({ ...t, login: true }))}
+            aria-invalid={!!loginError}
+            placeholder="d.solyanov"
+            disabled={isLoading}
+          />
+        </Field>
 
-              <div className="space-y-2">
-                <Label htmlFor="password">Пароль</Label>
-                <div className="relative">
-                  <Lock className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    id="password"
-                    type="password"
-                    autoComplete="current-password"
-                    required
-                    value={formData.password}
-                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                    className="pl-10 h-11"
-                    placeholder="••••••••"
-                    disabled={isLoading}
-                  />
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  <a href="/forgot-password" className="text-primary hover:underline">Забыли пароль?</a>
-                  {' · '}
-                  Сброс через администратора или в настройках.
-                </p>
-              </div>
+        <Field
+          label="Пароль"
+          htmlFor="password"
+          error={passwordError}
+          hint="Забыли пароль? Его сбросит администратор."
+        >
+          <PasswordInput
+            id="password"
+            autoComplete="current-password"
+            value={formData.password}
+            onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+            onBlur={() => setTouched((t) => ({ ...t, password: true }))}
+            aria-invalid={!!passwordError}
+            placeholder="••••••••"
+            disabled={isLoading}
+          />
+        </Field>
 
-              <Button 
-                type="submit" 
-                className="w-full h-11 bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800" 
-                disabled={isLoading}
-              >
-                {isLoading ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Вход...
-                  </>
-                ) : (
-                  <>
-                    Войти
-                    <ArrowRight className="ml-2 h-4 w-4" />
-                  </>
-                )}
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
-
-        {/* Footer */}
-        <p className="text-center text-sm text-muted-foreground">
-          Планирование отложенных сообщений для Rocket.Chat
-        </p>
-      </div>
-    </div>
+        <Button type="submit" className="w-full" disabled={isLoading}>
+          {isLoading && <Loader2 className="animate-spin" aria-hidden />}
+          {isLoading ? 'Входим…' : 'Войти'}
+        </Button>
+      </form>
+    </AuthShell>
   )
 }

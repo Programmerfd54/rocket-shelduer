@@ -2,19 +2,27 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Lock, Loader2, CheckCircle2 } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { Button } from '@/components/ui/button';
+import { Field } from '@/components/ui/field';
+import { PasswordInput } from '@/components/ui/password-input';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { AuthShell } from '@/components/common/AuthShell';
+import { PasswordStrength } from '@/components/common/PasswordStrength';
+import { validateNewPassword, validatePasswordConfirm } from '@/lib/validate-password';
+import { clearWorkspaceEmojisCache } from '@/lib/useWorkspaceEmojis';
 
 export default function ChangePasswordPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [needChange, setNeedChange] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   const [form, setForm] = useState({ newPassword: '', confirmPassword: '' });
+  const [touched, setTouched] = useState({ newPassword: false, confirmPassword: false });
+  const [formError, setFormError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -40,16 +48,15 @@ export default function ChangePasswordPage() {
     return () => { cancelled = true; };
   }, [router]);
 
+  const newPasswordError = validateNewPassword(form.newPassword);
+  const confirmError = validatePasswordConfirm(form.newPassword, form.confirmPassword);
+  const valid = !newPasswordError && !confirmError;
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (form.newPassword.length < 8) {
-      toast.error('Пароль должен содержать минимум 8 символов');
-      return;
-    }
-    if (form.newPassword !== form.confirmPassword) {
-      toast.error('Пароли не совпадают');
-      return;
-    }
+    setTouched({ newPassword: true, confirmPassword: true });
+    if (!valid) return;
+    setFormError(null);
     setSaving(true);
     try {
       const res = await fetch('/api/user/set-initial-password', {
@@ -62,99 +69,110 @@ export default function ChangePasswordPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
-        toast.success(data.message ?? 'Пароль установлен');
+        toast.success(data.message ?? 'Пароль установлен', { description: 'Теперь можно продолжить работу.' });
         router.replace('/dashboard');
       } else {
-        toast.error(data.error ?? 'Не удалось установить пароль');
+        const message = data.error ?? 'Не удалось установить пароль';
+        setFormError(message);
+        toast.error('Не удалось установить пароль', { description: message });
       }
     } catch {
-      toast.error('Ошибка запроса');
+      setFormError('Не удалось связаться с сервером. Проверьте соединение и попробуйте снова.');
+      toast.error('Ошибка запроса', { description: 'Проверьте соединение и попробуйте снова.' });
     } finally {
       setSaving(false);
     }
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-[50vh]">
-        <Loader2 className="w-8 h-8 animate-spin text-primary" />
-      </div>
-    );
-  }
+  const handleLogout = async () => {
+    setLoggingOut(true);
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+      clearWorkspaceEmojisCache();
+      router.push('/login');
+    } catch {
+      toast.error('Не удалось выйти', { description: 'Проверьте соединение и попробуйте снова.' });
+      setLoggingOut(false);
+    }
+  };
 
-  if (!needChange) {
+  if (!loading && !needChange) {
     return null;
   }
 
+  // Перекрывает сайдбар: пока пароль не задан, ничего другого делать нельзя
   return (
-    <div className="max-w-md mx-auto py-8 px-4">
-      <Card className="rounded-2xl border border-border/80 bg-card shadow-sm">
-        <CardHeader className="pb-4">
-          <CardTitle className="flex items-center gap-2">
-            <Lock className="w-5 h-5 text-primary" />
-            Требуется смена пароля
-          </CardTitle>
-          <CardDescription>
-            Ваш пароль был сброшен. Установите новый пароль для продолжения работы. Используйте не менее 8 символов, буквы разного регистра, цифры и спецсимволы.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="newPassword">Новый пароль</Label>
-              <div className="relative">
-                <Lock className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                <Input
-                  id="newPassword"
-                  type="password"
-                  autoComplete="new-password"
-                  value={form.newPassword}
-                  onChange={(e) => setForm((f) => ({ ...f, newPassword: e.target.value }))}
-                  placeholder="••••••••"
-                  className="h-11 pl-10"
-                  disabled={saving}
-                />
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="confirmPassword">Подтвердите пароль</Label>
-              <div className="relative">
-                <Lock className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                <Input
-                  id="confirmPassword"
-                  type="password"
-                  autoComplete="new-password"
-                  value={form.confirmPassword}
-                  onChange={(e) => setForm((f) => ({ ...f, confirmPassword: e.target.value }))}
-                  placeholder="••••••••"
-                  className="h-11 pl-10"
-                  disabled={saving}
-                />
-                {form.confirmPassword && form.newPassword === form.confirmPassword && (
-                  <CheckCircle2 className="absolute right-3 top-3 h-5 w-5 text-green-500" />
-                )}
-              </div>
-            </div>
-            <Button
-              type="submit"
-              className="w-full h-11 bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800"
-              disabled={saving || !form.newPassword || !form.confirmPassword}
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-background">
+      <AuthShell
+        title="Задайте новый пароль"
+        description="Ваш пароль был сброшен администратором. Придумайте новый — он нужен для входа в систему."
+        footer={
+          <button
+            type="button"
+            onClick={handleLogout}
+            disabled={loggingOut}
+            className="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline disabled:opacity-50"
+          >
+            Выйти из аккаунта
+          </button>
+        }
+      >
+        {loading ? (
+          <div className="space-y-4" aria-busy="true">
+            <Skeleton className="h-9 w-full" />
+            <Skeleton className="h-9 w-full" />
+            <Skeleton className="h-9 w-full" />
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-4" noValidate>
+            {formError && (
+              <Alert variant="destructive">
+                <AlertDescription>{formError}</AlertDescription>
+              </Alert>
+            )}
+
+            <Field
+              label="Новый пароль"
+              htmlFor="newPassword"
+              hint="Минимум 8 символов: заглавные и строчные буквы, цифры, спецсимволы."
+              error={touched.newPassword && form.newPassword ? newPasswordError : undefined}
             >
-              {saving ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Сохранение...
-                </>
-              ) : (
-                <>
-                  <Lock className="mr-2 h-4 w-4" />
-                  Установить пароль
-                </>
-              )}
+              <PasswordInput
+                id="newPassword"
+                autoComplete="new-password"
+                autoFocus
+                value={form.newPassword}
+                onChange={(e) => setForm((f) => ({ ...f, newPassword: e.target.value }))}
+                onBlur={() => setTouched((t) => ({ ...t, newPassword: true }))}
+                aria-invalid={!!(touched.newPassword && form.newPassword && newPasswordError)}
+                disabled={saving}
+              />
+              <PasswordStrength password={form.newPassword} className="pt-1" />
+            </Field>
+
+            <Field
+              label="Повторите пароль"
+              htmlFor="confirmPassword"
+              error={touched.confirmPassword && form.confirmPassword ? confirmError : undefined}
+            >
+              <PasswordInput
+                id="confirmPassword"
+                autoComplete="new-password"
+                value={form.confirmPassword}
+                onChange={(e) => setForm((f) => ({ ...f, confirmPassword: e.target.value }))}
+                onBlur={() => setTouched((t) => ({ ...t, confirmPassword: true }))}
+                aria-invalid={!!(touched.confirmPassword && form.confirmPassword && confirmError)}
+                disabled={saving}
+              />
+            </Field>
+
+            <Button type="submit" className="w-full" disabled={saving || !valid}>
+              {saving && <Loader2 className="animate-spin" aria-hidden />}
+              {saving ? 'Сохраняем…' : 'Установить пароль'}
             </Button>
           </form>
-        </CardContent>
-      </Card>
+        )}
+      </AuthShell>
     </div>
   );
 }

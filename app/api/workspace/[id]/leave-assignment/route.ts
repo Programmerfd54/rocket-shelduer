@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
+import { isUnsafeId } from '@/lib/security';
 import prisma from '@/lib/prisma';
-import { requireAuth } from '@/lib/auth';
+import { requireAuth } from '@/lib/api-auth';
 
 /** POST — отказаться от назначенного пространства (убрать себя из назначенных) */
 export async function POST(
@@ -10,6 +11,7 @@ export async function POST(
   try {
     const currentUser = await requireAuth();
     const { id: workspaceId } = await params;
+    if (isUnsafeId(workspaceId)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
 
     const deleted = await prisma.workspaceAdminAssignment.deleteMany({
       where: { workspaceId, userId: currentUser.id },

@@ -1,20 +1,25 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { requireAuth } from '@/lib/auth';
+import { isForbiddenError } from '@/lib/auth';
+import { requireAdmin } from '@/lib/api-auth';
 
 const FEATURE_KEYS = [
   'sendAsEnabledSup',
   'sendAsEnabledAdm',
   'activityViewVolSup',
-  // Ограничение вкладок пространства для SUP/ADM (ADMIN может отключать)
+  // Ограничение вкладок пространства для SUP/ADM (Lead_SUP в админке может отключать)
   'workspaceTabTemplatesSup',
   'workspaceTabEmojiImportSup',
   'workspaceTabUsersAddSup',
   'workspaceTabTemplatesAdm',
-  // Видимость разделов для пользователей (ADMIN может скрывать)
-  'templatesTabVisible',   // false = только ADMIN видит вкладку «Шаблоны», остальные — «обновляет»
+  'workspaceTabEmojiImportAdm',
+  // Видимость разделов для пользователей (Lead_SUP может скрывать)
+  'templatesTabVisible',   // false = только Lead_SUP видит вкладку «Шаблоны», остальные — «обновляет»
   'helpMainVisible',       // false = вкладка «Основные моменты» скрыта, пользователи видят «обновляет»
   'helpAdminVisible',      // false = вкладка «От Администратора» скрыта, пользователи видят «обновляет»
+  // Интенсивы и годовой календарь (docs/intensives-api.md): false = новые API отвечают 404, данные не удаляются,
+  // запланированные сообщения продолжают отправляться
+  'feature:intensives',
 ] as const;
 
 /** Строковые настройки (не true/false), например контакт для страницы «Заблокирован» */
@@ -23,13 +28,7 @@ const ALL_KEYS = [...FEATURE_KEYS, ...STRING_KEYS];
 
 export async function GET() {
   try {
-    const user = await requireAuth();
-    if (user.role !== 'ADMIN') {
-      return NextResponse.json(
-        { error: 'Only superuser can read system settings' },
-        { status: 403 }
-      );
-    }
+    await requireAdmin();
 
     const rows = await prisma.systemSetting.findMany({
       where: { key: { in: [...ALL_KEYS] } },
@@ -45,24 +44,16 @@ export async function GET() {
     });
 
     return NextResponse.json({ settings });
-  } catch (error) {
-    console.error('Get system settings error:', error);
-    return NextResponse.json(
-      { error: 'Failed to fetch settings' },
-      { status: 500 }
-    );
+  } catch (e) {
+    if (isForbiddenError(e)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    console.error('Get system settings error:', e);
+    return NextResponse.json({ error: 'Failed to fetch settings' }, { status: 500 });
   }
 }
 
 export async function PATCH(request: Request) {
   try {
-    const user = await requireAuth();
-    if (user.role !== 'ADMIN') {
-      return NextResponse.json(
-        { error: 'Only superuser can update system settings' },
-        { status: 403 }
-      );
-    }
+    await requireAdmin();
 
     const body = await request.json();
     if (typeof body !== 'object' || body === null) {
@@ -105,11 +96,9 @@ export async function PATCH(request: Request) {
     });
 
     return NextResponse.json({ settings });
-  } catch (error) {
-    console.error('Update system settings error:', error);
-    return NextResponse.json(
-      { error: 'Failed to update settings' },
-      { status: 500 }
-    );
+  } catch (e) {
+    if (isForbiddenError(e)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    console.error('Update system settings error:', e);
+    return NextResponse.json({ error: 'Failed to update settings' }, { status: 500 });
   }
 }

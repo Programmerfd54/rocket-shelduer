@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { getCurrentUser } from '@/lib/auth';
+import { getCurrentUser } from '@/lib/api-auth';
+import { getSystemSettings, getBool } from '@/lib/system-settings';
+import { GLOBAL_SCOPE } from '@/lib/legacy-scope';
 
-/** Контент справки: основные моменты + каталоги «От Администратора». Только видимые разделы; ADMIN видит всё. */
+/** Контент справки: основные моменты + каталоги «От Администратора». Видимость — глобальные настройки платформы. */
 export async function GET() {
   try {
     const user = await getCurrentUser();
@@ -10,28 +12,32 @@ export async function GET() {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
-    const rows = await prisma.systemSetting.findMany({
-      where: { key: { in: ['helpMainVisible', 'helpAdminVisible'] } },
-    });
-    const get = (k: string) => rows.find((r) => r.key === k)?.value ?? 'true';
-    const helpMainVisible = get('helpMainVisible') !== 'false';
-    const helpAdminVisible = get('helpAdminVisible') !== 'false';
-    const isAdmin = user.role === 'ADMIN';
+    const settings = await getSystemSettings();
+    const helpMainVisible = getBool(settings, 'helpMainVisible');
+    const helpAdminVisible = getBool(settings, 'helpAdminVisible');
+    const isAdmin = user.role === 'LEAD_SUP';
 
     let mainContent: string | null = null;
     let mainSections: Array<{ id: string; title: string; order: number; content: string }> = [];
     if (helpMainVisible || isAdmin) {
-      const main = await prisma.helpMainContent.findFirst({ orderBy: { updatedAt: 'desc' } });
+      const main = await prisma.helpMainContent.findFirst({
+        where: { ...GLOBAL_SCOPE },
+        orderBy: { updatedAt: 'desc' },
+      });
       mainContent = main?.content ?? '';
       const sections = await prisma.helpMainSection.findMany({
+        where: { ...GLOBAL_SCOPE },
         orderBy: { order: 'asc' },
       });
       mainSections = sections.map((s) => ({ id: s.id, title: s.title, order: s.order, content: s.content }));
     }
 
     const userRole = user.role ?? '';
+    // Старые записи могут хранить роль волонтёра как 'VOL' — для MEMBER считаем её совпадением.
     const visibleForRole = (roles: string[]) =>
-      roles.length === 0 || roles.includes(userRole);
+      roles.length === 0 ||
+      roles.includes(userRole) ||
+      (userRole === 'MEMBER' && roles.includes('VOL'));
 
     let catalogs: Array<{
       id: string;
@@ -42,6 +48,7 @@ export async function GET() {
     }> = [];
     if (helpAdminVisible || isAdmin) {
       const cats = await prisma.helpCatalog.findMany({
+        where: { ...GLOBAL_SCOPE },
         orderBy: { order: 'asc' },
         include: {
           instructions: { orderBy: { order: 'asc' } },
@@ -63,12 +70,13 @@ export async function GET() {
         }));
     }
 
-    const globalFaqsRaw = (helpAdminVisible || isAdmin)
-      ? await prisma.helpFAQ.findMany({
-          where: { catalogId: null },
-          orderBy: { order: 'asc' },
-        })
-      : [];
+    const globalFaqsRaw =
+      helpAdminVisible || isAdmin
+        ? await prisma.helpFAQ.findMany({
+            where: { catalogId: null },
+            orderBy: { order: 'asc' },
+          })
+        : [];
     const globalFaqs = globalFaqsRaw
       .filter((f) => visibleForRole(f.roles))
       .map((f) =>

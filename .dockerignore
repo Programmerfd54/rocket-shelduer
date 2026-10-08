@@ -1,5 +1,48 @@
 node_modules
 .next
 .git
+.github
 *.md
 .env*.local
+.env
+.env.*
+!.env.example
+
+# Secrets / keys never go into the build context
+*.pem
+*.key
+*.p12
+*.crt
+id_rsa*
+.npmrc
+
+# Docs and dev
+docs
+.planning
+*.log
+coverage
+.idea
+.vscode
+.claude
+.DS_Store
+tsconfig.tsbuildinfo
+
+# Tests
+__tests__
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx
+
+# Misc
+Dockerfile*
+docker-compose*.yml
+deploy
+.dockerignore
+.gitignore
+README*
+# public/help-uploads и public/uploads НЕ исключаются: при первом запуске с новыми volume
+# (docker-compose: help_uploads/avatar_uploads) уже загруженные файлы копируются из образа в volume.
+
+backups
+.deploy

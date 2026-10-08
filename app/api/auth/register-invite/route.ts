@@ -1,9 +1,16 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { hashPassword, generateToken, setAuthCookie } from '@/lib/auth';
-import { getClientIp, isAuthEndpointRateLimited, recordAuthEndpointHit, logSecurityEvent, SecurityEventType } from '@/lib/security';
+import { hashPassword, createSessionAndSetCookie, validateNewPassword } from '@/lib/auth';
+import { getClientIp, isAuthEndpointRateLimited, logSecurityEvent, SecurityEventType } from '@/lib/security';
+import { findInviteByRawToken, inviteLoginMatches } from '@/lib/invite-token';
 
 const DEFAULT_SESSION_MINUTES = 60 * 24 * 7; // 7 days
+const MAX_TOKEN_LENGTH = 256;
+const MAX_LOGIN_LENGTH = 254;
+/** Роли, которые можно получить по приглашению (LEAD_SUP — никогда, даже если запись в БД подделана). */
+const INVITABLE_ROLES = new Set(['SUP', 'ADM', 'MEMBER']);
+
+class InviteGoneError extends Error {}
 
 /** POST — регистрация по токену приглашения. Body: { token, login, password, confirmPassword, name } */
 export async function POST(request: Request) {
@@ -24,15 +31,28 @@ export async function POST(request: Request) {
       { status: 429 }
     );
   }
-  recordAuthEndpointHit(ip ?? null);
 
   try {
-    const body = await request.json();
-    const { token, login, password, confirmPassword, name } = body;
+    const body = await request.json().catch(() => null);
+    const token = typeof body?.token === 'string' ? body.token.trim() : '';
+    const login = typeof body?.login === 'string' ? body.login.trim() : '';
+    const { password, confirmPassword } = body ?? {};
+    const name = typeof body?.name === 'string' ? body.name.trim().slice(0, 100) : '';
 
-    if (!token?.trim() || !login?.trim() || !password) {
+    if (!token || !login || typeof password !== 'string' || !password) {
       return NextResponse.json(
         { error: 'Укажите токен приглашения, логин и пароль' },
+        { status: 400 }
+      );
+    }
+
+    if (token.length > MAX_TOKEN_LENGTH) {
+      return NextResponse.json({ error: 'Приглашение не найдено' }, { status: 404 });
+    }
+
+    if (login.length > MAX_LOGIN_LENGTH || /[\s<>"'`\\\u0000-\u001f]/.test(login)) {
+      return NextResponse.json(
+        { error: 'Недопустимый логин: без пробелов, кавычек и угловых скобок' },
         { status: 400 }
       );
     }
@@ -44,24 +64,13 @@ export async function POST(request: Request) {
       );
     }
 
-    if (password.length < 8) {
-      return NextResponse.json(
-        { error: 'Пароль должен быть не менее 8 символов' },
-        { status: 400 }
-      );
-    }
-    const { checkPasswordStrength } = await import('@/lib/utils');
-    const strength = checkPasswordStrength(password);
-    if (!strength.valid || strength.strength === 'weak') {
-      return NextResponse.json(
-        { error: strength.message || 'Пароль слишком простой: используйте буквы разного регистра, цифры и спецсимволы' },
-        { status: 400 }
-      );
+    const loginNorm = login.toLowerCase();
+    const passwordError = await validateNewPassword(password, [loginNorm]);
+    if (passwordError) {
+      return NextResponse.json({ error: passwordError }, { status: 400 });
     }
 
-    const invite = await prisma.inviteToken.findUnique({
-      where: { token: String(token).trim() },
-    });
+    const invite = await findInviteByRawToken(token);
 
     if (!invite) {
       return NextResponse.json(
@@ -77,9 +86,35 @@ export async function POST(request: Request) {
       );
     }
 
-    const loginNorm = String(login).trim().toLowerCase();
-    const existing = await prisma.user.findUnique({
-      where: { email: loginNorm },
+    // Логин из приглашения (если задан) — обязательный: приглашение выдано конкретному человеку
+    if (!inviteLoginMatches(invite.email, loginNorm)) {
+      return NextResponse.json(
+        { error: 'Это приглашение выдано для другого логина. Используйте логин, указанный в приглашении.' },
+        { status: 400 }
+      );
+    }
+
+    if (!INVITABLE_ROLES.has(invite.role)) {
+      await logSecurityEvent({
+        type: SecurityEventType.UNAUTHORIZED_ACCESS,
+        path: '/api/auth/register-invite',
+        method: 'POST',
+        ipAddress: ip,
+        userAgent,
+        details: `Приглашение с недопустимой ролью ${invite.role}`,
+        blocked: true,
+      });
+      return NextResponse.json({ error: 'Приглашение недействительно' }, { status: 403 });
+    }
+
+    const existing = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { email: loginNorm },
+          { username: { equals: loginNorm, mode: 'insensitive' } },
+        ],
+      },
+      select: { id: true },
     });
     if (existing) {
       return NextResponse.json(
@@ -90,52 +125,63 @@ export async function POST(request: Request) {
 
     const hashedPassword = await hashPassword(password);
 
-    const user = await prisma.user.create({
-      data: {
-        email: loginNorm,
-        password: hashedPassword,
-        name: name?.trim() || null,
-        role: invite.role,
-      },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
-      },
-    });
+    const isVolunteer = invite.role === 'MEMBER' && invite.volunteerExpiresAt != null;
+    let newUser: { id: string; email: string; name: string | null; role: string };
+    try {
+      newUser = await prisma.$transaction(async (tx) => {
+        // Сначала атомарно «гасим» приглашение: из параллельных запросов пройдёт только один
+        const consumed = await tx.inviteToken.deleteMany({
+          where: { id: invite.id, expiresAt: { gt: new Date() } },
+        });
+        if (consumed.count !== 1) throw new InviteGoneError();
 
-    await prisma.inviteToken.delete({
-      where: { id: invite.id },
-    });
+        return tx.user.create({
+          data: {
+            email: loginNorm,
+            password: hashedPassword,
+            name: name || null,
+            role: invite.role,
+            ...(isVolunteer
+              ? {
+                  volunteerExpiresAt: invite.volunteerExpiresAt,
+                  volunteerIntensive: invite.volunteerIntensive,
+                }
+              : {}),
+          },
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            role: true,
+          },
+        });
+      });
+    } catch (e) {
+      if (e instanceof InviteGoneError) {
+        return NextResponse.json({ error: 'Приглашение уже использовано или истекло' }, { status: 410 });
+      }
+      if (e && typeof e === 'object' && (e as { code?: string }).code === 'P2002') {
+        return NextResponse.json(
+          { error: 'Пользователь с таким логином уже зарегистрирован' },
+          { status: 409 }
+        );
+      }
+      throw e;
+    }
 
-    const expiresAt = new Date(Date.now() + DEFAULT_SESSION_MINUTES * 60 * 1000);
-    const session = await prisma.session.create({
-      data: {
-        userId: user.id,
-        userAgent: userAgent?.slice(0, 500) ?? null,
-        expiresAt,
-      },
+    await createSessionAndSetCookie({
+      user: { id: newUser.id, email: newUser.email, role: newUser.role },
+      sessionMinutes: DEFAULT_SESSION_MINUTES,
+      requestHeaders: request.headers,
+      ip,
     });
-
-    const authToken = generateToken(
-      {
-        userId: user.id,
-        email: user.email,
-        role: user.role,
-        sessionId: session.id,
-      },
-      DEFAULT_SESSION_MINUTES * 60
-    );
-    await setAuthCookie(authToken, DEFAULT_SESSION_MINUTES * 60);
 
     return NextResponse.json({
       success: true,
-      user,
-      token: authToken,
+      user: newUser,
     });
   } catch (error) {
-    console.error('Register invite error:', error);
+    console.error('Register invite error:', error instanceof Error ? error.message : 'unknown');
     return NextResponse.json(
       { error: 'Ошибка регистрации' },
       { status: 500 }

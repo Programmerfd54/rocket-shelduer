@@ -3,16 +3,61 @@
 import { useEffect } from 'react'
 import { toast } from 'sonner'
 
-function isRelativeApiUrl(input: RequestInfo | URL): boolean {
-  const url = typeof input === 'string' ? input : input instanceof URL ? input.pathname : (input as Request).url
-  const path = typeof url === 'string' ? url : new URL(url).pathname
-  return path.startsWith('/api/') && !path.startsWith('/api/auth/login') && !path.startsWith('/api/auth/register')
+/** Путь запроса (без query) или null, если это не относительный /api/* запрос к нашему origin. */
+function getApiPath(input: RequestInfo | URL): string | null {
+  try {
+    const raw = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url
+    const url = new URL(raw, window.location.href)
+    if (url.origin !== window.location.origin) return null
+    return url.pathname.startsWith('/api/') ? url.pathname : null
+  } catch {
+    return null
+  }
 }
 
-/** Эндпоинты, где 403 ожидаем (опциональный доступ по роли) — тост не показываем */
+/**
+ * Эндпоинты, где 401 — это ответ формы (неверный пароль, истёкшая ссылка и т.п.),
+ * а не «сессия истекла»: редирект на /login не делаем, ошибку показывает сама форма.
+ */
+function isAuthFormPath(path: string): boolean {
+  return (
+    path === '/api/auth/login' ||
+    path.startsWith('/api/auth/register') || // register, register-invite
+    path === '/api/auth/logout' ||
+    path === '/api/auth/reset-password' ||
+    path === '/api/auth/forgot-password' ||
+    path.startsWith('/api/auth/invite/') ||
+    path === '/api/user/password' // 401 = неверный текущий пароль
+  )
+}
+
+/** Эндпоинты, где 403 ожидаем — тост «Нет доступа» не показываем */
 function isOptional403Path(path: string): boolean {
   const p = path.split('?')[0]
-  return p === '/api/admin/settings' || p === '/api/admin/audit'
+  if (p === '/api/admin/settings' || p === '/api/admin/audit') return true
+  // Сессия приложения есть, но нет входа в Rocket.Chat (или неверный пароль админа RC) — не путать с правами
+  if (p.startsWith('/api/workspace/')) {
+    if (/(channels|emojis|test)$/.test(p)) return true
+    if (p.includes('/space-settings/')) return true
+    if (p.endsWith('/emoji-import') || p.endsWith('/emoji-import/manage')) return true
+    if (p.includes('/admin/user-access-rc')) return true
+    if (p.includes('/users/add') || p.includes('/users/retry-failed') || p.includes('/users/refresh-login')) return true
+  }
+  if (p.startsWith('/api/messages/') && p.split('/').length >= 4) return true
+  return false
+}
+
+function isLocalErrorHandling(input: RequestInfo | URL, init?: RequestInit): boolean {
+  try {
+    const fromInit = init?.headers ? new Headers(init.headers).get('X-Error-Handling') : null
+    if (fromInit) return fromInit === 'local'
+    if (typeof Request !== 'undefined' && input instanceof Request) {
+      return input.headers.get('X-Error-Handling') === 'local'
+    }
+  } catch {
+    /* ignore malformed headers */
+  }
+  return false
 }
 
 export default function GlobalFetchHandler() {
@@ -20,15 +65,27 @@ export default function GlobalFetchHandler() {
     const originalFetch = window.fetch
     window.fetch = function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
       return originalFetch.call(this, input, init).then((res) => {
-        if (typeof window === 'undefined' || !isRelativeApiUrl(input)) return res
+        if (typeof window === 'undefined') return res
+        const path = getApiPath(input)
+        if (!path) return res
+
+        // Запросы с X-Error-Handling: local сами показывают ошибку у формы (в т.ч. «Сессия истекла»
+        // с сохранением введённого текста) — глобальный редирект/тост для них не выполняется.
+        if (isLocalErrorHandling(input, init)) return res
+
         if (res.status === 401) {
-          window.location.href = '/login'
+          if (!isAuthFormPath(path)) window.location.href = '/login'
           return res
         }
         if (res.status === 403) {
-          const path = typeof input === 'string' ? input : (input as Request).url
-          const pathname = typeof path === 'string' ? path : new URL(path).pathname
-          if (!isOptional403Path(pathname)) {
+          // Временный пароль: сервер пускает только на страницу смены пароля
+          if (res.headers.get('X-Password-Change-Required') === '1') {
+            if (window.location.pathname !== '/dashboard/change-password') {
+              window.location.href = '/dashboard/change-password'
+            }
+            return res
+          }
+          if (!isOptional403Path(path)) {
             toast.error('Нет доступа', { description: 'Недостаточно прав для этого действия' })
           }
           return res

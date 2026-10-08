@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
+import { isUnsafeId } from '@/lib/security';
 import prisma from '@/lib/prisma';
-import { requireAuth } from '@/lib/auth';
+import { requireAuth } from '@/lib/api-auth';
+import { decryptAuthToken } from '@/lib/encryption';
 import { RocketChatClient } from '@/lib/rocketchat';
 
 /** SUP может проверить подключение любого workspace (в т.ч. другого пользователя). */
@@ -11,8 +13,9 @@ export async function POST(
   try {
     const currentUser = await requireAuth();
     const { workspaceId } = await params;
+    if (isUnsafeId(workspaceId)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
 
-    if (currentUser.role !== 'SUPPORT' && currentUser.role !== 'ADMIN') {
+    if (currentUser.role !== 'SUP' && currentUser.role !== 'LEAD_SUP') {
       return NextResponse.json(
         { error: 'Insufficient permissions' },
         { status: 403 }
@@ -30,7 +33,8 @@ export async function POST(
       );
     }
 
-    if (!workspace.authToken || !workspace.userId_RC) {
+    const decryptedToken = decryptAuthToken(workspace.authToken);
+    if (!decryptedToken || !workspace.userId_RC) {
       return NextResponse.json(
         { ok: false, error: 'Workspace not authenticated' },
         { status: 200 }
@@ -39,7 +43,7 @@ export async function POST(
 
     const rcClient = new RocketChatClient(workspace.workspaceUrl);
     const isConnected = await rcClient.testConnection(
-      workspace.authToken,
+      decryptedToken,
       workspace.userId_RC
     );
 

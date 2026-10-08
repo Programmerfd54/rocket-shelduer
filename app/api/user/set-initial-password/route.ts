@@ -1,18 +1,28 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { requireAuth, hashPassword } from '@/lib/auth';
+import {
+  requireAuthAllowPasswordChange,
+  hashPassword,
+  verifyPassword,
+  validateNewPassword,
+  deleteAllSessionsExcept,
+  reissueSessionToken,
+} from '@/lib/auth';
 
 /**
  * PATCH — установка нового пароля при первом входе (после сброса пароля на логин).
  * Доступно только если у пользователя requirePasswordChange === true.
+ * Новый пароль не может совпадать с временным/логином. После установки другие сессии
+ * завершаются, а текущий токен перевыпускается без флага «нужна смена пароля».
  */
 export async function PATCH(request: Request) {
   try {
-    const user = await requireAuth();
-    const body = await request.json();
-    const { newPassword, confirmPassword } = body;
+    const user = await requireAuthAllowPasswordChange();
+    const body = await request.json().catch(() => null);
+    const newPassword = body?.newPassword;
+    const confirmPassword = body?.confirmPassword;
 
-    if (!newPassword || !confirmPassword) {
+    if (typeof newPassword !== 'string' || !newPassword || typeof confirmPassword !== 'string' || !confirmPassword) {
       return NextResponse.json(
         { error: 'Заполните оба поля: новый пароль и подтверждение' },
         { status: 400 }
@@ -26,25 +36,9 @@ export async function PATCH(request: Request) {
       );
     }
 
-    if (newPassword.length < 8) {
-      return NextResponse.json(
-        { error: 'Пароль должен содержать минимум 8 символов' },
-        { status: 400 }
-      );
-    }
-
-    const { checkPasswordStrength } = await import('@/lib/utils');
-    const strength = checkPasswordStrength(newPassword);
-    if (!strength.valid || strength.strength === 'weak') {
-      return NextResponse.json(
-        { error: strength.message || 'Пароль слишком простой: используйте буквы разного регистра, цифры и спецсимволы' },
-        { status: 400 }
-      );
-    }
-
     const dbUser = await prisma.user.findUnique({
       where: { id: user.id },
-      select: { id: true, requirePasswordChange: true },
+      select: { id: true, email: true, username: true, role: true, password: true, requirePasswordChange: true },
     });
 
     if (!dbUser) {
@@ -58,18 +52,43 @@ export async function PATCH(request: Request) {
       );
     }
 
+    const passwordError = await validateNewPassword(newPassword, [dbUser.email, dbUser.username]);
+    if (passwordError) {
+      return NextResponse.json({ error: passwordError }, { status: 400 });
+    }
+
+    if (await verifyPassword(newPassword, dbUser.password)) {
+      return NextResponse.json(
+        { error: 'Новый пароль должен отличаться от временного' },
+        { status: 400 }
+      );
+    }
+
     const hashedPassword = await hashPassword(newPassword);
 
     await prisma.user.update({
       where: { id: user.id },
       data: { password: hashedPassword, requirePasswordChange: false },
     });
+    // Временный пароль мог быть известен другим (пароль = логин) — завершаем остальные сессии
+    await deleteAllSessionsExcept(user.id, user.sessionId);
+    if (user.sessionId && user.sessionExpiresAt) {
+      await reissueSessionToken({
+        user: { id: dbUser.id, email: dbUser.email, role: dbUser.role },
+        sessionId: user.sessionId,
+        expiresAt: user.sessionExpiresAt,
+        requirePasswordChange: false,
+      });
+    }
 
     return NextResponse.json({
       success: true,
       message: 'Пароль успешно установлен. Теперь вы можете пользоваться аккаунтом.',
     });
-  } catch {
+  } catch (e) {
+    if (e instanceof Error && e.message === 'Unauthorized') {
+      return NextResponse.json({ error: 'Необходима авторизация' }, { status: 401 });
+    }
     return NextResponse.json(
       { error: 'Не удалось установить пароль' },
       { status: 500 }

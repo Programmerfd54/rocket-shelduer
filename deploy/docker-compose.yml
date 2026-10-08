@@ -1,0 +1,103 @@
+# restart: unless-stopped — контейнеры автоматически поднимаются после перезагрузки машины
+# Данные БД в volume pgdata сохраняются между перезапусками
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      # Пароль из .env (generate-env.sh генерирует случайный). Значение по умолчанию "password"
+      # оставлено только для совместимости с уже созданным volume — смените (см. deploy/README.md).
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: rocketchat_scheduler
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Без повышения привилегий через setuid-бинарники (entrypoint postgres сам понижает права до postgres)
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d rocketchat_scheduler"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        - NODE_ENV=production
+        - NPM_CONFIG_REGISTRY=https://registry.npmjs.org/
+    env_file:
+      - ../.env
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-password}@postgres:5432/rocketchat_scheduler
+      HOSTNAME: "0.0.0.0"
+      NODE_ENV: production
+      NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # По умолчанию 0.0.0.0 (как раньше). Рекомендуется APP_BIND_ADDRESS=127.0.0.1 в .env, если nginx/Caddy
+    # на этом же хосте: прямой доступ к :4001 минует TLS и позволяет подделывать X-Forwarded-For.
+    ports:
+      - "${APP_BIND_ADDRESS:-0.0.0.0}:4001:3000"
+    networks:
+      - app-network
+    restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+      - 1.1.1.1
+    # Загрузки справки и аватары переживают пересоздание контейнера (раньше терялись при up --build).
+    # При первом запуске пустой volume заполняется файлами из образа.
+    volumes:
+      - help_uploads:/app/public/help-uploads
+      - avatar_uploads:/app/public/uploads/avatars
+    # Харденинг: процесс node (uid 1001) не нуждается ни в каких capabilities (порт 3000 > 1024)
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    mem_limit: ${APP_MEM_LIMIT:-1536m}
+    # read_only не включён: Next пишет кэш в .next/cache, npx/tsx при старте — во временные каталоги
+
+  cron:
+    build:
+      context: ..
+      dockerfile: Dockerfile.cron
+    env_file:
+      - ../.env
+    depends_on:
+      app:
+        condition: service_started
+    # Секрет передаётся curl через stdin (-H @-), а не аргументом командной строки
+    command: >
+      sh -c "while true; do
+      printf 'Authorization: Bearer %s\n' \"$$CRON_SECRET\" | curl -sf -o /dev/null -H @- http://app:3000/api/cron/send-messages || true;
+      sleep 60;
+      done"
+    networks:
+      - app-network
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 64m
+
+volumes:
+  pgdata: {}
+  help_uploads: {}
+  avatar_uploads: {}
+
+networks:
+  app-network:
+    driver: bridge

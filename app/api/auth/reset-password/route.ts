@@ -1,8 +1,18 @@
+import crypto from 'crypto';
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { hashPassword } from '@/lib/auth';
-import { getClientIp, isAuthEndpointRateLimited, recordAuthEndpointHit, logSecurityEvent, SecurityEventType } from '@/lib/security';
+import { hashPassword, validateNewPassword } from '@/lib/auth';
+import { getClientIp, isAuthEndpointRateLimited, logSecurityEvent, SecurityEventType } from '@/lib/security';
 
+const MAX_TOKEN_LENGTH = 256;
+const INVALID_LINK_ERROR = 'Ссылка недействительна или истекла. Запросите сброс пароля снова.';
+
+/**
+ * POST — установка нового пароля по токену сброса. Body: { token, newPassword }.
+ * Токен одноразовый: запись удаляется атомарно ДО смены пароля (повторное/параллельное использование
+ * не проходит). В БД токен рекомендуется хранить как sha256(token) — поддерживаются оба варианта.
+ * После сброса все сессии пользователя завершаются.
+ */
 export async function POST(request: Request) {
   const ip = getClientIp(request);
 
@@ -20,52 +30,70 @@ export async function POST(request: Request) {
       { status: 429 }
     );
   }
-  recordAuthEndpointHit(ip ?? null);
 
   try {
-    const body = await request.json();
-    const token = (body.token ?? '').toString().trim();
-    const newPassword = (body.newPassword ?? body.password ?? '').toString();
+    const body = await request.json().catch(() => null);
+    const token = typeof body?.token === 'string' ? body.token.trim() : '';
+    const newPassword = body?.newPassword ?? body?.password;
 
-    if (!token) {
+    if (!token || token.length > MAX_TOKEN_LENGTH) {
       return NextResponse.json(
         { error: 'Не указан токен сброса' },
         { status: 400 }
       );
     }
 
-    if (newPassword.length < 8) {
-      return NextResponse.json(
-        { error: 'Пароль должен быть не менее 8 символов' },
-        { status: 400 }
-      );
+    const passwordError = await validateNewPassword(newPassword);
+    if (passwordError) {
+      return NextResponse.json({ error: passwordError }, { status: 400 });
     }
 
-    const resetRecord = await prisma.passwordResetToken.findUnique({
-      where: { token },
-    });
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    const resetRecord =
+      (await prisma.passwordResetToken.findUnique({ where: { token: tokenHash } })) ??
+      (await prisma.passwordResetToken.findUnique({ where: { token } }));
 
     if (!resetRecord || new Date(resetRecord.expiresAt) <= new Date()) {
-      return NextResponse.json(
-        { error: 'Ссылка недействительна или истекла. Запросите сброс пароля снова.' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: INVALID_LINK_ERROR }, { status: 400 });
     }
 
-    const hashed = await hashPassword(newPassword);
-    await prisma.user.update({
+    const user = await prisma.user.findUnique({
       where: { id: resetRecord.userId },
-      data: { password: hashed },
+      select: { id: true, email: true, username: true },
     });
-    await prisma.passwordResetToken.delete({ where: { id: resetRecord.id } });
-    await prisma.session.deleteMany({ where: { userId: resetRecord.userId } });
+    if (!user) {
+      return NextResponse.json({ error: INVALID_LINK_ERROR }, { status: 400 });
+    }
+    const identityError = await validateNewPassword(newPassword, [user.email, user.username]);
+    if (identityError) {
+      return NextResponse.json({ error: identityError }, { status: 400 });
+    }
+
+    const hashed = await hashPassword(newPassword as string);
+    const consumed = await prisma.$transaction(async (tx) => {
+      // Атомарное «погашение» токена: только один запрос получит count = 1
+      const del = await tx.passwordResetToken.deleteMany({
+        where: { id: resetRecord.id, expiresAt: { gt: new Date() } },
+      });
+      if (del.count !== 1) return false;
+      await tx.user.update({
+        where: { id: resetRecord.userId },
+        data: { password: hashed, requirePasswordChange: false },
+      });
+      await tx.session.deleteMany({ where: { userId: resetRecord.userId } });
+      return true;
+    });
+
+    if (!consumed) {
+      return NextResponse.json({ error: INVALID_LINK_ERROR }, { status: 400 });
+    }
 
     return NextResponse.json({
       success: true,
       message: 'Пароль успешно изменён. Войдите с новым паролем.',
     });
   } catch (e) {
-    console.error('Reset password error:', e);
+    console.error('Reset password error:', e instanceof Error ? e.message : 'unknown');
     return NextResponse.json(
       { error: 'Не удалось сменить пароль' },
       { status: 500 }

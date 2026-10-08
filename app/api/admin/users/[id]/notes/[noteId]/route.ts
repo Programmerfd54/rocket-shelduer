@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
+import { isUnsafeId } from '@/lib/security';
 import prisma from '@/lib/prisma';
-import { requireAuth } from '@/lib/auth';
+import { requireAuth } from '@/lib/api-auth';
+import { canPerformAction } from '@/lib/permissions';
 
 export async function DELETE(
   _request: Request,
@@ -9,8 +11,9 @@ export async function DELETE(
   try {
     const currentUser = await requireAuth();
     const { id, noteId } = await params;
+    if (isUnsafeId(id) || isUnsafeId(noteId)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
 
-    if (currentUser.role !== 'SUPPORT' && currentUser.role !== 'ADMIN') {
+    if (!canPerformAction(currentUser, 'admin:users:notes')) {
       return NextResponse.json(
         { error: 'Insufficient permissions' },
         { status: 403 }
@@ -28,7 +31,7 @@ export async function DELETE(
         { status: 404 }
       );
     }
-    if (note.user?.role === 'ADMIN' && currentUser.role !== 'ADMIN') {
+    if (note.user?.role === 'LEAD_SUP' && currentUser.role !== 'LEAD_SUP') {
       return NextResponse.json(
         { error: 'Only superuser can delete notes for ADMIN users' },
         { status: 403 }

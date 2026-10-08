@@ -1,21 +1,15 @@
 import { NextResponse } from 'next/server';
-import { getCurrentUser } from '@/lib/auth';
+import { getCurrentUser } from '@/lib/api-auth';
 import prisma from '@/lib/prisma';
 
 /**
- * GET /api/templates/mine — список своих шаблонов (ADM/SUP, не VOL).
+ * GET /api/templates/mine — список своих шаблонов (ADM/SUP).
  */
 export async function GET() {
   try {
     const user = await getCurrentUser();
     if (!user) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
-    }
-    if (user.role === 'VOL' || user.role === 'USER') {
-      return NextResponse.json(
-        { error: 'My templates are available only for ADM and SUPPORT' },
-        { status: 403 }
-      );
     }
     const list = await prisma.userTemplate.findMany({
       where: { userId: user.id },
@@ -32,6 +26,7 @@ export async function GET() {
         tags: t.tags ?? [],
         createdAt: t.createdAt.toISOString(),
         updatedAt: t.updatedAt.toISOString(),
+        lastSentAt: t.lastSentAt ? t.lastSentAt.toISOString() : null,
       })),
     });
   } catch (error) {
@@ -52,12 +47,6 @@ export async function POST(request: Request) {
     const user = await getCurrentUser();
     if (!user) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
-    }
-    if (user.role === 'VOL' || user.role === 'USER') {
-      return NextResponse.json(
-        { error: 'My templates are available only for ADM and SUPPORT' },
-        { status: 403 }
-      );
     }
     const body = await request.json();
     const channel = typeof body.channel === 'string' ? body.channel.trim() : '';

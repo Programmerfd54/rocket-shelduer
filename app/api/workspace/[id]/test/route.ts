@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
+import { isUnsafeId } from '@/lib/security';
 import prisma from '@/lib/prisma';
-import { requireAuth } from '@/lib/auth';
+import { requireAuth } from '@/lib/api-auth';
 import { RocketChatClient } from '@/lib/rocketchat';
+import { getEffectiveConnectionForRc } from '@/lib/workspace-rc';
+import { rcNotConnectedResponse, rcUnauthorizedResponse } from '@/lib/rc-http';
 
 export async function POST(
   request: Request,
@@ -10,13 +13,18 @@ export async function POST(
   try {
     const user = await requireAuth();
     const { id } = await params;
+    if (isUnsafeId(id)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
 
-    const workspace = await prisma.workspaceConnection.findFirst({
-      where: {
-        id,
-        userId: user.id,
-      },
+    let workspace = await prisma.workspaceConnection.findFirst({
+      where: { id, userId: user.id },
+      select: { id: true },
     });
+    if (!workspace) {
+      const assignment = await prisma.workspaceAdminAssignment.findFirst({
+        where: { workspaceId: id, userId: user.id },
+      });
+      if (assignment) workspace = await prisma.workspaceConnection.findUnique({ where: { id }, select: { id: true } });
+    }
 
     if (!workspace) {
       return NextResponse.json(
@@ -25,33 +33,30 @@ export async function POST(
       );
     }
 
-    if (!workspace.authToken || !workspace.userId_RC) {
-      return NextResponse.json(
-        { error: 'Workspace not authenticated' },
-        { status: 401 }
-      );
+    const effective = await getEffectiveConnectionForRc(user.id, id);
+    if (!effective?.authToken || !effective.userId_RC) {
+      return rcNotConnectedResponse();
     }
 
-    const rcClient = new RocketChatClient(workspace.workspaceUrl);
+    const rcClient = new RocketChatClient(effective.workspaceUrl);
     const isConnected = await rcClient.testConnection(
-      workspace.authToken,
-      workspace.userId_RC
+      effective.authToken,
+      effective.userId_RC
     );
 
     if (!isConnected) {
       await prisma.workspaceConnection.update({
-        where: { id },
+        where: { id: effective.id },
         data: { isActive: false },
       });
 
-      return NextResponse.json(
-        { error: 'Connection test failed. Please re-authenticate.' },
-        { status: 401 }
+      return rcUnauthorizedResponse(
+        'Connection test failed. Please re-authenticate.' 
       );
     }
 
     await prisma.workspaceConnection.update({
-      where: { id },
+      where: { id: effective.id },
       data: {
         isActive: true,
         lastConnected: new Date(),

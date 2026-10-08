@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
+import { getSafeErrorMessage } from '@/lib/security';
 import prisma from '@/lib/prisma';
-import { requireAuth, hashPassword } from '@/lib/auth';
+import { hashPassword, isForbiddenError } from '@/lib/auth';
+import { requireSupportOrAdmin } from '@/lib/api-auth';
+import { canManageUserWithRole } from '@/lib/roles';
+import { canPerformAction } from '@/lib/permissions';
 import { createActivityLog } from '@/app/api/activity/route';
 import { isUnsafeId } from '@/lib/security';
 
@@ -10,16 +14,12 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const currentUser = await requireAuth();
+    const currentUser = await requireSupportOrAdmin();
+    if (!canPerformAction(currentUser, 'admin:users:edit')) {
+      return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
+    }
     const { id } = await params;
     if (isUnsafeId(id)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
-
-    if (currentUser.role !== 'SUPPORT' && currentUser.role !== 'ADMIN') {
-      return NextResponse.json(
-        { error: 'Insufficient permissions' },
-        { status: 403 }
-      );
-    }
 
     const targetUser = await prisma.user.findUnique({
       where: { id },
@@ -33,9 +33,9 @@ export async function PATCH(
       );
     }
 
-    if (targetUser.role === 'ADMIN' && currentUser.role !== 'ADMIN') {
+    if (!canManageUserWithRole(currentUser.role, targetUser.role)) {
       return NextResponse.json(
-        { error: 'Only ADMIN can edit ADMIN user profile' },
+        { error: 'Недостаточно прав для изменения этого пользователя' },
         { status: 403 }
       );
     }
@@ -46,10 +46,13 @@ export async function PATCH(
     const data: { name?: string | null; email?: string; username?: string | null; password?: string } = {};
 
     if (name !== undefined) {
-      data.name = typeof name === 'string' ? name.trim() || null : null;
+      data.name = typeof name === 'string' ? name.trim().slice(0, 200) || null : null;
     }
     if (email !== undefined && typeof email === 'string') {
       const trimmed = email.trim().toLowerCase();
+      if (trimmed.length > 200 || /\s/.test(trimmed)) {
+        return NextResponse.json({ error: 'Некорректный логин' }, { status: 400 });
+      }
       if (!trimmed) {
         return NextResponse.json(
           { error: 'Логин (email) не может быть пустым' },
@@ -69,6 +72,12 @@ export async function PATCH(
     }
     if (username !== undefined) {
       const val = typeof username === 'string' ? username.trim() || null : null;
+      if (val !== null && (val.length > 100 || /[\s<>"']/.test(val))) {
+        return NextResponse.json(
+          { error: 'Некорректный username (до 100 символов, без пробелов и кавычек)' },
+          { status: 400 }
+        );
+      }
       if (val !== null) {
         const existing = await prisma.user.findFirst({
           where: { username: val, NOT: { id } },
@@ -83,7 +92,7 @@ export async function PATCH(
       data.username = val;
     }
     if (newPassword !== undefined && typeof newPassword === 'string') {
-      if (newPassword.length < 8) {
+      if (newPassword.length < 8 || newPassword.length > 200) {
         return NextResponse.json(
           { error: 'Пароль должен быть не менее 8 символов' },
           { status: 400 }
@@ -103,6 +112,12 @@ export async function PATCH(
       where: { id },
       data,
     });
+    // Смена пароля/логина администратором завершает сессии пользователя (кроме собственной текущей)
+    if (data.password || data.email) {
+      await prisma.session.deleteMany({
+        where: { userId: id, ...(id === currentUser.id && currentUser.sessionId ? { id: { not: currentUser.sessionId } } : {}) },
+      });
+    }
 
     await createActivityLog(
       currentUser.id,
@@ -119,10 +134,11 @@ export async function PATCH(
     });
 
     return NextResponse.json({ success: true, user: updated });
-  } catch (error) {
-    console.error('Admin update profile error:', error);
+  } catch (e) {
+    if (isForbiddenError(e)) return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
+    console.error('Admin update profile error:', e);
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to update profile' },
+      { error: getSafeErrorMessage(e, 'Failed to update profile') },
       { status: 500 }
     );
   }
@@ -134,16 +150,12 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const currentUser = await requireAuth();
+    const currentUser = await requireSupportOrAdmin();
+    if (!canPerformAction(currentUser, 'admin:users:edit')) {
+      return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
+    }
     const { id } = await params;
     if (isUnsafeId(id)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
-
-    if (currentUser.role !== 'SUPPORT' && currentUser.role !== 'ADMIN') {
-      return NextResponse.json(
-        { error: 'Insufficient permissions' },
-        { status: 403 }
-      );
-    }
 
     if (currentUser.id === id) {
       return NextResponse.json(
@@ -168,9 +180,9 @@ export async function DELETE(
       where: { id },
       select: { role: true },
     });
-    if (targetUser?.role === 'ADMIN' && currentUser.role !== 'ADMIN') {
+    if (targetUser && !canManageUserWithRole(currentUser.role, targetUser.role)) {
       return NextResponse.json(
-        { error: 'Only superuser can delete ADMIN users' },
+        { error: 'Недостаточно прав для удаления этого пользователя' },
         { status: 403 }
       );
     }
@@ -189,10 +201,11 @@ export async function DELETE(
     );
 
     return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error('Delete user error:', error);
+  } catch (e) {
+    if (isForbiddenError(e)) return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
+    console.error('Delete user error:', e);
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to delete user' },
+      { error: getSafeErrorMessage(e, 'Failed to delete user') },
       { status: 500 }
     );
   }

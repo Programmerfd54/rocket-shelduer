@@ -1,30 +1,23 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { requireAuth, hashPassword } from '@/lib/auth';
-
-function generateRandomPassword(length: number = 12): string {
-  const charset = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*';
-  let password = '';
-  for (let i = 0; i < length; i++) {
-    password += charset.charAt(Math.floor(Math.random() * charset.length));
-  }
-  return password;
-}
+import { hashPassword, isForbiddenError } from '@/lib/auth';
+import { requireSupportOrAdmin } from '@/lib/api-auth';
+import { canManageUserWithRole } from '@/lib/roles';
+import { canPerformAction } from '@/lib/permissions';
+import { isUnsafeId } from '@/lib/security';
+import { generateTemporaryPassword } from '@/lib/admin-user-schemas';
 
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const user = await requireAuth();
-    const { id } = await params;
-
-    if (user.role !== 'SUPPORT' && user.role !== 'ADMIN') {
-      return NextResponse.json(
-        { error: 'Insufficient permissions' },
-        { status: 403 }
-      );
+    const user = await requireSupportOrAdmin();
+    if (!canPerformAction(user, 'admin:users:reset-password')) {
+      return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
     }
+    const { id } = await params;
+    if (isUnsafeId(id)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
 
     const targetUser = await prisma.user.findUnique({
       where: { id },
@@ -38,15 +31,14 @@ export async function POST(
       );
     }
 
-    // Только ADMIN может сбросить пароль SUP или ADMIN
-    if ((targetUser.role === 'SUPPORT' || targetUser.role === 'ADMIN') && user.role !== 'ADMIN') {
+    if (!canManageUserWithRole(user.role, targetUser.role)) {
       return NextResponse.json(
-        { error: 'Cannot reset admin password' },
+        { error: 'Cannot reset password for this role' },
         { status: 403 }
       );
     }
 
-    const newPassword = generateRandomPassword();
+    const newPassword = generateTemporaryPassword();
     const hashedPassword = await hashPassword(newPassword);
 
     await prisma.user.update({
@@ -59,10 +51,8 @@ export async function POST(
       success: true,
       newPassword,
     });
-  } catch {
-    return NextResponse.json(
-      { error: 'Failed to reset password' },
-      { status: 500 }
-    );
+  } catch (e) {
+    if (isForbiddenError(e)) return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
+    return NextResponse.json({ error: 'Failed to reset password' }, { status: 500 });
   }
 }

@@ -1,16 +1,18 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { requireAuth } from '@/lib/auth';
+import { workspaceTabForbiddenResponse } from '@/lib/workspace-tab-access';
+import { getSafeErrorMessage, isUnsafeId } from '@/lib/security';
 import { RocketChatClient } from '@/lib/rocketchat';
-import yaml from 'js-yaml';
+import { resolveWorkspaceForEmojiImport } from '@/lib/emoji-import-access';
+import { safeFetchPublic, SafeFetchError } from '@/lib/emoji-safe-fetch';
+import { parseEmojiCatalog, EMOJI_CATALOG_MAX_BYTES, type CatalogEmoji } from '@/lib/emoji-catalog';
+import { classifyEmojiImage, EMOJI_IMAGE_MAX_BYTES } from '@/lib/emoji-image';
 
 const DEFAULT_YAML_URL =
   'https://raw.githubusercontent.com/Programmerfd54/emoji/refs/heads/main/emojis.yaml';
 
-interface YamlEmoji {
-  name: string;
-  src: string;
-}
+const NOT_AN_IMAGE = 'файл по ссылке не является изображением';
 
 function streamLine(controller: ReadableStreamDefaultController<Uint8Array>, obj: object) {
   controller.enqueue(
@@ -25,13 +27,11 @@ export async function POST(
   try {
     const user = await requireAuth();
     const { id: workspaceId } = await params;
+    if (isUnsafeId(workspaceId)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
+    const tabDenied = await workspaceTabForbiddenResponse(user, 'emojiImport');
+    if (tabDenied) return tabDenied;
 
-    const workspace = await prisma.workspaceConnection.findFirst({
-      where: {
-        id: workspaceId,
-        userId: user.id,
-      },
-    });
+    const workspace = await resolveWorkspaceForEmojiImport(user.id, workspaceId);
 
     if (!workspace) {
       return NextResponse.json(
@@ -63,27 +63,32 @@ export async function POST(
     } catch (loginError: any) {
       return NextResponse.json(
         {
+          code: 'RC_LOGIN_FAILED',
           error:
             'Не удалось войти с указанными учётными данными. Проверьте логин и пароль администратора для этого сервера Rocket.Chat.',
           details: loginError?.message,
         },
-        { status: 401 }
+        { status: 403 }
       );
     }
 
-    const yamlUrl = (body.yamlUrl as string)?.trim() || DEFAULT_YAML_URL;
+    const yamlUrl = (typeof body.yamlUrl === 'string' ? body.yamlUrl.trim() : '') || DEFAULT_YAML_URL;
 
-    const yamlRes = await fetch(yamlUrl, { signal: AbortSignal.timeout(15000) });
-    if (!yamlRes.ok) {
-      return NextResponse.json(
-        { error: `Не удалось загрузить каталог: ${yamlRes.statusText}` },
-        { status: 502 }
-      );
+    // SSRF: URL каталога и ссылки на картинки — пользовательские/сторонние; только публичные http(s)-адреса.
+    let emojis: CatalogEmoji[];
+    try {
+      const yamlRes = await safeFetchPublic(yamlUrl, { maxBytes: EMOJI_CATALOG_MAX_BYTES, timeoutMs: 15000 });
+      if (!yamlRes.ok) {
+        return NextResponse.json(
+          { error: `Не удалось загрузить каталог: HTTP ${yamlRes.status}` },
+          { status: 502 }
+        );
+      }
+      emojis = parseEmojiCatalog(new TextDecoder('utf-8', { fatal: false }).decode(yamlRes.body)).emojis;
+    } catch (e) {
+      const message = e instanceof SafeFetchError ? e.message : 'Не удалось загрузить или разобрать каталог';
+      return NextResponse.json({ error: message }, { status: e instanceof SafeFetchError ? 400 : 502 });
     }
-
-    const yamlText = await yamlRes.text();
-    const parsed = yaml.load(yamlText) as { emojis?: YamlEmoji[] };
-    const emojis: YamlEmoji[] = Array.isArray(parsed?.emojis) ? parsed.emojis : [];
 
     if (emojis.length === 0) {
       return NextResponse.json({
@@ -122,21 +127,16 @@ export async function POST(
               continue;
             }
 
-            const url = emoji.src;
-            const filePart = url.split('/').pop() || '';
-            const ext = filePart.split('.').pop() || 'png';
-            const extLower = ext.toLowerCase();
-            const contentType =
-              extLower === 'gif'
-                ? 'image/gif'
-                : extLower === 'jpeg' || extLower === 'jpg'
-                  ? 'image/jpeg'
-                  : 'image/png';
-            const filename = `${emoji.name}.${extLower}`;
+            const { contentType } = emoji;
+            const filename = `${emoji.name}.${emoji.ext}`;
 
             let imageBuffer: Buffer;
             try {
-              const imgRes = await fetch(url, { signal: AbortSignal.timeout(10000) });
+              const imgRes = await safeFetchPublic(emoji.src, {
+                maxBytes: EMOJI_IMAGE_MAX_BYTES,
+                timeoutMs: 10000,
+                accept: 'image/*',
+              });
               if (!imgRes.ok) {
                 errors.push(`${emoji.name}: не удалось загрузить изображение (${imgRes.status})`);
                 processed++;
@@ -150,10 +150,18 @@ export async function POST(
                 });
                 continue;
               }
-              const arrayBuffer = await imgRes.arrayBuffer();
-              imageBuffer = Buffer.from(arrayBuffer);
+              // В Rocket.Chat уходят только картинки (не HTML/JSON и т.п. — защита от эксфильтрации через импорт)
+              const kind = classifyEmojiImage(imgRes.body, imgRes.contentType);
+              if (kind === 'html' || kind === 'unknown') {
+                throw new Error(NOT_AN_IMAGE);
+              }
+              imageBuffer = Buffer.from(imgRes.body);
             } catch (e: any) {
-              errors.push(`${emoji.name}: ${e?.message || 'ошибка загрузки'}`);
+              const reason =
+                e instanceof SafeFetchError || (e instanceof Error && e.message === NOT_AN_IMAGE)
+                  ? e.message
+                  : getSafeErrorMessage(e, 'ошибка загрузки');
+              errors.push(`${emoji.name}: ${reason}`);
               processed++;
               streamLine(controller, {
                 t: 'progress',
@@ -202,10 +210,11 @@ export async function POST(
             total: emojis.length,
             errors: errors.length ? errors : undefined,
           });
-        } catch (err: any) {
+        } catch (err: unknown) {
+          console.error('Emoji import stream failed:', err);
           streamLine(controller, {
             t: 'error',
-            error: err?.message || 'Импорт прерван',
+            error: getSafeErrorMessage(err, 'Импорт прерван'),
           });
         } finally {
           controller.close();
@@ -222,7 +231,7 @@ export async function POST(
   } catch (error: any) {
     console.error('Emoji import error:', error);
     return NextResponse.json(
-      { error: error?.message || 'Emoji import failed' },
+      { error: getSafeErrorMessage(error, 'Emoji import failed') },
       { status: 500 }
     );
   }

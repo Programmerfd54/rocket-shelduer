@@ -2,14 +2,15 @@
 // Настрой в Vercel/Railway: GET /api/cron/cleanup-archives каждый день
 
 import { NextResponse } from 'next/server';
+import { verifyCronRequest } from '@/lib/security';
 import prisma from '@/lib/prisma';
 
 export async function GET(request: Request) {
   try {
-    // Проверяем секретный ключ (если задан — иначе разрешаем для dev)
-    const authHeader = request.headers.get('authorization');
-    if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    // Bearer CRON_SECRET: сравнение за постоянное время, в production секрет обязателен
+    const denied = verifyCronRequest(request);
+    if (denied) {
+      return NextResponse.json({ error: denied.error }, { status: denied.status });
     }
 
     const now = new Date();
@@ -63,8 +64,12 @@ export async function GET(request: Request) {
 
           return { success: true, id: ws.id, name: ws.workspaceName };
         } catch (error) {
-          console.error(`Failed to delete workspace ${ws.id}:`, error);
-          return { success: false, id: ws.id, name: ws.workspaceName, error };
+          console.error(`Failed to delete workspace ${ws.id}:`, error instanceof Error ? error.message : 'unknown');
+          return {
+            success: false,
+            id: ws.id,
+            name: ws.workspaceName,
+          };
         }
       })
     );

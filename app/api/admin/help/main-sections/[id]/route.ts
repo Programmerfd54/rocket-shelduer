@@ -1,44 +1,46 @@
 import { NextResponse } from 'next/server';
+import { isUnsafeId } from '@/lib/security';
 import prisma from '@/lib/prisma';
-import { requireAuth } from '@/lib/auth';
+import { sanitizeHelpHtml } from '@/lib/sanitize';
+import { requireAuth } from '@/lib/api-auth';
+import { requireAction } from '@/lib/permissions';
+import { assertGlobalHelpMainSection, helpAdminErrorResponse } from '@/lib/help-admin';
 
 export async function PATCH(
   request: Request,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   try {
     const user = await requireAuth();
-    if (user.role !== 'ADMIN') {
-      return NextResponse.json({ error: 'Only ADMIN' }, { status: 403 });
-    }
+    requireAction(user, 'admin:help');
     const { id } = await params;
+    if (isUnsafeId(id)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
+    await assertGlobalHelpMainSection(id);
     const body = await request.json();
     const data: { title?: string; order?: number; content?: string } = {};
     if (typeof body.title === 'string') data.title = body.title.trim();
     if (typeof body.order === 'number') data.order = body.order;
-    if (typeof body.content === 'string') data.content = body.content;
+    if (typeof body.content === 'string') data.content = sanitizeHelpHtml(body.content);
     await prisma.helpMainSection.update({ where: { id }, data });
     return NextResponse.json({ success: true });
   } catch (e) {
-    console.error('Admin help main-section PATCH error:', e);
-    return NextResponse.json({ error: 'Failed to update' }, { status: 500 });
+    return helpAdminErrorResponse(e, 'Admin help main-section PATCH error:');
   }
 }
 
 export async function DELETE(
   _request: Request,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   try {
     const user = await requireAuth();
-    if (user.role !== 'ADMIN') {
-      return NextResponse.json({ error: 'Only ADMIN' }, { status: 403 });
-    }
+    requireAction(user, 'admin:help');
     const { id } = await params;
+    if (isUnsafeId(id)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
+    await assertGlobalHelpMainSection(id);
     await prisma.helpMainSection.delete({ where: { id } });
     return NextResponse.json({ success: true });
   } catch (e) {
-    console.error('Admin help main-section DELETE error:', e);
-    return NextResponse.json({ error: 'Failed to delete' }, { status: 500 });
+    return helpAdminErrorResponse(e, 'Admin help main-section DELETE error:');
   }
 }

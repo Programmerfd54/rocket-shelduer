@@ -8,6 +8,8 @@ interface VirtualListProps<T> {
   items: T[]
   renderItem: (item: T, index: number) => React.ReactNode
   estimateSize?: number
+  /** Расстояние между строками (px), учитывается виртуализатором вместе с измерением высоты. */
+  gap?: number
   overscan?: number
   className?: string
   /** Высота контейнера (например '60vh' или 400). По умолчанию min(60vh, 500). */
@@ -19,6 +21,7 @@ export function VirtualList<T>({
   items,
   renderItem,
   estimateSize = 56,
+  gap = 0,
   overscan = 5,
   className,
   height,
@@ -30,6 +33,7 @@ export function VirtualList<T>({
     getScrollElement: () => parentRef.current,
     estimateSize: () => estimateSize,
     overscan,
+    gap,
   })
 
   const defaultHeight = typeof window !== 'undefined' ? 'min(60vh, 500px)' : '500px'
@@ -56,6 +60,8 @@ export function VirtualList<T>({
           return (
             <div
               key={key}
+              ref={virtualizer.measureElement}
+              data-index={virtualRow.index}
               style={{
                 position: 'absolute',
                 top: 0,

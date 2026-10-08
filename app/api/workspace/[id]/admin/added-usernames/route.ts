@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { requireAuth } from '@/lib/auth';
+import { requireAuth } from '@/lib/api-auth';
 import { isUnsafeId } from '@/lib/security';
 
-/** Проверка доступа: владелец пространства или назначенный SUP/ADMIN */
+/** Проверка доступа: владелец пространства или назначенный SUP/ADMIN/ADM */
 async function canAccessWorkspaceAdmin(userId: string, userRole: string, workspaceId: string) {
   const workspace = await prisma.workspaceConnection.findUnique({
     where: { id: workspaceId },
@@ -11,7 +11,7 @@ async function canAccessWorkspaceAdmin(userId: string, userRole: string, workspa
   });
   if (!workspace) return { ok: false as const, error: 'Workspace not found' };
   if (workspace.userId === userId) return { ok: true as const };
-  if (userRole !== 'SUPPORT' && userRole !== 'ADMIN') return { ok: false as const, error: 'Forbidden' };
+  if (userRole !== 'SUP' && userRole !== 'LEAD_SUP' && userRole !== 'ADM') return { ok: false as const, error: 'Forbidden' };
   const assigned = await prisma.workspaceAdminAssignment.findFirst({
     where: { userId, workspaceId },
     select: { id: true },

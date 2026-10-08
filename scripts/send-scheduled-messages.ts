@@ -12,25 +12,66 @@
  */
 
 import prisma from '../lib/prisma';
+import { decryptAuthToken } from '../lib/encryption';
 import { RocketChatClient } from '../lib/rocketchat';
+import { recordSendTick } from '../lib/queue-heartbeat';
+
+/**
+ * Защита от двойной отправки.
+ * 1) В пределах процесса: тики не перекрываются (внутренний cron и /api/cron/send-messages
+ *    в одном процессе, медленный тик > 1 мин).
+ * 2) Между процессами/репликами: перед отправкой сообщение «захватывается» атомарным
+ *    compare-and-swap по полю sentAt (у PENDING оно используется как отметка «взято в работу»).
+ *    Захват, не завершённый за CLAIM_LEASE_MS (процесс упал), можно перехватить снова.
+ */
+const CLAIM_LEASE_MS = 10 * 60 * 1000;
+let tickInProgress = false;
+
+async function claimMessage(id: string, previousClaim: Date | null): Promise<Date | null> {
+  const claimedAt = new Date();
+  const res = await prisma.scheduledMessage.updateMany({
+    where: { id, status: 'PENDING', sentAt: previousClaim },
+    data: { sentAt: claimedAt },
+  });
+  return res.count === 1 ? claimedAt : null;
+}
 
 export async function sendScheduledMessages() {
+  if (tickInProgress) {
+    console.log('Previous send tick is still running — skipping');
+    return { sent: 0, failed: 0, skipped: true };
+  }
+  tickInProgress = true;
+  try {
+    const result = await runSendTick();
+    // Heartbeat очереди для индикатора на дашборде; recordSendTick не бросает и отправку не затрагивает
+    await recordSendTick(result);
+    return result;
+  } finally {
+    tickInProgress = false;
+  }
+}
+
+async function runSendTick() {
   console.log(`[${new Date().toISOString()}] Checking for scheduled messages...`);
 
   try {
     const now = new Date();
-    
-    // Находим все сообщения, которые нужно отправить
+    const staleClaimBefore = new Date(now.getTime() - CLAIM_LEASE_MS);
+
+    // Находим все сообщения, которые нужно отправить (не захваченные или с просроченным захватом)
     const messagesToSend = await prisma.scheduledMessage.findMany({
       where: {
         status: 'PENDING',
         scheduledFor: {
           lte: now,
         },
+        OR: [{ sentAt: null }, { sentAt: { lt: staleClaimBefore } }],
       },
       include: {
         workspace: true,
       },
+      orderBy: { scheduledFor: 'asc' },
       take: 50, // Ограничиваем количество сообщений за один запуск
     });
 
@@ -47,13 +88,19 @@ export async function sendScheduledMessages() {
     // Отправляем сообщения
     for (const message of messagesToSend) {
       let connectionIdToDeactivate = message.workspaceId; // при 401 деактивируем то подключение, которым отправляли
+      // Атомарный захват: если сообщение уже взял другой процесс/тик — пропускаем
+      const claimedAt = await claimMessage(message.id, message.sentAt);
+      if (!claimedAt) {
+        console.log(`Message ${message.id} is being sent by another worker — skipping`);
+        continue;
+      }
       try {
         const { workspace } = message;
 
         // Если сообщение запланировано «от имени» другого пользователя (SUP), отправляем его
         // через подключение этого пользователя к тому же RC-серверу, чтобы в RC сообщение
         // отображалось от правильного отправителя.
-        let authToken = workspace.authToken;
+        let authToken = decryptAuthToken(workspace.authToken);
         let userId_RC = workspace.userId_RC;
         let connectionActive = workspace.isActive;
         connectionIdToDeactivate = message.workspaceId;
@@ -68,8 +115,9 @@ export async function sendScheduledMessages() {
               userId_RC: { not: null },
             },
           });
-          if (authorConnection?.authToken && authorConnection?.userId_RC) {
-            authToken = authorConnection.authToken;
+          const authorToken = authorConnection?.authToken ? decryptAuthToken(authorConnection.authToken) : null;
+          if (authorToken && authorConnection?.userId_RC) {
+            authToken = authorToken;
             userId_RC = authorConnection.userId_RC;
             connectionActive = true;
             connectionIdToDeactivate = authorConnection.id;
@@ -105,6 +153,13 @@ export async function sendScheduledMessages() {
           },
         });
 
+        if (message.sourceUserTemplateId) {
+          await prisma.userTemplate.updateMany({
+            where: { id: message.sourceUserTemplateId },
+            data: { lastSentAt: new Date() },
+          });
+        }
+
         sentCount++;
         console.log(`✓ Sent message ${message.id} to ${message.channelName}`);
 
@@ -119,7 +174,8 @@ export async function sendScheduledMessages() {
           where: { id: message.id },
           data: {
             status: 'FAILED',
-            error: errorMessage,
+            error: errorMessage.slice(0, 1000),
+            sentAt: null, // снимаем отметку захвата
           },
         });
 

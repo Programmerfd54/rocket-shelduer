@@ -1,5 +1,16 @@
 import { Node, mergeAttributes } from '@tiptap/core'
 import { HELPDOC_ICONS } from '@/lib/helpIcons'
+import { sanitizeSvgIcon } from '@/lib/sanitize'
+
+/** Цвет иконки: только #hex / rgb()/rgba()/hsl() / имя цвета — иначе null (не даём внедрить CSS через style). */
+export function safeIconColor(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const v = raw.trim()
+  if (/^#[0-9a-f]{3,8}$/i.test(v)) return v
+  if (/^(rgb|rgba|hsl|hsla)\([0-9.,%\s/]+\)$/i.test(v)) return v
+  if (/^[a-z]{3,20}$/i.test(v)) return v
+  return null
+}
 
 /** Inline-иконка в справке: хранит имя иконки, в редакторе и при просмотре рендерится как SVG */
 export const HelpIcon = Node.create({
@@ -20,7 +31,7 @@ export const HelpIcon = Node.create({
       },
       color: {
         default: null as string | null,
-        parseHTML: (el) => (el as HTMLElement).getAttribute('data-icon-color') || null,
+        parseHTML: (el) => safeIconColor((el as HTMLElement).getAttribute('data-icon-color')),
         renderHTML: (attrs) => (attrs.color ? { 'data-icon-color': attrs.color } : {}),
       },
     }
@@ -38,9 +49,10 @@ export const HelpIcon = Node.create({
       class: 'help-inline-icon',
       'data-icon': node.attrs.name || 'info',
     }
-    if (node.attrs.color) {
-      out['data-icon-color'] = node.attrs.color
-      out.style = `color:${node.attrs.color}`
+    const color = safeIconColor(node.attrs.color)
+    if (color) {
+      out['data-icon-color'] = color
+      out.style = `color:${color}`
     }
     return ['span', mergeAttributes(HTMLAttributes, out)]
   },
@@ -50,12 +62,13 @@ export const HelpIcon = Node.create({
       const span = document.createElement('span')
       span.className = 'help-inline-icon'
       span.setAttribute('data-icon', node.attrs.name || 'info')
-      if (node.attrs.color) {
-        span.setAttribute('data-icon-color', node.attrs.color)
-        span.style.color = node.attrs.color
+      const color = safeIconColor(node.attrs.color)
+      if (color) {
+        span.setAttribute('data-icon-color', color)
+        span.style.color = color
       }
-      const svg = HELPDOC_ICONS[node.attrs.name]
-      if (svg) span.innerHTML = svg
+      const raw = HELPDOC_ICONS[node.attrs.name]
+      if (raw) span.innerHTML = sanitizeSvgIcon(raw)
       return { dom: span }
     }
   },

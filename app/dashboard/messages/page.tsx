@@ -1,10 +1,11 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
+import { MessageStatusBadge } from '@/components/common/MessageStatusBadge';
+import { Skeleton } from '@/components/ui/skeleton';
 import {
   Select,
   SelectContent,
@@ -14,9 +15,9 @@ import {
 } from '@/components/ui/select';
 import { Breadcrumbs } from '@/components/common/Breadcrumbs';
 import { EmptyState } from '@/components/common/EmptyState';
-import { ListSkeletonCard } from '@/components/common/ListSkeleton';
-import { LayoutDashboard, Calendar, MessageSquare, RefreshCw } from 'lucide-react';
-import { formatDate, messageStatusBadgeClasses } from '@/lib/utils';
+import { PageContainer, PageHeader } from '@/components/common/PageHeader';
+import { CalendarDays, MessageSquare, RefreshCw, RotateCcw } from 'lucide-react';
+import { cn, formatDate, formatLocalDate } from '@/lib/utils';
 import {
   Tooltip,
   TooltipContent,
@@ -41,15 +42,21 @@ export default function MessagesPage() {
   const [status, setStatus] = useState<string>('');
   const [sort, setSort] = useState<string>('asc');
 
+  const hasFilters = Boolean(workspaceId || status);
+
   const loadWorkspaces = async () => {
-    const res = await fetch('/api/workspace');
-    if (res.ok) {
-      const data = await res.json();
-      setWorkspaces(data.workspaces || []);
+    try {
+      const res = await fetch(`/api/workspace?today=${formatLocalDate(new Date())}`);
+      if (res.ok) {
+        const data = await res.json();
+        setWorkspaces(data.workspaces || []);
+      }
+    } catch {
+      toast.error('Не удалось загрузить список пространств.');
     }
   };
 
-  const loadMessages = async () => {
+  const loadMessages = useCallback(async () => {
     setLoading(true);
     try {
       const params = new URLSearchParams();
@@ -60,11 +67,15 @@ export default function MessagesPage() {
       if (res.ok) {
         const data = await res.json();
         setMessages(data.messages || []);
+      } else {
+        toast.error('Не удалось загрузить сообщения. Попробуйте обновить список.');
       }
+    } catch {
+      toast.error('Ошибка сети: не удалось загрузить сообщения. Проверьте соединение и обновите список.');
     } finally {
       setLoading(false);
     }
-  };
+  }, [workspaceId, status, sort]);
 
   useEffect(() => {
     loadWorkspaces();
@@ -72,51 +83,54 @@ export default function MessagesPage() {
 
   useEffect(() => {
     loadMessages();
-  }, [workspaceId, status, sort]);
+  }, [loadMessages]);
+
+  const resetFilters = () => {
+    setWorkspaceId('');
+    setStatus('');
+  };
 
   return (
-    <div className="container max-w-4xl py-6 px-4">
-      <Breadcrumbs
-        items={[
-          { label: 'Дашборд', href: '/dashboard' },
-          { label: 'Сообщения', current: true },
-        ]}
-        className="mb-6"
+    <PageContainer>
+      <PageHeader
+        breadcrumbs={
+          <Breadcrumbs
+            items={[
+              { label: 'Дашборд', href: '/dashboard' },
+              { label: 'Сообщения', current: true },
+            ]}
+          />
+        }
+        title="Запланированные сообщения"
+        description="Единый список по всем пространствам. Фильтруйте по пространству и статусу."
+        actions={
+          <>
+            <Button asChild variant="outline" size="sm">
+              <Link href="/dashboard/calendar">
+                <CalendarDays /> Календарь
+              </Link>
+            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="icon-sm"
+                  onClick={() => loadMessages()}
+                  disabled={loading}
+                  aria-label="Обновить список"
+                >
+                  <RefreshCw className={cn(loading && 'animate-spin')} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Обновить список</TooltipContent>
+            </Tooltip>
+          </>
+        }
       />
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Запланированные сообщения</h1>
-          <p className="text-muted-foreground text-sm mt-1">
-            Единый список по всем пространствам. Фильтруйте по пространству и статусу.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button asChild variant="outline" size="sm" className="gap-2">
-            <Link href="/dashboard">
-              <LayoutDashboard className="h-4 w-4" />
-              Дашборд
-            </Link>
-          </Button>
-          <Button asChild variant="outline" size="sm" className="gap-2">
-            <Link href="/dashboard/calendar">
-              <Calendar className="h-4 w-4" />
-              Календарь
-            </Link>
-          </Button>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="outline" size="sm" onClick={() => loadMessages()} disabled={loading}>
-                <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Обновить список</TooltipContent>
-          </Tooltip>
-        </div>
-      </div>
 
-      <div className="flex flex-wrap gap-3 mb-6">
+      <div className="mb-4 flex flex-wrap items-center gap-2">
         <Select value={workspaceId || 'all'} onValueChange={(v) => setWorkspaceId(v === 'all' ? '' : v)}>
-          <SelectTrigger className="w-[200px]">
+          <SelectTrigger size="sm" className="w-[190px]" aria-label="Пространство">
             <SelectValue placeholder="Все пространства" />
           </SelectTrigger>
           <SelectContent>
@@ -129,79 +143,109 @@ export default function MessagesPage() {
           </SelectContent>
         </Select>
         <Select value={status || 'all'} onValueChange={(v) => setStatus(v === 'all' ? '' : v)}>
-          <SelectTrigger className="w-[160px]">
+          <SelectTrigger size="sm" className="w-[150px]" aria-label="Статус">
             <SelectValue placeholder="Статус" />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Все статусы</SelectItem>
-            <SelectItem value="PENDING">Ожидает</SelectItem>
+            <SelectItem value="PENDING">Ожидают отправки</SelectItem>
             <SelectItem value="SENT">Отправлено</SelectItem>
-            <SelectItem value="FAILED">Ошибка</SelectItem>
+            <SelectItem value="FAILED">Не отправлено</SelectItem>
             <SelectItem value="CANCELLED">Отменено</SelectItem>
           </SelectContent>
         </Select>
         <Select value={sort} onValueChange={setSort}>
-          <SelectTrigger className="w-[160px]">
+          <SelectTrigger size="sm" className="w-[210px]" aria-label="Сортировка">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="asc">По дате отправки (сначала ближайшие)</SelectItem>
-            <SelectItem value="desc">По дате (сначала поздние)</SelectItem>
-            <SelectItem value="recent">По дате создания (сначала новые)</SelectItem>
+            <SelectItem value="asc">Сначала ближайшие</SelectItem>
+            <SelectItem value="desc">Сначала поздние</SelectItem>
+            <SelectItem value="recent">Сначала недавно созданные</SelectItem>
           </SelectContent>
         </Select>
+        {hasFilters && (
+          <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={resetFilters}>
+            <RotateCcw /> Сбросить
+          </Button>
+        )}
+        {!loading && messages.length > 0 && (
+          <span className="ml-auto text-[13px] text-muted-foreground tabular-nums">Найдено: {messages.length}</span>
+        )}
       </div>
 
       {loading ? (
-        <ListSkeletonCard lines={6} />
+        <div className="divide-y rounded-lg border bg-card" role="status" aria-busy="true" aria-label="Загрузка сообщений">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="space-y-2 px-4 py-3">
+              <div className="flex items-center gap-2">
+                <Skeleton className="h-4 w-32" />
+                <Skeleton className="h-4 w-20" />
+                <Skeleton className="ml-auto h-5 w-20" />
+              </div>
+              <Skeleton className="h-3.5 w-3/4" />
+              <Skeleton className="h-3 w-40" />
+            </div>
+          ))}
+        </div>
       ) : messages.length === 0 ? (
         <EmptyState
-          icon={<MessageSquare className="h-8 w-8" />}
-          title="Нет сообщений"
+          icon={<MessageSquare />}
+          title={hasFilters ? 'Ничего не найдено' : 'Нет сообщений'}
           description={
-            workspaceId || status
-              ? 'Попробуйте изменить фильтры или запланируйте сообщение в календаре.'
-              : 'Запланируйте первое сообщение в разделе «Календарь» или с дашборда.'
+            hasFilters
+              ? 'Измените или сбросьте фильтры, чтобы увидеть больше сообщений.'
+              : 'Запланируйте первое сообщение в календаре или на странице пространства.'
           }
-          action={{ label: 'Перейти в календарь', href: '/dashboard/calendar' }}
-        />
+        >
+          <div className="mt-4 flex flex-wrap justify-center gap-2">
+            {hasFilters && (
+              <Button variant="outline" size="sm" onClick={resetFilters}>
+                Сбросить фильтры
+              </Button>
+            )}
+            <Button asChild variant={hasFilters ? 'ghost' : 'outline'} size="sm">
+              <Link href="/dashboard/calendar">Перейти в календарь</Link>
+            </Button>
+          </div>
+        </EmptyState>
       ) : (
-        <div className="space-y-3">
-          {messages.map((m) => (
-            <Card key={m.id} className="overflow-hidden">
-              <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center gap-3">
-                <div className="flex-1 min-w-0">
-                  <div className="flex flex-wrap items-center gap-2 mb-1">
+        <ul className="divide-y rounded-lg border bg-card">
+          {messages.map((m) => {
+            return (
+              <li
+                key={m.id}
+                className="flex flex-col gap-2 px-4 py-3 transition-colors hover:bg-muted/40 sm:flex-row sm:items-center sm:gap-4"
+              >
+                <div className="min-w-0 flex-1 space-y-1">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
                     {m.workspace && (
                       <Link
                         href={`/dashboard/workspaces/${m.workspace.id}`}
-                        className="text-sm font-medium text-primary hover:underline"
+                        className="font-medium text-foreground hover:underline"
                       >
                         {m.workspace.workspaceName}
                       </Link>
                     )}
-                    <span className="text-muted-foreground">·</span>
-                    <span className="text-sm text-muted-foreground">#{m.channelName}</span>
-                    <Badge className={messageStatusBadgeClasses[m.status] || ''}>{m.status}</Badge>
+                    <span className="text-muted-foreground">#{m.channelName}</span>
+                    <MessageStatusBadge status={m.status} scheduledFor={m.scheduledFor} />
                   </div>
-                  <p className="text-sm text-foreground line-clamp-2">{m.message}</p>
-                  <p className="text-xs text-muted-foreground mt-1">
+                  <p className="line-clamp-2 text-sm text-foreground/90">{m.message}</p>
+                  <p className="text-xs text-muted-foreground">
                     {formatDate(m.scheduledFor)}
                     {m.user && ` · ${m.user.name || m.user.email}`}
                   </p>
                 </div>
                 {m.workspace && (
-                  <Button asChild variant="outline" size="sm" className="shrink-0">
-                    <Link href={`/dashboard/workspaces/${m.workspace.id}#messages`}>
-                      К пространству
-                    </Link>
+                  <Button asChild variant="outline" size="sm" className="shrink-0 self-start sm:self-center">
+                    <Link href={`/dashboard/workspaces/${m.workspace.id}#messages`}>К пространству</Link>
                   </Button>
                 )}
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+              </li>
+            );
+          })}
+        </ul>
       )}
-    </div>
+    </PageContainer>
   );
 }

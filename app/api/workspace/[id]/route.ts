@@ -1,8 +1,11 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { requireAuth } from '@/lib/auth';
-import { encryptPassword } from '@/lib/encryption';
+import { requireAuth } from '@/lib/api-auth';
+import { encryptPassword, encryptAuthToken } from '@/lib/encryption';
+import { RocketChatClient } from '@/lib/rocketchat';
 import { logSecurityEvent, getClientIp, isSuspiciousInput, isUnsafeId, SecurityEventType } from '@/lib/security';
+import { sameRcInstanceUrl } from '@/lib/workspace-rc';
+import { isSsrfUrl } from '@/lib/ssrf';
 
 // GET - получить workspace по ID (владелец или ADM с назначением)
 export async function GET(
@@ -33,6 +36,8 @@ export async function GET(
         workspaceUrl: true,
         username: true,
         has2FA: true,
+        rcAuthMethod: true,
+        userId_RC: true,
         isActive: true,
         lastConnected: true,
         startDate: true,
@@ -59,26 +64,26 @@ export async function GET(
       return NextResponse.json({ workspace: rest });
     }
 
-    // ADM или VOL с назначением на это пространство
-    if (user.role === 'ADM' || user.role === 'VOL') {
-      const assignment = await prisma.workspaceAdminAssignment.findFirst({
-        where: { userId: user.id, workspaceId: id },
+    // Любая роль с назначением на это пространство
+    const assignment = await prisma.workspaceAdminAssignment.findFirst({
+      where: { userId: user.id, workspaceId: id },
+    });
+    if (assignment) {
+      const ownList = await prisma.workspaceConnection.findMany({
+        where: { userId: user.id },
+        select: { id: true, workspaceUrl: true },
       });
-      if (assignment) {
-        const normalizeUrl = (u: string) => (u || '').trim().replace(/\/+$/, '') || u;
-        const norm = normalizeUrl(workspace.workspaceUrl);
-        const ownConnection = await prisma.workspaceConnection.findFirst({
-          where: {
-            userId: user.id,
-            OR: [{ workspaceUrl: norm }, { workspaceUrl: norm + '/' }],
-          },
-          select: { id: true },
-        });
-        const { userId: _u, ...rest } = workspace;
-        return NextResponse.json({
-          workspace: { ...rest, isAssigned: true, hasOwnConnection: !!ownConnection },
-        });
-      }
+      const ownConnection = ownList.find((c) =>
+        sameRcInstanceUrl(c.workspaceUrl, workspace.workspaceUrl)
+      );
+      const { userId: _u, ...rest } = workspace;
+      return NextResponse.json({
+        workspace: {
+          ...rest,
+          isAssigned: true,
+          hasOwnConnection: !!ownConnection,
+        },
+      });
     }
 
     return NextResponse.json(
@@ -100,7 +105,7 @@ export async function PATCH(
 ) {
   try {
     const user = await requireAuth();
-    if (user.role === 'VOL') {
+    if (user.role === 'MEMBER' && user.volunteerExpiresAt != null) {
       return NextResponse.json(
         { error: 'Волонтёр не может изменять настройки пространства.' },
         { status: 403 }
@@ -133,12 +138,19 @@ export async function PATCH(
       startDate,
       endDate,
       color,
+      totpCode,
     } = body;
+    const personalToken =
+      typeof body.personalToken === 'string' ? body.personalToken.trim() : '';
+    const rcUserIdPatch =
+      typeof body.rcUserId === 'string' ? body.rcUserId.trim() : '';
 
     if (
       (workspaceUrl && isSuspiciousInput(workspaceUrl)) ||
       (username && isSuspiciousInput(username)) ||
-      (password && isSuspiciousInput(password))
+      (password && isSuspiciousInput(password)) ||
+      (personalToken && isSuspiciousInput(personalToken)) ||
+      (rcUserIdPatch && isSuspiciousInput(rcUserIdPatch))
     ) {
       const ip = getClientIp(request);
       const userAgent = request.headers.get('user-agent') ?? undefined;
@@ -158,21 +170,129 @@ export async function PATCH(
       );
     }
 
+    // Типы и длины полей (иначе Prisma падает 500 или в БД попадает мусор)
+    const isOptStr = (v: unknown, max: number) => v === undefined || (typeof v === 'string' && v.length <= max);
+    const isOptDate = (v: unknown) =>
+      v === undefined || v === null || v === '' || (typeof v === 'string' && !Number.isNaN(new Date(v).getTime()));
+    if (
+      !isOptStr(workspaceName, 200) ||
+      !isOptStr(workspaceUrl, 500) ||
+      !isOptStr(username, 256) ||
+      !isOptStr(password, 4096) ||
+      !isOptStr(totpCode, 128) ||
+      (color !== undefined && color !== null && !(typeof color === 'string' && color.length <= 32)) ||
+      (has2FA !== undefined && typeof has2FA !== 'boolean') ||
+      !isOptDate(startDate) ||
+      !isOptDate(endDate) ||
+      (typeof workspaceName === 'string' && !workspaceName.trim()) ||
+      (typeof username === 'string' && !username.trim())
+    ) {
+      return NextResponse.json({ error: 'Invalid input' }, { status: 400 });
+    }
+
+    // SSRF: новый адрес сервера проверяется так же, как при создании пространства
+    // (раньше PATCH позволял сменить URL на внутренний адрес, и все запросы RC уходили туда).
+    const urlChanged =
+      typeof workspaceUrl === 'string' &&
+      workspaceUrl.trim().replace(/\/+$/, '') !== (workspace.workspaceUrl || '').trim().replace(/\/+$/, '');
+    if (urlChanged) {
+      if (!/^https?:\/\/.+/.test(workspaceUrl.trim()) || isSsrfUrl(workspaceUrl.trim())) {
+        return NextResponse.json(
+          { error: 'Invalid workspace URL: internal or private addresses are not allowed' },
+          { status: 400 }
+        );
+      }
+    }
+
     // Подготовка данных для обновления
-    const updateData: any = {
-      workspaceName,
-      workspaceUrl,
-      username,
+    const updateData: Record<string, unknown> = {
+      workspaceName: typeof workspaceName === 'string' ? workspaceName.trim() : undefined,
+      workspaceUrl: typeof workspaceUrl === 'string' ? workspaceUrl.trim().replace(/\/+$/, '') : undefined,
+      username: typeof username === 'string' ? username.trim() : undefined,
       has2FA,
       color,
       updatedAt: new Date(),
     };
 
-    // Обновляем пароль только если он передан
+    if (personalToken && password) {
+      return NextResponse.json(
+        {
+          error: 'Укажите либо новый пароль (вход по LDAP), либо новый личный токен — не оба сразу.',
+        },
+        { status: 400 }
+      );
+    }
+
+    if (personalToken) {
+      const rcUser = (rcUserIdPatch || workspace.userId_RC || '').trim();
+      if (!rcUser) {
+        return NextResponse.json(
+          { error: 'Укажите User ID Rocket.Chat (из профиля) для проверки токена.' },
+          { status: 400 }
+        );
+      }
+      const rcUrl = (workspaceUrl ?? workspace.workspaceUrl ?? '').trim();
+      if (!rcUrl) {
+        return NextResponse.json({ error: 'Укажите URL сервера Rocket.Chat.' }, { status: 400 });
+      }
+      try {
+        await RocketChatClient.validatePersonalAccessToken(rcUrl, personalToken, rcUser);
+        updateData.authToken = encryptAuthToken(personalToken);
+        updateData.userId_RC = rcUser;
+        updateData.encryptedPassword = encryptPassword('');
+        updateData.rcAuthMethod = 'personal_token';
+        updateData.has2FA = false;
+        updateData.isActive = true;
+        updateData.lastConnected = new Date();
+      } catch (e) {
+        return NextResponse.json(
+          { error: e instanceof Error ? e.message : 'Не удалось проверить токен' },
+          { status: 400 }
+        );
+      }
+    }
+
+    // Смена пароля: сразу входим в Rocket.Chat и сохраняем токен (иначе каналы/API RC остаются без сессии)
     if (password) {
-      updateData.encryptedPassword = encryptPassword(password);
-      // Сбрасываем authToken при смене пароля
-      updateData.authToken = null;
+      const rcUrl = (workspaceUrl ?? workspace.workspaceUrl ?? '').trim();
+      const rcUser = (username ?? workspace.username ?? '').trim();
+      if (!rcUrl || !rcUser) {
+        return NextResponse.json(
+          { error: 'Укажите адрес сервера и логин Rocket.Chat вместе с паролем.' },
+          { status: 400 }
+        );
+      }
+      const rcClient = new RocketChatClient(rcUrl);
+      try {
+        const totp =
+          typeof totpCode === 'string' && totpCode.trim() ? totpCode.trim() : undefined;
+        const loginResult = await rcClient.login(rcUser, password, totp);
+        updateData.encryptedPassword = encryptPassword(password);
+        updateData.authToken = encryptAuthToken(loginResult.authToken);
+        updateData.userId_RC = loginResult.userId;
+        updateData.rcAuthMethod = 'password';
+        updateData.isActive = true;
+        updateData.lastConnected = new Date();
+      } catch (loginErr: unknown) {
+        const e = loginErr as Error & { code?: string };
+        if (e?.message === 'TOTP_REQUIRED' || e?.code === 'totp-required') {
+          return NextResponse.json(
+            {
+              requiresTotp: true,
+              error:
+                'Требуется код двухфакторной аутентификации из приложения-аутентификатора.',
+            },
+            { status: 400 }
+          );
+        }
+        return NextResponse.json(
+          {
+            error:
+              'Не удалось войти в Rocket.Chat с указанным паролем. Проверьте адрес сервера, логин и пароль.',
+          },
+          { status: 400 }
+        );
+      }
     }
 
     // Обновляем даты если переданы
@@ -192,6 +312,8 @@ export async function PATCH(
         workspaceUrl: true,
         username: true,
         has2FA: true,
+        rcAuthMethod: true,
+        userId_RC: true,
         isActive: true,
         lastConnected: true,
         startDate: true,
@@ -234,7 +356,7 @@ export async function DELETE(
 ) {
   try {
     const user = await requireAuth();
-    if (user.role === 'VOL') {
+    if (user.role === 'MEMBER' && user.volunteerExpiresAt != null) {
       return NextResponse.json(
         { error: 'Волонтёр не может удалять пространство.' },
         { status: 403 }

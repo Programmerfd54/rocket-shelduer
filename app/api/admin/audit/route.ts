@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import type { Role, ActivityType } from '@prisma/client';
-import { requireAuth } from '@/lib/auth';
+import { requireAuth } from '@/lib/api-auth';
+import { canPerformAction } from '@/lib/permissions';
 
 const ADMIN_ACTIONS: ActivityType[] = [
   'USER_BLOCKED',
@@ -17,7 +18,7 @@ export async function GET(request: Request) {
     const currentUser = await requireAuth();
 
     // Журнал действий доступен только SUP и ADMIN; у ADM кнопка заблокирована
-    if (currentUser.role !== 'SUPPORT' && currentUser.role !== 'ADMIN') {
+    if (!canPerformAction(currentUser, 'admin:audit')) {
       return NextResponse.json(
         { error: 'Insufficient permissions. Audit log is for SUP/ADMIN only.' },
         { status: 403 }
@@ -25,12 +26,12 @@ export async function GET(request: Request) {
     }
 
     const { searchParams } = new URL(request.url);
-    const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10));
-    const limit = Math.min(100, Math.max(10, parseInt(searchParams.get('limit') || '30', 10)));
+    const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10) || 1);
+    const limit = Math.min(100, Math.max(10, parseInt(searchParams.get('limit') || '30', 10) || 30));
     const offset = (page - 1) * limit;
 
     // ADMIN видит действия SUP и ADMIN; SUP видит только действия SUP
-    const roleFilter: Role[] = currentUser.role === 'ADMIN' ? ['SUPPORT', 'ADMIN'] : ['SUPPORT'];
+    const roleFilter: Role[] = currentUser.role === 'LEAD_SUP' ? ['SUP', 'LEAD_SUP'] : ['SUP'];
     const adminUserIds = await prisma.user.findMany({
       where: { role: { in: roleFilter } },
       select: { id: true },

@@ -26,24 +26,24 @@ export function EmptyState({
   children,
 }: EmptyStateProps) {
   const content = children ?? (action?.href ? (
-    <Button asChild variant="default" size="sm" className="mt-4 rounded-lg gap-2">
+    <Button asChild variant="outline" size="sm" className="mt-4">
       <Link href={action.href}>{action.label}</Link>
     </Button>
   ) : action ? (
-    <Button variant="default" size="sm" className="mt-4 rounded-lg gap-2" onClick={action.onClick}>
+    <Button variant="outline" size="sm" className="mt-4" onClick={action.onClick}>
       {action.label}
     </Button>
   ) : null)
 
   return (
-    <Card className={cn('border-dashed border-border/80 rounded-2xl bg-muted/10', className)}>
-      <CardContent className="py-14 px-6 text-center">
-        <div className="w-16 h-16 rounded-2xl bg-muted/50 flex items-center justify-center mx-auto mb-4 text-muted-foreground [&>svg]:w-8 [&>svg]:h-8">
+    <Card className={cn('border-dashed bg-transparent', className)}>
+      <CardContent className="py-12 px-6 text-center">
+        <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-md bg-muted text-muted-foreground [&>svg]:h-5 [&>svg]:w-5">
           {icon}
         </div>
-        <p className="font-medium text-foreground">{title}</p>
+        <p className="text-sm font-medium text-foreground">{title}</p>
         {description && (
-          <p className="text-sm text-muted-foreground mt-1 max-w-sm mx-auto">{description}</p>
+          <p className="text-sm text-muted-foreground mt-1 max-w-sm mx-auto text-balance">{description}</p>
         )}
         {content}
       </CardContent>

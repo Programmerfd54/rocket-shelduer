@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import {
   Tooltip,
@@ -7,18 +8,18 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { useCopyToClipboard } from '@/lib/useCopyToClipboard';
-import { Copy } from 'lucide-react';
+import { Check, Copy } from 'lucide-react';
 
 interface CopyButtonProps {
   text: string;
   successMessage?: string;
   variant?: 'ghost' | 'outline' | 'link';
-  size?: 'icon' | 'sm' | 'default' | 'lg';
+  size?: 'icon' | 'icon-xs' | 'icon-sm' | 'icon-lg' | 'xs' | 'sm' | 'default' | 'lg';
   className?: string;
   'aria-label'?: string;
 }
 
-/** Кнопка «Копировать» с тултипом и тостом «Скопировано». */
+/** Кнопка «Копировать»: тултип, тост «Скопировано» и галочка на пару секунд. */
 export function CopyButton({
   text,
   successMessage = 'Скопировано',
@@ -28,6 +29,21 @@ export function CopyButton({
   'aria-label': ariaLabel = 'Копировать',
 }: CopyButtonProps) {
   const copy = useCopyToClipboard();
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (timer.current) clearTimeout(timer.current);
+  }, []);
+
+  const handleClick = async () => {
+    const ok = await copy(text, successMessage);
+    if (!ok) return;
+    setCopied(true);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setCopied(false), 1800);
+  };
+
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -37,12 +53,12 @@ export function CopyButton({
           size={size}
           className={className}
           aria-label={ariaLabel}
-          onClick={() => copy(text, successMessage)}
+          onClick={handleClick}
         >
-          <Copy className="h-4 w-4" />
+          {copied ? <Check className="size-4 text-emerald-600 dark:text-emerald-400" aria-hidden /> : <Copy className="size-4" aria-hidden />}
         </Button>
       </TooltipTrigger>
-      <TooltipContent side="top">{ariaLabel}</TooltipContent>
+      <TooltipContent side="top">{copied ? 'Скопировано' : ariaLabel}</TooltipContent>
     </Tooltip>
   );
 }

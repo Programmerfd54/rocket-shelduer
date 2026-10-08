@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { requireAuth } from '@/lib/auth';
+import { requireAuth } from '@/lib/api-auth';
+import { canPerformAction } from '@/lib/permissions';
+import { isUnsafeId } from '@/lib/security';
 
 export async function GET(
   request: Request,
@@ -9,6 +11,11 @@ export async function GET(
   try {
     const currentUser = await requireAuth();
     const { id } = await params;
+    if (isUnsafeId(id)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
+    // Ограничение adminPanel у SUP / Lead_SUP распространяется и на просмотр активности
+    if ((currentUser.role === 'SUP' || currentUser.role === 'LEAD_SUP') && !canPerformAction(currentUser, 'admin:users')) {
+      return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
+    }
 
     const user = await prisma.user.findUnique({
       where: { id },
@@ -37,22 +44,32 @@ export async function GET(
       );
     }
 
-    // SUP — доступ ко всем; ADM — только к пользователям с ролью VOL
-    if (currentUser.role !== 'SUPPORT' && currentUser.role !== 'ADM' && currentUser.role !== 'ADMIN') {
+    // SUP / Lead_SUP — шире; ADM — только активность волонтёров (MEMBER + срок)
+    if (
+      currentUser.role !== 'SUP' &&
+      currentUser.role !== 'ADM' &&
+      currentUser.role !== 'LEAD_SUP'
+    ) {
       return NextResponse.json(
         { error: 'Insufficient permissions' },
         { status: 403 }
       );
     }
-    if (currentUser.role === 'ADM' && user.role !== 'VOL') {
+    if (
+      currentUser.role === 'ADM' &&
+      (user.role !== 'MEMBER' || !user.volunteerExpiresAt)
+    ) {
       return NextResponse.json(
-        { error: 'ADM can view activity only for users with role VOL.' },
+        { error: 'ADM может просматривать активность только волонтёров (MEMBER с периодом доступа).' },
         { status: 403 }
       );
     }
-    if (user.role === 'ADMIN' && currentUser.role !== 'ADMIN') {
+    if (
+      user.role === 'LEAD_SUP' &&
+      currentUser.role !== 'LEAD_SUP'
+    ) {
       return NextResponse.json(
-        { error: 'Only superuser can view ADMIN user activity.' },
+        { error: 'Активность Lead_SUP доступна только Lead_SUP.' },
         { status: 403 }
       );
     }
@@ -81,6 +98,7 @@ export async function GET(
         },
       },
       orderBy: { createdAt: 'desc' },
+      take: 1000,
     });
 
     const activityLogs = await prisma.activityLog.findMany({

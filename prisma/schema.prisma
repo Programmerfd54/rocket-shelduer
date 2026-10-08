@@ -8,13 +8,13 @@ datasource db {
 }
 
 model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  username  String?  @unique
-  password  String
-  name      String?
-  role      Role     @default(USER)
-  isActive  Boolean  @default(true)
+  id          String    @id @default(cuid())
+  email       String    @unique
+  username    String?   @unique
+  password    String
+  name        String?
+  role        Role      @default(MEMBER)
+  isActive    Boolean   @default(true)
   theme       String?   @default("system")
   lastLoginAt DateTime?
   createdAt   DateTime  @default(now())
@@ -25,41 +25,57 @@ model User {
 
   // VOL: период доступа и блокировка
   volunteerExpiresAt DateTime?
-  volunteerIntensive String?   // e.g. "feb-26", "mar-26"
-  isBlocked         Boolean  @default(false)
-  blockedAt         DateTime?
-  blockedReason     String?  @db.Text
-  blockedById       String?
+  volunteerIntensive String? // e.g. "feb-26", "mar-26"
+  isBlocked          Boolean   @default(false)
+  blockedAt          DateTime?
+  blockedReason      String?   @db.Text
+  blockedById        String?
 
-  workspaces               WorkspaceConnection[]
-  scheduledMessages        ScheduledMessage[]
-  scheduledByMessages     ScheduledMessage[]     @relation("ScheduledByUser")
+  workspaces                WorkspaceConnection[]
+  scheduledMessages         ScheduledMessage[]
+  scheduledByMessages       ScheduledMessage[]         @relation("ScheduledByUser")
   assignedWorkspaces        WorkspaceAdminAssignment[] @relation("AssignedWorkspaceUser")
   assignedByWorkspaces      WorkspaceAdminAssignment[] @relation("AssignedByUser")
   officialTemplateOverrides OfficialTemplateOverride[]
   blockedChannels           BlockedChannel[]
   favoriteChannels          FavoriteChannel[]
-  activityLogs      ActivityLog[]
-  workspaceGroups   WorkspaceGroup[]
-  adminNotesAbout   AdminNote[]         @relation("AdminNoteTarget")
-  adminNotesWritten AdminNote[]         @relation("AdminNoteAuthor")
-  workspaceActions  WorkspaceActionLog[]
-  userTemplates     UserTemplate[]
-  inviteTokensCreated InviteToken[]     @relation("InviteTokenCreator")
-  passwordResetTokens PasswordResetToken[]
-  avatarUrl         String?             // URL или путь к фото пользователя
-  sessionDurationMinutes Int?           // Длительность сессии в минутах (null = 7 дней). После истечения нужна повторная авторизация.
-  requirePasswordChange Boolean @default(false) // После сброса пароля (логин=пароль) — при первом входе показать форму смены пароля
-  sessions          Session[]
+  activityLogs              ActivityLog[]
+  workspaceGroups           WorkspaceGroup[]
+  adminNotesAbout           AdminNote[]                @relation("AdminNoteTarget")
+  adminNotesWritten         AdminNote[]                @relation("AdminNoteAuthor")
+  workspaceActions          WorkspaceActionLog[]
+  userTemplates             UserTemplate[]
+  inviteTokensCreated       InviteToken[]              @relation("InviteTokenCreator")
+  passwordResetTokens       PasswordResetToken[]
+  // LEGACY (города удалены): связи сохранены только ради данных, приложение их не использует
+  cityMembers               CityMember[]
+  osnovyLinksAdded          CityOsnovyLink[]           @relation("OsnovyAddedBy")
+  cityWorkspaceOffersAdded  CityWorkspaceOffer[]       @relation("CityWorkspaceOfferCreator")
+  avatarUrl                 String? // URL или путь к фото пользователя
+  sessionDurationMinutes    Int? // Длительность сессии в минутах (null = 7 дней). После истечения нужна повторная авторизация.
+  requirePasswordChange     Boolean                    @default(false) // После сброса пароля (логин=пароль) — при первом входе показать форму смены пароля
+  sessions                  Session[]
+
+  // Интенсивы (docs/intensives-spec.md). Все связи — onDelete: SetNull: удаление пользователя не стирает историю.
+  orgSpacesCreated       OrgSpace[]          @relation("OrgSpaceCreatedBy")
+  intensivesCreated      Intensive[]         @relation("IntensiveCreatedBy")
+  intensivesUpdated      Intensive[]         @relation("IntensiveUpdatedBy")
+  planItemsCreated       IntensivePlanItem[] @relation("PlanItemCreatedBy")
+  planItemsUpdated       IntensivePlanItem[] @relation("PlanItemUpdatedBy")
+  planItemsSkipped       IntensivePlanItem[] @relation("PlanItemSkippedBy")
+  intensiveEventsAsActor IntensiveEvent[]    @relation("IntensiveEventActor")
 }
 
 // Сессии пользователя: одна запись на каждое устройство/вход. Используется для списка активных сессий и «Выйти на всех».
 model Session {
-  id        String   @id @default(cuid())
-  userId    String
-  userAgent String?  @db.Text
-  createdAt DateTime @default(now())
-  expiresAt DateTime
+  id           String   @id @default(cuid())
+  userId       String
+  userAgent    String?  @db.Text
+  fingerprint  String?
+  deviceIdHash String?
+  ipAddress    String?
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -68,27 +84,32 @@ model Session {
 }
 
 enum Role {
-  USER    // обычный пользователь (по умолчанию)
-  SUPPORT // Support — полный доступ
-  ADMIN   // Admin — все права, настройки для SUPPORT/ADM, видит кто от кого отправляет, может ограничивать функции
-  ADM     // Administrator — без истории и админки, без импорта эмодзи/добавления пользователей в пространствах
-  VOL     // Volunteer — только 1 пространство по префиксу, период доступа, без удаления/редактирования пространства
+  LEAD_SUP // Верхняя роль: пользователи, настройки платформы, справка/шаблоны (бывший ADMIN; бывший HQ_ADMIN слит сюда)
+  SUP // Поддержка (бывший SUPPORT)
+  ADM // Администратор пространств (бывший ADM / CITY_ADMIN)
+  MEMBER // Участник / волонтёр (volunteer*)
 }
 
-// Приглашение на регистрацию: SUPPORT/ADMIN генерируют ссылку с ролью, активна 1 час
+// Приглашение на регистрацию: Lead_SUP / SUP генерируют ссылку с ролью, активна 1 час
 model InviteToken {
-  id          String   @id @default(cuid())
-  token       String   @unique
-  createdById String
-  role        Role     @default(USER)
-  email       String?  // опционально: для кого приглашение (подсказка на странице регистрации)
-  expiresAt   DateTime
-  createdAt   DateTime @default(now())
+  id                 String    @id @default(cuid())
+  token              String    @unique
+  createdById        String
+  role               Role      @default(MEMBER)
+  email              String? // опционально: для кого приглашение (подсказка на странице регистрации)
+  // Для роли MEMBER: доступ волонтёра (переносится в User при регистрации)
+  volunteerExpiresAt DateTime?
+  volunteerIntensive String?
+  cityId             String? // LEGACY (города удалены): не используется приложением
+  expiresAt          DateTime
+  createdAt          DateTime  @default(now())
 
-  createdBy   User     @relation("InviteTokenCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  createdBy User  @relation("InviteTokenCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  city      City? @relation(fields: [cityId], references: [id], onDelete: SetNull)
 
   @@index([token])
   @@index([expiresAt])
+  @@index([cityId])
 }
 
 // Токен сброса пароля (забыли пароль): пользователь запрашивает по email, ссылка действительна 1 час
@@ -134,6 +155,7 @@ model WorkspaceInGroup {
   @@unique([groupId, workspaceId])
 }
 
+/// rcAuthMethod: password (логин и пароль / LDAP) или personal_token (личный токен RC).
 model WorkspaceConnection {
   id                String    @id @default(cuid())
   userId            String
@@ -141,6 +163,7 @@ model WorkspaceConnection {
   workspaceUrl      String
   username          String
   encryptedPassword String
+  rcAuthMethod      String    @default("password")
   has2FA            Boolean   @default(false)
   authToken         String?
   userId_RC         String?
@@ -160,7 +183,7 @@ model WorkspaceConnection {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  user              User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user              User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
   scheduledMessages ScheduledMessage[]
   groups            WorkspaceInGroup[]
   addedUsers        WorkspaceAddedUser[]
@@ -168,21 +191,162 @@ model WorkspaceConnection {
   actionLogs        WorkspaceActionLog[]
   adminAssignments  WorkspaceAdminAssignment[]
 
+  // LEGACY (города удалены): не используется приложением. onDelete: SetNull — удаление строки City не удаляет пространство.
+  cityId String?
+  city   City?   @relation(fields: [cityId], references: [id], onDelete: SetNull)
+
+  cityOsnovyLinks  CityOsnovyLink[] // LEGACY
+  ldapSmtpSettings WorkspaceSettings? // LDAP / SMTP (бывш. hqSettings)
+
+  reactionSettings       ReactionRatingSettings?
+  reactionRecords        ReactionRecord[]
+  reactionMonthlyResults ReactionMonthlyResult[]
+
+  /// Организационное пространство (общее расписание интенсивов). Привязку подтверждает Lead_SUP.
+  /// Удаление OrgSpace отвязывает подключение (SetNull), само подключение и его данные не трогаются.
+  orgSpaceId String?
+  orgSpace   OrgSpace? @relation(fields: [orgSpaceId], references: [id], onDelete: SetNull)
+
   @@unique([userId, workspaceUrl])
   @@index([isArchived, archiveDeleteAt])
+  @@index([cityId])
+  @@index([orgSpaceId])
 }
 
-// Назначение пространства администратору (ADM): SUP/SUPER может «привязать» ADM к чужому пространству
+// ── LEGACY: «Города» удалены из приложения (миграция 20261007100000_remove_hq_admin_role). ──
+// Модели City, CityMember, CityRole, CityOsnovyLink, CityWorkspaceOffer, CitySystemSetting и колонки cityId
+// оставлены только ради сохранности данных. Код приложения их не читает и не пишет.
+model City {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  slug        String   @unique
+  description String?  @db.Text
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members                   CityMember[]
+  workspaces                WorkspaceConnection[]
+  workspaceOffers           CityWorkspaceOffer[]
+  osnovyLinks               CityOsnovyLink[]
+  inviteTokens              InviteToken[]
+  systemSettings            CitySystemSetting[]
+  helpMainContents          HelpMainContent[]
+  helpMainSections          HelpMainSection[]
+  helpCatalogs              HelpCatalog[]
+  officialTemplateOverrides OfficialTemplateOverride[]
+
+  @@index([name])
+}
+
+/// LEGACY: каталог Rocket.Chat города (не используется).
+model CityWorkspaceOffer {
+  id            String   @id @default(cuid())
+  cityId        String
+  workspaceName String
+  workspaceUrl  String
+  createdById   String
+  createdAt     DateTime @default(now())
+
+  city      City @relation(fields: [cityId], references: [id], onDelete: Cascade)
+  createdBy User @relation("CityWorkspaceOfferCreator", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@unique([cityId, workspaceUrl])
+  @@index([cityId])
+}
+
+/// LEGACY: настройки города (не используется; действуют глобальные SystemSetting).
+model CitySystemSetting {
+  id        String   @id @default(cuid())
+  cityId    String
+  key       String
+  value     String   @db.Text
+  updatedAt DateTime @updatedAt
+
+  city City @relation(fields: [cityId], references: [id], onDelete: Cascade)
+
+  @@unique([cityId, key])
+  @@index([cityId])
+}
+
+enum CityRole {
+  LEAD_SUP
+  SUP
+  ADM
+  MEMBER
+}
+
+model CityMember {
+  id        String   @id @default(cuid())
+  userId    String
+  cityId    String
+  role      CityRole @default(MEMBER)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  city City @relation(fields: [cityId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, cityId])
+  @@index([cityId])
+  @@index([userId])
+}
+
+model CityOsnovyLink {
+  id          String   @id @default(cuid())
+  cityId      String
+  workspaceId String
+  addedAt     DateTime @default(now())
+  addedById   String
+
+  city      City                @relation(fields: [cityId], references: [id], onDelete: Cascade)
+  workspace WorkspaceConnection @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  addedBy   User                @relation("OsnovyAddedBy", fields: [addedById], references: [id], onDelete: Cascade)
+
+  @@unique([cityId, workspaceId])
+  @@index([cityId])
+  @@index([workspaceId])
+}
+
+model WorkspaceSettings {
+  id          String @id @default(cuid())
+  workspaceId String @unique
+
+  ldapEnabled    Boolean @default(false)
+  ldapHost       String?
+  ldapPort       Int?
+  ldapBaseDN     String?
+  ldapBindDN     String?
+  ldapBindPass   String?
+  ldapUserFilter String?
+
+  smtpEnabled  Boolean @default(false)
+  smtpHost     String?
+  smtpPort     Int?
+  smtpUser     String?
+  smtpPass     String?
+  smtpFromName String?
+  smtpFromAddr String?
+
+  inviteEnabled     Boolean @default(true)
+  inviteAutoApprove Boolean @default(false)
+  inviteDomains     String? @db.Text
+
+  updatedAt DateTime @updatedAt
+
+  workspace WorkspaceConnection @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+// Назначение пространства администратору: SUP может «привязать» CITY_ADMIN/MEMBER к чужому пространству
 model WorkspaceAdminAssignment {
   id           String   @id @default(cuid())
-  userId       String   // ADM, которому назначено пространство
+  userId       String // ADM, которому назначено пространство
   workspaceId  String
-  assignedById String  // SUP или SUPER
+  assignedById String // SUP или SUPER
   createdAt    DateTime @default(now())
 
-  user        User                 @relation("AssignedWorkspaceUser", fields: [userId], references: [id], onDelete: Cascade)
-  workspace   WorkspaceConnection   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  assignedBy  User                 @relation("AssignedByUser", fields: [assignedById], references: [id], onDelete: Cascade)
+  user       User                @relation("AssignedWorkspaceUser", fields: [userId], references: [id], onDelete: Cascade)
+  workspace  WorkspaceConnection @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  assignedBy User                @relation("AssignedByUser", fields: [assignedById], references: [id], onDelete: Cascade)
 
   @@unique([userId, workspaceId])
   @@index([userId])
@@ -193,14 +357,16 @@ model WorkspaceActionLog {
   id          String   @id @default(cuid())
   workspaceId String
   userId      String
-  action      String   // "emoji_import" | "users_add"
+  action      String // "emoji_import" | "users_add" | "channel_create" | "setting_apply"
+  details     String?  @db.Text // JSON: { roomId, channelName } | { settingKey }
   createdAt   DateTime @default(now())
 
   workspace WorkspaceConnection @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  user      User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([workspaceId])
   @@index([userId])
+  @@index([workspaceId, action])
 }
 
 model AdminNote {
@@ -218,15 +384,16 @@ model AdminNote {
 }
 
 model WorkspaceAddedUser {
-  id             String    @id @default(cuid())
-  workspaceId    String
-  rcUserId       String?
-  username       String
-  email          String
-  addedAt        DateTime  @default(now())
-  lastLoginAt    DateTime?
-  status         String    @default("ADDED") // ADDED | ERROR
-  errorMessage   String?   @db.Text
+  id                 String    @id @default(cuid())
+  workspaceId        String
+  rcUserId           String?
+  username           String
+  email              String
+  addedAt            DateTime  @default(now())
+  lastLoginAt        DateTime?
+  status             String    @default("ADDED") // ADDED | ERROR
+  errorMessage       String?   @db.Text
+  pendingAssignments Json? // Unfinished per-user channel and role assignments for retry.
 
   workspace WorkspaceConnection @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
@@ -235,31 +402,55 @@ model WorkspaceAddedUser {
 }
 
 model ScheduledMessage {
-  id              String        @id @default(cuid())
-  userId          String        // автор сообщения (от чьего имени уйдёт в RC)
-  scheduledById   String?       // кто создал расписание (при «отправить от имени»)
-  workspaceId     String
-  channelId       String
-  channelName     String
-  message         String        @db.Text
-  scheduledFor    DateTime
-  status          MessageStatus @default(PENDING)
-  sentAt          DateTime?
-  error           String?
-  messageId_RC    String? // ID сообщения в Rocket.Chat (для редактирования)
-  isRecurring     Boolean       @default(false)
-  recurringConfig String?       @db.Text
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  id                       String        @id @default(cuid())
+  userId                   String // автор сообщения (от чьего имени уйдёт в RC)
+  scheduledById            String? // кто создал расписание (при «отправить от имени»)
+  workspaceId              String
+  channelId                String
+  channelName              String
+  message                  String        @db.Text
+  scheduledFor             DateTime
+  status                   MessageStatus @default(PENDING)
+  sentAt                   DateTime?
+  error                    String?
+  messageId_RC             String? // ID сообщения в Rocket.Chat (для редактирования)
+  isRecurring              Boolean       @default(false)
+  recurringConfig          String?       @db.Text
+  // Создано из пользовательского шаблона (для статуса «отправлено» в шаблонах)
+  sourceUserTemplateId     String?
+  /// id из lib/templates-data (общий шаблон SUP/ADM), не FK
+  sourceOfficialTemplateId String?
+  createdAt                DateTime      @default(now())
+  updatedAt                DateTime      @updatedAt
 
-  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  scheduledBy  User?               @relation("ScheduledByUser", fields: [scheduledById], references: [id], onDelete: SetNull)
-  workspace    WorkspaceConnection @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  // ── Интенсивы (все поля nullable/с default: сообщения без интенсива работают как раньше) ──
+  /// Интенсив, в контексте которого запланировано сообщение
+  intensiveId            String?
+  /// Пункт плана интенсива. Одна активная (PENDING/SENT) не-повторная отправка на пункт —
+  /// частичный уникальный индекс "ScheduledMessage_planItem_active_key" (только в SQL миграции).
+  planItemId             String?
+  /// Явный повтор после успешной отправки (не участвует в уникальности активной отправки)
+  isPlanRepeat           Boolean @default(false)
+  /// Ключ идемпотентности POST /api/messages (повтор запроса после сбоя сети не создаёт дубль)
+  clientRequestId        String? @unique
+  /// Текст при создании отличался от снимка пункта плана (или был изменён позже)
+  planEditedFromSnapshot Boolean @default(false)
+
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  scheduledBy        User?               @relation("ScheduledByUser", fields: [scheduledById], references: [id], onDelete: SetNull)
+  workspace          WorkspaceConnection @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  sourceUserTemplate UserTemplate?       @relation(fields: [sourceUserTemplateId], references: [id], onDelete: SetNull)
+  intensive          Intensive?          @relation(fields: [intensiveId], references: [id], onDelete: SetNull)
+  planItem           IntensivePlanItem?  @relation(fields: [planItemId], references: [id], onDelete: SetNull)
 
   @@index([scheduledFor, status])
   @@index([userId, status])
   @@index([workspaceId, status]) // NEW: для фильтрации по workspace
   @@index([messageId_RC]) // Для поиска по messageId из Rocket.Chat
+  @@index([sourceUserTemplateId])
+  @@index([sourceOfficialTemplateId])
+  @@index([intensiveId, status])
+  @@index([planItemId, status])
 }
 
 enum MessageStatus {
@@ -289,8 +480,8 @@ model FavoriteChannel {
   channelName String?
   createdAt   DateTime @default(now())
 
-  user      User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  workspace WorkspaceConnection   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace WorkspaceConnection @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@unique([userId, workspaceId, channelId])
   @@index([userId, workspaceId])
@@ -316,14 +507,14 @@ model ActivityLog {
 // События безопасности: попытки входа, подозрительные запросы, блокировки (только для главного администратора)
 model SecurityEvent {
   id        String   @id @default(cuid())
-  type      String   // LOGIN_FAILED, LOGIN_RATE_LIMIT, INVALID_TOKEN, SUSPICIOUS_INPUT, UNAUTHORIZED_ACCESS, etc.
-  path      String?  // путь/эндпоинт (например /api/auth/login)
-  method   String?  // GET, POST, ...
+  type      String // LOGIN_FAILED, LOGIN_RATE_LIMIT, INVALID_TOKEN, SUSPICIOUS_INPUT, UNAUTHORIZED_ACCESS, etc.
+  path      String? // путь/эндпоинт (например /api/auth/login)
+  method    String? // GET, POST, ...
   ipAddress String?
-  userAgent String? @db.Text
+  userAgent String?  @db.Text
   details   String?  @db.Text // что пытались сделать, без паролей и секретов
   blocked   Boolean  @default(true) // защита сработала / атака отражена
-  userId    String?  // если известен пользователь (опционально)
+  userId    String? // если известен пользователь (опционально)
   createdAt DateTime @default(now())
 
   @@index([type, createdAt])
@@ -332,114 +523,137 @@ model SecurityEvent {
 }
 
 model UserTemplate {
-  id           String   @id @default(cuid())
+  id           String    @id @default(cuid())
   userId       String
-  channel      String   // adm, announcements или свой канал
-  intensiveDay Int?     // 1–14, опционально
-  time         String   // HH:mm
+  channel      String // adm, announcements или свой канал
+  intensiveDay Int? // 1–14, опционально
+  time         String // HH:mm
   title        String?
-  body         String   @db.Text
-  tags         String[] @default([]) // теги: экзамен, групповой проект и т.д.
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  body         String    @db.Text
+  tags         String[]  @default([]) // теги: экзамен, групповой проект и т.д.
+  lastSentAt   DateTime? // последняя успешная отправка из этого шаблона
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
-  user     User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  versions UserTemplateVersion[]
+  user          User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  versions      UserTemplateVersion[]
+  scheduledFrom ScheduledMessage[]
 
   @@index([userId])
 }
 
 model UserTemplateVersion {
-  id           String       @id @default(cuid())
+  id             String   @id @default(cuid())
   userTemplateId String
-  body         String       @db.Text
-  title        String?
-  channel      String
-  time         String
-  intensiveDay Int?
-  createdAt    DateTime     @default(now())
+  body           String   @db.Text
+  title          String?
+  channel        String
+  time           String
+  intensiveDay   Int?
+  createdAt      DateTime @default(now())
 
   userTemplate UserTemplate @relation(fields: [userTemplateId], references: [id], onDelete: Cascade)
 
   @@index([userTemplateId])
 }
 
-// Переопределения официальных шаблонов (SUPER): правка body/title для SUP или ADM
+// Переопределения официальных шаблонов. Приложение использует только глобальные строки (cityId null — LEGACY-колонка).
 model OfficialTemplateOverride {
-  id         String   @id @default(cuid())
-  templateId String  // id из lib/templates-data (например d1-09)
-  scope      String  // "SUP" | "ADM"
-  body       String  @db.Text
-  title      String?
+  id          String   @id @default(cuid())
+  templateId  String // id из lib/templates-data (например d1-09)
+  scope       String // "SUP" | "ADM"
+  cityId      String?
+  body        String   @db.Text
+  title       String?
+  channel     String? // переопределение канала (adm, announcements, general, support, services и т.д.)
+  time        String? // переопределение времени "HH:mm"
   updatedById String
-  updatedAt  DateTime @updatedAt
+  updatedAt   DateTime @updatedAt
 
-  updatedBy User @relation(fields: [updatedById], references: [id], onDelete: Cascade)
+  updatedBy User  @relation(fields: [updatedById], references: [id], onDelete: Cascade)
+  city      City? @relation(fields: [cityId], references: [id], onDelete: Cascade)
 
-  @@unique([templateId, scope])
+  @@unique([templateId, scope, cityId])
   @@index([templateId])
   @@index([scope])
+  @@index([cityId])
 }
 
 // Настройки системы (SUPER): ключ-значение для включения/отключения возможностей SUP/ADM
 model SystemSetting {
-  id    String   @id @default(cuid())
-  key   String   @unique  // например: sendAsEnabledSup, templatesTabVisible, helpMainVisible, helpAdminVisible
-  value String   @db.Text // "true" | "false" или JSON
+  id        String   @id @default(cuid())
+  key       String   @unique // например: sendAsEnabledSup, templatesTabVisible, helpMainVisible, helpAdminVisible
+  value     String   @db.Text // "true" | "false" или JSON
   updatedAt DateTime @updatedAt
 }
 
-// Справка: основной контент вкладки «Основные моменты» (один блок, если нет разделов)
+// Справка: основной контент «Основные моменты». Используются только строки с cityId null (cityId — LEGACY).
 model HelpMainContent {
   id        String   @id @default(cuid())
+  cityId    String?
   content   String   @db.Text // Markdown или HTML
   updatedAt DateTime @updatedAt
+
+  city City? @relation(fields: [cityId], references: [id], onDelete: Cascade)
+
+  @@index([cityId])
 }
 
-// Справка: разделы (вкладки) внутри «Основные моменты» — при наличии отображаются как подвкладки
+// Справка: разделы внутри «Основные моменты» (только cityId null; cityId — LEGACY)
 model HelpMainSection {
   id        String   @id @default(cuid())
-  title    String   // заголовок вкладки
-  order    Int      @default(0)
-  content  String   @db.Text // HTML из TipTap
+  cityId    String?
+  title     String // заголовок вкладки
+  order     Int      @default(0)
+  content   String   @db.Text // HTML из TipTap
   updatedAt DateTime @updatedAt
+
+  city City? @relation(fields: [cityId], references: [id], onDelete: Cascade)
+
+  @@index([cityId])
 }
 
-// Справка: каталог (папка по шагам) во вкладке «От Администратора». roles пустой = для всех ролей.
+// Справка: каталог «От Администратора» (только cityId null; cityId — LEGACY)
 model HelpCatalog {
-  id          String   @id @default(cuid())
-  title       String
-  order       Int      @default(0)
-  roles      String[] @default([]) // пустой = все, иначе только перечисленные (SUPPORT, ADM, VOL)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  instructions HelpInstruction[]
-  faqs         HelpFAQ[]
-}
-
-// Справка: инструкция внутри каталога (HTML из TipTap). roles пустой = для всех ролей.
-model HelpInstruction {
-  id         String   @id @default(cuid())
-  catalogId  String
-  title      String
-  content    String   @db.Text
-  order      Int      @default(0)
-  roles      String[] @default([]) // пустой = все, иначе только перечисленные (SUPPORT, ADM, VOL)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-  catalog    HelpCatalog @relation(fields: [catalogId], references: [id], onDelete: Cascade)
-}
-
-// Справка: FAQ (в каталоге или глобальный). roles пустой = для всех ролей.
-model HelpFAQ {
   id        String   @id @default(cuid())
-  catalogId String?  // null = глобальный FAQ раздела «От Администратора»
-  question  String   @db.Text
-  answer    String   @db.Text
+  cityId    String?
+  title     String
   order     Int      @default(0)
   roles     String[] @default([]) // пустой = все, иначе только перечисленные (SUPPORT, ADM, VOL)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  city City? @relation(fields: [cityId], references: [id], onDelete: Cascade)
+
+  instructions HelpInstruction[]
+  faqs         HelpFAQ[]
+
+  @@index([cityId])
+}
+
+// Справка: инструкция внутри каталога (HTML из TipTap). roles пустой = для всех ролей.
+model HelpInstruction {
+  id        String      @id @default(cuid())
+  catalogId String
+  title     String
+  content   String      @db.Text
+  order     Int         @default(0)
+  roles     String[]    @default([]) // пустой = все, иначе только перечисленные (SUPPORT, ADM, VOL)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+  catalog   HelpCatalog @relation(fields: [catalogId], references: [id], onDelete: Cascade)
+}
+
+// Справка: FAQ (в каталоге или глобальный). roles пустой = для всех ролей.
+model HelpFAQ {
+  id        String       @id @default(cuid())
+  catalogId String? // null = глобальный FAQ раздела «От Администратора»
+  question  String       @db.Text
+  answer    String       @db.Text
+  order     Int          @default(0)
+  roles     String[]     @default([]) // пустой = все, иначе только перечисленные (SUPPORT, ADM, VOL)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
   catalog   HelpCatalog? @relation(fields: [catalogId], references: [id], onDelete: Cascade)
 }
 
@@ -465,4 +679,236 @@ enum ActivityType {
   SETTINGS_UPDATED
   PASSWORD_CHANGED
   ADMIN_ACTION
+}
+
+// ── Рейтинг реакций (только rocketchat-student.21-school.ru) ──
+
+/// Настройки рейтинга реакций пространства.
+model ReactionRatingSettings {
+  id          String  @id @default(cuid())
+  workspaceId String  @unique
+  enabled     Boolean @default(false)
+
+  /// [{ id, name, type: 'c' | 'p' }] — каналы, реакции в которых учитываются
+  channels           Json     @default("[]")
+  excludeOwnMessages Boolean  @default(true)
+  excludeBots        Boolean  @default(true)
+  includeThreads     Boolean  @default(false)
+  /// Логины, реакции которых не учитываются (служебные аккаунты, adm)
+  excludedUsernames  String[] @default([])
+  timezone           String   @default("Europe/Moscow")
+
+  reportChannelId   String?
+  reportChannelName String?
+  weeklyEnabled     Boolean @default(false)
+  /// ISO день недели: 1 = понедельник … 7 = воскресенье
+  weeklyDay         Int     @default(1)
+  /// Час публикации (0–23) в часовом поясе timezone
+  reportHour        Int     @default(12)
+  monthlyEnabled    Boolean @default(false)
+  topN              Int     @default(10)
+  mentionUsers      Boolean @default(false)
+
+  lastSyncAt            DateTime?
+  lastSyncError         String?   @db.Text
+  lastWeeklyPostKey     String?
+  lastMonthlyPostPeriod String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace WorkspaceConnection @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+/// Одна запись = пользователь поставил хотя бы одну реакцию на сообщение (1 балл).
+model ReactionRecord {
+  id          String   @id @default(cuid())
+  workspaceId String
+  roomId      String
+  messageId   String
+  username    String
+  /// Дата сообщения — по ней определяется период
+  messageTs   DateTime
+  /// yyyy-MM в часовом поясе настроек
+  period      String
+  createdAt   DateTime @default(now())
+
+  workspace WorkspaceConnection @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, messageId, username])
+  @@index([workspaceId, period])
+  @@index([workspaceId, roomId, messageTs])
+}
+
+/// Зафиксированные итоги месяца (не меняются после объявления, кроме ручного пересчёта).
+model ReactionMonthlyResult {
+  id              String    @id @default(cuid())
+  workspaceId     String
+  period          String
+  /// [{ place, username, score }]
+  entries         Json
+  participants    Int
+  messages        Int
+  winnerUsernames String[]  @default([])
+  announcedAt     DateTime?
+  finalizedAt     DateTime  @default(now())
+
+  workspace WorkspaceConnection @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, period])
+}
+
+// ── Интенсивы, годовой календарь, план анонсов (docs/intensives-spec.md, docs/intensives-api.md) ──
+// Миграция 20261008100000_intensives дополнительно создаёт в SQL (Prisma их не описывает):
+//  - частичный уникальный индекс "ScheduledMessage_planItem_active_key" (одна активная отправка на пункт);
+//  - CHECK-ограничения (endDate >= startDate, формат времени, номер дня, причина пропуска, planItem ⇒ intensive);
+//  - EXCLUDE "Intensive_published_no_overlap" (btree_gist) — нет пересечений опубликованных интенсивов одного OrgSpace;
+//  - триггеры истории: смена статуса / удаление связанного сообщения → IntensiveEvent; IntensiveEvent неизменяем.
+
+enum IntensiveStatus {
+  DRAFT
+  PUBLISHED
+  CANCELLED
+  ARCHIVED
+}
+
+enum PlanItemSourceType {
+  OFFICIAL // официальный шаблон lib/templates-data (+ глобальное переопределение)
+  USER_TEMPLATE // пользовательский шаблон (снимок)
+  CUSTOM // пункт, созданный вручную
+}
+
+enum IntensiveEventType {
+  INTENSIVE_CREATED
+  INTENSIVE_UPDATED
+  INTENSIVE_PUBLISHED
+  INTENSIVE_CANCELLED
+  INTENSIVE_ARCHIVED
+  PLAN_GENERATED
+  PLAN_ITEM_ADDED
+  PLAN_ITEM_UPDATED
+  PLAN_ITEM_SOURCE_UPDATED
+  PLAN_ITEM_SKIPPED
+  PLAN_ITEM_UNSKIPPED
+  PLAN_ITEM_DELETED
+  MESSAGE_SCHEDULED
+  MESSAGE_REPEAT_SCHEDULED
+  MESSAGE_SENT
+  MESSAGE_FAILED
+  MESSAGE_CANCELLED
+  MESSAGE_RETRIED
+  MESSAGE_DELETED
+  MESSAGE_LINKED
+  MESSAGE_DETACHED
+}
+
+/// Организационное пространство: общее расписание интенсивов для персональных подключений одного RC.
+/// Секреты подключений сюда не переносятся.
+model OrgSpace {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?  @db.Text
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdBy   User?                 @relation("OrgSpaceCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  connections WorkspaceConnection[]
+  intensives  Intensive[]
+}
+
+/// Интенсив — запуск внутри OrgSpace. Даты календарные (DATE), окончание включается.
+model Intensive {
+  id           String          @id @default(cuid())
+  orgSpaceId   String
+  name         String
+  description  String?         @db.Text
+  startDate    DateTime        @db.Date
+  endDate      DateTime        @db.Date
+  /// IANA, например Europe/Moscow
+  timezone     String          @default("Europe/Moscow")
+  status       IntensiveStatus @default(DRAFT)
+  publishedAt  DateTime?
+  cancelledAt  DateTime?
+  cancelReason String?         @db.Text
+  archivedAt   DateTime?
+  createdById  String?
+  updatedById  String?
+  /// Оптимистическая блокировка: каждое изменение увеличивает version
+  version      Int             @default(1)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  orgSpace  OrgSpace            @relation(fields: [orgSpaceId], references: [id], onDelete: Restrict)
+  createdBy User?               @relation("IntensiveCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy User?               @relation("IntensiveUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  planItems IntensivePlanItem[]
+  events    IntensiveEvent[]
+  messages  ScheduledMessage[]
+
+  @@index([orgSpaceId, status])
+  @@index([startDate, endDate])
+  @@index([status])
+}
+
+/// Пункт плана анонсов: снимок шаблона на момент формирования плана.
+model IntensivePlanItem {
+  id               String             @id @default(cuid())
+  intensiveId      String
+  position         Int                @default(0)
+  sourceType       PlanItemSourceType
+  /// id официального шаблона (d1-09) или UserTemplate.id — не FK: удаление шаблона не меняет план
+  sourceTemplateId String?
+  /// Для OFFICIAL: 'ADM' | 'SUP' (набор официальных шаблонов)
+  sourceScope      String?
+  /// Хеш содержимого источника на момент снимка (для «Доступна новая версия»)
+  sourceVersion    String?
+  title            String
+  body             String             @db.Text
+  channel          String
+  /// День интенсива N (1..), null — выбирает сотрудник
+  dayNumber        Int?
+  /// Рекомендуемое время "HH:mm" в поясе интенсива, null — выбирает сотрудник
+  time             String?
+  /// Для кого пункт: 'ADM' | 'SUP' | 'ALL'
+  audience         String             @default("ALL")
+  /// Категории/теги (например 'mk' — только кампусы с МК)
+  categories       String[]           @default([])
+  skipped          Boolean            @default(false)
+  skipReason       String?            @db.Text
+  skippedById      String?
+  skippedAt        DateTime?
+  createdById      String?
+  updatedById      String?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  intensive Intensive          @relation(fields: [intensiveId], references: [id], onDelete: Restrict)
+  skippedBy User?              @relation("PlanItemSkippedBy", fields: [skippedById], references: [id], onDelete: SetNull)
+  createdBy User?              @relation("PlanItemCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy User?              @relation("PlanItemUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  messages  ScheduledMessage[]
+
+  /// Идемпотентность формирования плана: один пункт на источник (NULL sourceTemplateId у CUSTOM не конфликтует)
+  @@unique([intensiveId, sourceType, sourceTemplateId])
+  @@index([intensiveId, position])
+}
+
+/// Неизменяемая история интенсива. planItemId/messageId — строки без FK: история переживает удаление.
+model IntensiveEvent {
+  id          String             @id @default(cuid())
+  intensiveId String
+  planItemId  String?
+  messageId   String?
+  actorId     String?
+  type        IntensiveEventType
+  details     Json?
+  createdAt   DateTime           @default(now())
+
+  intensive Intensive @relation(fields: [intensiveId], references: [id], onDelete: Restrict)
+  actor     User?     @relation("IntensiveEventActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([intensiveId, createdAt])
+  @@index([planItemId])
+  @@index([messageId])
 }

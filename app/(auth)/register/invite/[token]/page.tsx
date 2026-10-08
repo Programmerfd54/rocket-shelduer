@@ -5,18 +5,22 @@ import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Field } from "@/components/ui/field"
+import { PasswordInput } from "@/components/ui/password-input"
+import { Badge } from "@/components/ui/badge"
+import { Skeleton } from "@/components/ui/skeleton"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { AuthShell } from '@/components/common/AuthShell'
+import { PasswordStrength } from '@/components/common/PasswordStrength'
 import { toast } from 'sonner'
-import { Send, Mail, Lock, Loader2, ArrowRight, CheckCircle, User } from 'lucide-react'
-import { checkPasswordStrength } from '@/lib/utils'
+import { Loader2, CircleAlert } from 'lucide-react'
+import { validateNewPassword, validatePasswordConfirm } from '@/lib/validate-password'
 
 const ROLE_LABELS: Record<string, string> = {
-  USER: 'Пользователь',
-  ADM: 'Администратор',
-  VOL: 'Волонтёр',
-  SUPPORT: 'Support',
-  ADMIN: 'Admin',
+  LEAD_SUP: 'Lead_SUP',
+  SUP: 'SUP',
+  ADM: 'ADM',
+  MEMBER: 'Волонтёр',
 }
 
 export default function RegisterInvitePage() {
@@ -24,7 +28,11 @@ export default function RegisterInvitePage() {
   const params = useParams()
   const token = params?.token as string
 
-  const [invite, setInvite] = useState<{ valid: boolean; role: string; email?: string } | null>(null)
+  const [invite, setInvite] = useState<{
+    valid: boolean
+    role: string
+    email?: string
+  } | null>(null)
   const [inviteError, setInviteError] = useState<string | null>(null)
   const [loadingInvite, setLoadingInvite] = useState(true)
 
@@ -34,7 +42,9 @@ export default function RegisterInvitePage() {
     password: '',
     confirmPassword: '',
   })
+  const [touched, setTouched] = useState({ login: false, name: false, password: false, confirmPassword: false })
   const [isLoading, setIsLoading] = useState(false)
+  const [formError, setFormError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!token) {
@@ -46,31 +56,34 @@ export default function RegisterInvitePage() {
       .then((res) => res.json())
       .then((data) => {
         if (data.valid) {
-          setInvite({ valid: true, role: data.role, email: data.email })
+          setInvite({
+            valid: true,
+            role: data.role,
+            email: data.email,
+          })
           if (data.email) setFormData((f) => ({ ...f, login: data.email }))
         } else {
           setInviteError(data.error || 'Приглашение недействительно')
         }
       })
-      .catch(() => setInviteError('Ошибка загрузки приглашения'))
+      .catch(() => setInviteError('Не удалось проверить приглашение. Проверьте соединение и обновите страницу.'))
       .finally(() => setLoadingInvite(false))
   }, [token])
+
+  const loginTrim = formData.login.trim()
+  const loginError = !loginTrim ? 'Введите логин' : /\s/.test(loginTrim) ? 'Логин без пробелов' : undefined
+  const nameError = !formData.name.trim() ? 'Введите имя' : undefined
+  const passwordError = validateNewPassword(formData.password)
+  const confirmError = validatePasswordConfirm(formData.password, formData.confirmPassword)
+  const valid = !loginError && !nameError && !passwordError && !confirmError
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!invite?.valid || !token) return
+    setTouched({ login: true, name: true, password: true, confirmPassword: true })
+    if (!valid) return
 
-    if (formData.password !== formData.confirmPassword) {
-      toast.error('Пароли не совпадают')
-      return
-    }
-
-    const passwordCheck = checkPasswordStrength(formData.password)
-    if (!passwordCheck.valid) {
-      toast.error('Слабый пароль', { description: passwordCheck.message })
-      return
-    }
-
+    setFormError(null)
     setIsLoading(true)
     try {
       const res = await fetch('/api/auth/register-invite', {
@@ -90,220 +103,157 @@ export default function RegisterInvitePage() {
         throw new Error(data.error || 'Ошибка регистрации')
       }
 
-      toast.success('Регистрация успешна!', { description: 'Добро пожаловать в систему' })
+      toast.success('Аккаунт создан', { description: 'Добро пожаловать в систему' })
       router.push('/dashboard')
     } catch (err: unknown) {
-      toast.error('Ошибка регистрации', {
-        description: err instanceof Error ? err.message : 'Попробуйте снова',
-      })
+      const message = err instanceof Error ? err.message : 'Попробуйте снова'
+      setFormError(message)
+      toast.error('Не удалось зарегистрироваться', { description: message })
     } finally {
       setIsLoading(false)
     }
   }
 
-  const passwordStrength = checkPasswordStrength(formData.password)
-
   if (loadingInvite) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-background via-background to-muted/20">
-        <div className="text-center space-y-4">
-          <Loader2 className="w-10 h-10 animate-spin text-primary mx-auto" />
-          <p className="text-muted-foreground">Проверка приглашения...</p>
+      <AuthShell title="Проверяем приглашение…">
+        <div className="space-y-3" aria-busy="true">
+          <Skeleton className="h-9 w-full" />
+          <Skeleton className="h-9 w-full" />
+          <Skeleton className="h-9 w-full" />
         </div>
-      </div>
+      </AuthShell>
     )
   }
 
   if (inviteError || !invite?.valid) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-background via-background to-muted/20">
-        <Card className="w-full max-w-md border-destructive/50">
-          <CardHeader>
-            <CardTitle>Приглашение недействительно</CardTitle>
-            <CardDescription>{inviteError || 'Срок действия ссылки истёк или ссылка уже использована.'}</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Link href="/login">
-              <Button variant="outline" className="w-full">Перейти ко входу</Button>
-            </Link>
-          </CardContent>
-        </Card>
-      </div>
+      <AuthShell
+        title="Приглашение недействительно"
+        description={inviteError || 'Срок действия ссылки истёк или она уже использована.'}
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            Попросите Lead_SUP отправить вам новое приглашение.
+          </p>
+          <Button asChild variant="outline" className="w-full">
+            <Link href="/login">Перейти ко входу</Link>
+          </Button>
+        </div>
+      </AuthShell>
     )
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-background via-background to-muted/20">
-      <div className="w-full max-w-md space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
-        <div className="text-center space-y-4">
-          <div className="flex justify-center">
-            <div className="relative">
-              <div className="w-16 h-16 bg-gradient-to-br from-red-600 to-red-700 rounded-2xl flex items-center justify-center shadow-2xl">
-                <Send className="w-8 h-8 text-white" />
-              </div>
-              <div className="absolute -bottom-1 -right-1 w-5 h-5 bg-green-500 rounded-full border-4 border-background" />
-            </div>
-          </div>
-          <div>
-            <h1 className="text-3xl font-bold bg-gradient-to-r from-foreground to-foreground/70 bg-clip-text text-transparent">
-              Регистрация по приглашению
-            </h1>
-            <p className="text-muted-foreground mt-2">
-              Роль: <span className="font-medium text-foreground">{ROLE_LABELS[invite.role] ?? invite.role}</span>
-            </p>
-          </div>
-        </div>
+    <AuthShell
+      title="Создание аккаунта"
+      description={
+        <span className="flex flex-wrap items-center gap-2">
+          Вас пригласили в систему с ролью
+          <Badge variant="muted">{ROLE_LABELS[invite.role] ?? invite.role}</Badge>
+        </span>
+      }
+      footer={
+        <>
+          Уже есть аккаунт?{' '}
+          <Link href="/login" className="font-medium text-primary underline-offset-4 hover:underline">
+            Войти
+          </Link>
+        </>
+      }
+    >
+      <form onSubmit={handleSubmit} className="space-y-4" noValidate>
+        {formError && (
+          <Alert variant="destructive">
+            <CircleAlert aria-hidden />
+            <AlertDescription>{formError}</AlertDescription>
+          </Alert>
+        )}
 
-        <Card className="border-muted shadow-xl">
-          <CardHeader className="space-y-1 pb-4">
-            <CardTitle className="text-2xl">Создать аккаунт</CardTitle>
-            <CardDescription>
-              Укажите логин (как в корпоративной почте), пароль и имя.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="login">Логин *</Label>
-                <div className="relative">
-                  <Mail className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    id="login"
-                    type="text"
-                    autoComplete="username"
-                    required
-                    value={formData.login}
-                    onChange={(e) => setFormData({ ...formData, login: e.target.value })}
-                    className="pl-10 h-11"
-                    placeholder="d.solyanov"
-                    disabled={isLoading}
-                  />
-                </div>
-              </div>
+        <Field
+          label="Логин"
+          htmlFor="login"
+          required
+          error={touched.login ? loginError : undefined}
+          hint={
+            invite?.email
+              ? 'Логин задан приглашением и не меняется. По нему вы будете входить в систему.'
+              : 'По нему вы будете входить в систему.'
+          }
+        >
+          <Input
+            id="login"
+            type="text"
+            autoComplete="username"
+            autoFocus
+            value={formData.login}
+            onChange={(e) => setFormData({ ...formData, login: e.target.value })}
+            onBlur={() => setTouched((t) => ({ ...t, login: true }))}
+            aria-invalid={touched.login && !!loginError}
+            className="font-mono"
+            placeholder="d.solyanov"
+            readOnly={!!invite?.email}
+            disabled={isLoading}
+          />
+        </Field>
 
-              <div className="space-y-2">
-                <Label htmlFor="password">Пароль *</Label>
-                <div className="relative">
-                  <Lock className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    id="password"
-                    type="password"
-                    autoComplete="new-password"
-                    required
-                    value={formData.password}
-                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                    className="pl-10 h-11"
-                    placeholder="••••••••"
-                    disabled={isLoading}
-                  />
-                </div>
-                {formData.password && (
-                  <div className="space-y-2 pt-1">
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="text-muted-foreground font-medium">Надёжность</span>
-                      <span className={`font-semibold ${
-                        passwordStrength.strength === 'weak' ? 'text-red-500' :
-                        passwordStrength.strength === 'medium' ? 'text-yellow-500' : 'text-green-500'
-                      }`}>
-                        {passwordStrength.message}
-                      </span>
-                    </div>
-                    <div className="h-2 bg-muted rounded-full overflow-hidden">
-                      <div
-                        className={`h-full transition-all duration-300 ${
-                          passwordStrength.strength === 'weak' ? 'bg-red-500 w-1/3' :
-                          passwordStrength.strength === 'medium' ? 'bg-yellow-500 w-2/3' :
-                          'bg-green-500 w-full'
-                        }`}
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
+        <Field label="Имя" htmlFor="name" required error={touched.name ? nameError : undefined}>
+          <Input
+            id="name"
+            type="text"
+            autoComplete="name"
+            value={formData.name}
+            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+            onBlur={() => setTouched((t) => ({ ...t, name: true }))}
+            aria-invalid={touched.name && !!nameError}
+            placeholder="Иван Иванов"
+            disabled={isLoading}
+          />
+        </Field>
 
-              <div className="space-y-2">
-                <Label htmlFor="confirmPassword">Повторите пароль *</Label>
-                <div className="relative">
-                  <Lock className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    id="confirmPassword"
-                    type="password"
-                    autoComplete="new-password"
-                    required
-                    value={formData.confirmPassword}
-                    onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
-                    className="pl-10 h-11 pr-10"
-                    placeholder="••••••••"
-                    disabled={isLoading}
-                  />
-                  {formData.confirmPassword && formData.password === formData.confirmPassword && (
-                    <CheckCircle className="absolute right-3 top-3 h-5 w-5 text-green-500" />
-                  )}
-                </div>
-              </div>
+        <Field
+          label="Пароль"
+          htmlFor="password"
+          required
+          hint="Минимум 8 символов: заглавные и строчные буквы, цифры, спецсимволы."
+          error={touched.password && formData.password ? passwordError : touched.password ? 'Введите пароль' : undefined}
+        >
+          <PasswordInput
+            id="password"
+            autoComplete="new-password"
+            value={formData.password}
+            onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+            onBlur={() => setTouched((t) => ({ ...t, password: true }))}
+            aria-invalid={touched.password && !!passwordError}
+            placeholder="••••••••"
+            disabled={isLoading}
+          />
+          <PasswordStrength password={formData.password} className="pt-1" />
+        </Field>
 
-              <div className="space-y-2">
-                <Label htmlFor="name">Имя *</Label>
-                <div className="relative">
-                  <User className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    id="name"
-                    type="text"
-                    autoComplete="name"
-                    required
-                    value={formData.name}
-                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                    className="pl-10 h-11"
-                    placeholder="Иван Иванов"
-                    disabled={isLoading}
-                  />
-                </div>
-              </div>
+        <Field
+          label="Повторите пароль"
+          htmlFor="confirmPassword"
+          required
+          error={touched.confirmPassword ? confirmError : undefined}
+        >
+          <PasswordInput
+            id="confirmPassword"
+            autoComplete="new-password"
+            value={formData.confirmPassword}
+            onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
+            onBlur={() => setTouched((t) => ({ ...t, confirmPassword: true }))}
+            aria-invalid={touched.confirmPassword && !!confirmError}
+            placeholder="••••••••"
+            disabled={isLoading}
+          />
+        </Field>
 
-              <p className="text-xs text-muted-foreground">
-                Пароль можно сбросить через администратора либо в настройках.
-              </p>
-
-              <Button
-                type="submit"
-                className="w-full h-11 bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800"
-                disabled={isLoading}
-              >
-                {isLoading ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Регистрация...
-                  </>
-                ) : (
-                  <>
-                    Создать аккаунт
-                    <ArrowRight className="ml-2 h-4 w-4" />
-                  </>
-                )}
-              </Button>
-
-              <div className="relative my-6">
-                <div className="absolute inset-0 flex items-center">
-                  <span className="w-full border-t" />
-                </div>
-                <div className="relative flex justify-center text-xs uppercase">
-                  <span className="bg-card px-2 text-muted-foreground">Уже есть аккаунт?</span>
-                </div>
-              </div>
-
-              <Link href="/login" className="block">
-                <Button variant="outline" className="w-full h-11" type="button" disabled={isLoading}>
-                  Войти
-                </Button>
-              </Link>
-            </form>
-          </CardContent>
-        </Card>
-
-        <p className="text-center text-sm text-muted-foreground">
-          Планирование отложенных сообщений для Rocket.Chat
-        </p>
-      </div>
-    </div>
+        <Button type="submit" className="w-full" disabled={isLoading}>
+          {isLoading && <Loader2 className="animate-spin" aria-hidden />}
+          {isLoading ? 'Создаём аккаунт…' : 'Создать аккаунт'}
+        </Button>
+      </form>
+    </AuthShell>
   )
 }

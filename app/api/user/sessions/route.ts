@@ -60,6 +60,10 @@ export async function DELETE(request: Request) {
       // no body
     }
 
+    if (body.sessionId !== undefined && (typeof body.sessionId !== 'string' || body.sessionId.length > 100)) {
+      return NextResponse.json({ error: 'Некорректный sessionId' }, { status: 400 });
+    }
+
     if (body.sessionId) {
       // Удалить одну сессию (должна принадлежать пользователю)
       const session = await prisma.session.findFirst({

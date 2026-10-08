@@ -1,28 +1,33 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { requireAuth } from '@/lib/auth';
+import { sanitizeHelpHtml } from '@/lib/sanitize';
+import { requireAuth } from '@/lib/api-auth';
+import { requireAction } from '@/lib/permissions';
+import { assertGlobalHelpCatalog, helpAdminErrorResponse } from '@/lib/help-admin';
+
+const ALLOWED_ROLES = ['SUP', 'ADM', 'VOL', 'MEMBER'];
 
 export async function POST(request: Request) {
   try {
     const user = await requireAuth();
-    if (user.role !== 'ADMIN') {
-      return NextResponse.json({ error: 'Only ADMIN' }, { status: 403 });
-    }
+    requireAction(user, 'admin:help');
     const body = await request.json();
-    const catalogId = body.catalogId === null || body.catalogId === undefined ? null : (body.catalogId as string);
+    const catalogId =
+      typeof body.catalogId === 'string' && body.catalogId.trim() ? body.catalogId.trim() : null;
+    if (catalogId) {
+      await assertGlobalHelpCatalog(catalogId);
+    }
     const question = typeof body.question === 'string' ? body.question.trim() : '';
-    const answer = typeof body.answer === 'string' ? body.answer : '';
+    const answer = typeof body.answer === 'string' ? sanitizeHelpHtml(body.answer) : '';
     const order = typeof body.order === 'number' ? body.order : 0;
-    const allowed = ['SUPPORT', 'ADM', 'VOL'];
     const roles = Array.isArray(body.roles)
-      ? (body.roles as string[]).filter((r) => allowed.includes(String(r)))
+      ? (body.roles as string[]).filter((r) => ALLOWED_ROLES.includes(String(r)))
       : [];
     const faq = await prisma.helpFAQ.create({
       data: { catalogId, question, answer, order, roles },
     });
     return NextResponse.json({ faq });
   } catch (e) {
-    console.error('Admin help FAQ POST error:', e);
-    return NextResponse.json({ error: 'Failed to create' }, { status: 500 });
+    return helpAdminErrorResponse(e, 'Admin help FAQ POST error:');
   }
 }

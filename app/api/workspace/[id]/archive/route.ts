@@ -1,6 +1,29 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { requireAuth, isUserEffectivelyBlocked } from '@/lib/auth';
+import { isUserEffectivelyBlocked } from '@/lib/auth';
+import { requireAuth } from '@/lib/api-auth';
+import { requireAction } from '@/lib/permissions';
+import { isUnsafeId } from '@/lib/security';
+
+/** Поля пространства для ответа (без authToken / encryptedPassword / userId_RC). */
+const WORKSPACE_PUBLIC_SELECT = {
+  id: true,
+  workspaceName: true,
+  workspaceUrl: true,
+  username: true,
+  rcAuthMethod: true,
+  has2FA: true,
+  isActive: true,
+  lastConnected: true,
+  color: true,
+  startDate: true,
+  endDate: true,
+  isArchived: true,
+  archivedAt: true,
+  archiveDeleteAt: true,
+  createdAt: true,
+  updatedAt: true,
+} as const;
 
 export async function POST(
   request: Request,
@@ -8,19 +31,18 @@ export async function POST(
 ) {
   try {
     const user = await requireAuth();
-    if (user.role === 'VOL') {
-      return NextResponse.json(
-        { error: 'Волонтёр не может архивировать пространство.' },
-        { status: 403 }
-      );
-    }
+    requireAction(user, 'workspace:archive');
     const { id } = await params;
+    if (isUnsafeId(id)) {
+      return NextResponse.json({ error: 'Bad request' }, { status: 400 });
+    }
 
     const workspace = await prisma.workspaceConnection.findFirst({
       where: {
         id,
         userId: user.id,
       },
+      select: { id: true, workspaceName: true, isArchived: true },
     });
 
     if (!workspace) {
@@ -49,6 +71,7 @@ export async function POST(
         archivedAt,
         archiveDeleteAt,
       },
+      select: WORKSPACE_PUBLIC_SELECT,
     });
 
     // Отменяем все pending сообщения
@@ -82,6 +105,9 @@ export async function POST(
       message: `Workspace archived. Will be deleted on ${archiveDeleteAt.toLocaleDateString('ru-RU')}`,
     });
   } catch (error) {
+    if (error instanceof Error && error.message === 'Forbidden') {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
     console.error('Archive workspace error:', error);
     return NextResponse.json(
       { error: 'Failed to archive workspace' },
@@ -97,25 +123,24 @@ export async function DELETE(
 ) {
   try {
     const user = await requireAuth();
+    requireAction(user, 'workspace:archive:restore');
     if (isUserEffectivelyBlocked(user)) {
       return NextResponse.json(
         { error: 'Заблокированный пользователь не может восстанавливать пространства из архива.' },
         { status: 403 }
       );
     }
-    if (user.role === 'VOL') {
-      return NextResponse.json(
-        { error: 'Волонтёр не может управлять архивом.' },
-        { status: 403 }
-      );
-    }
     const { id } = await params;
+    if (isUnsafeId(id)) {
+      return NextResponse.json({ error: 'Bad request' }, { status: 400 });
+    }
 
     const workspace = await prisma.workspaceConnection.findFirst({
       where: {
         id,
         userId: user.id,
       },
+      select: { id: true, workspaceName: true, isArchived: true },
     });
 
     if (!workspace) {
@@ -140,6 +165,7 @@ export async function DELETE(
         archivedAt: null,
         archiveDeleteAt: null,
       },
+      select: WORKSPACE_PUBLIC_SELECT,
     });
 
     // Логируем
@@ -160,6 +186,9 @@ export async function DELETE(
       workspace: updatedWorkspace,
     });
   } catch (error) {
+    if (error instanceof Error && error.message === 'Forbidden') {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
     console.error('Unarchive workspace error:', error);
     return NextResponse.json(
       { error: 'Failed to unarchive workspace' },
