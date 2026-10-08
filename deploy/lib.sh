@@ -52,7 +52,15 @@ is_weak_secret() {
 # ---------- docker compose ----------
 detect_compose() {
   command -v docker >/dev/null 2>&1 || die "Docker не найден. Установите Docker и Docker Compose."
-  docker compose version >/dev/null 2>&1 || die "Нужен плагин «docker compose» (v2)."
+  if ! docker compose version >/dev/null 2>&1; then
+    local legacy=""
+    command -v docker-compose >/dev/null 2>&1 && legacy=" (найден старый docker-compose 1.x — скрипты его не поддерживают: он ломается при пересоздании контейнеров на новых Docker)"
+    die "Нужен плагин «docker compose» v2${legacy}.
+    Установка не затрагивает работающие контейнеры:
+      • автоматически:  ./deploy/install-compose.sh      (без root, ставит в ~/.docker/cli-plugins; sudo — для всей системы)
+      • через apt:       sudo apt-get update && sudo apt-get install -y docker-compose-plugin
+    Проверка: docker compose version"
+  fi
   docker info >/dev/null 2>&1 || die "Docker-демон недоступен (запущен ли он? есть ли права у пользователя?)."
 }
 
