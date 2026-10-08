@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server';
-import { requireAuth } from '@/lib/auth';
+import { requireAuth } from '@/lib/api-auth';
+import { canPerformAction } from '@/lib/permissions';
+import { requireWorkspaceTabAccess } from '@/lib/workspace-tab-access';
+import { safeFetch } from '@/lib/ssrf';
 import { getSafeErrorMessage } from '@/lib/security';
 import { getEffectiveConnectionForRc } from '@/lib/workspace-rc';
 import { rcNotConnectedResponse } from '@/lib/rc-http';
@@ -7,6 +10,7 @@ import {
   type SettingKey,
   fetchSettings,
   checkHideSystemMessages,
+  findAllHideSystemMessagesSettings,
   checkThreadDefault,
   checkOfflineEmail,
   checkMessageEditDelete,
@@ -30,7 +34,12 @@ export async function GET(
 ) {
   try {
     const user = await requireAuth();
+    if (!canPerformAction(user, 'workspace:space-settings')) {
+      return NextResponse.json({ error: 'Недостаточно прав' }, { status: 403 });
+    }
     const { id: workspaceId } = await params;
+    const tabAccess = await requireWorkspaceTabAccess(user, workspaceId, 'spaceSettings');
+    if (!tabAccess.ok) return tabAccess.response;
     const url = new URL(_request.url);
     const key = url.searchParams.get('key') as SettingKey | null;
 
@@ -69,7 +78,7 @@ export async function GET(
     let applied = false;
 
     if (key === 'permissionCreateC' || key === 'permissionDeleteD') {
-      const res = await fetch(`${baseUrl}/api/v1/permissions.listAll`, {
+      const res = await safeFetch(`${baseUrl}/api/v1/permissions.listAll`, {
         headers: { 'X-Auth-Token': effective.authToken, 'X-User-Id': effective.userId_RC },
       });
       const permData = await res.json().catch(() => ({}));
@@ -85,12 +94,8 @@ export async function GET(
     }
     switch (key) {
       case 'hideSystemMessages': {
-        const s = settings.find(
-          (x) =>
-            x._id === 'Message_Hide_System_Messages' ||
-            (x._id?.toLowerCase().includes('hide') && x._id?.toLowerCase().includes('system'))
-        );
-        applied = checkHideSystemMessages(s?.value);
+        const targets = findAllHideSystemMessagesSettings(settings);
+        applied = targets.some((s) => checkHideSystemMessages(s.value));
         break;
       }
       case 'threadDefault': {

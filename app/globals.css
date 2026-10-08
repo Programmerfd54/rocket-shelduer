@@ -37,13 +37,20 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  /* Радиусы сжаты: большие значения (xl+) намеренно близки к lg, чтобы старые rounded-2xl не выглядели «пухлыми» */
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
-  --radius-2xl: calc(var(--radius) + 8px);
-  --radius-3xl: calc(var(--radius) + 12px);
-  --radius-4xl: calc(var(--radius) + 16px);
+  --radius-xl: calc(var(--radius) + 2px);
+  --radius-2xl: calc(var(--radius) + 4px);
+  --radius-3xl: calc(var(--radius) + 6px);
+  --radius-4xl: calc(var(--radius) + 8px);
 }
 
 @keyframes slide-in {
@@ -61,76 +68,88 @@
   animation: slide-in 0.3s ease-out;
 }
 
+/* Нейтральная палитра (Notion / Linear / Supabase): белый холст, серые границы, один зелёный акцент */
 :root {
-  --font-geist-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
-  --font-geist-mono: 'JetBrains Mono', ui-monospace, monospace;
-  --radius: 0.625rem;
+  --font-geist-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-geist-mono: var(--font-jetbrains), ui-monospace, monospace;
+  --radius: 0.5rem;
   --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
+  --foreground: oklch(0.21 0.005 260);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
+  --card-foreground: oklch(0.21 0.005 260);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --popover-foreground: oklch(0.21 0.005 260);
+  --primary: oklch(0.53 0.135 158);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.968 0.002 260);
+  --secondary-foreground: oklch(0.28 0.005 260);
+  --muted: oklch(0.968 0.002 260);
+  --muted-foreground: oklch(0.52 0.01 260);
+  --accent: oklch(0.955 0.003 260);
+  --accent-foreground: oklch(0.24 0.005 260);
+  --destructive: oklch(0.577 0.215 27);
+  --border: oklch(0.925 0.003 260);
+  --input: oklch(0.9 0.004 260);
+  --ring: oklch(0.6 0.12 158);
+  --success: oklch(0.55 0.14 155);
+  --success-foreground: oklch(0.99 0 0);
+  --warning: oklch(0.76 0.15 78);
+  --warning-foreground: oklch(0.25 0.05 78);
+  --info: oklch(0.58 0.14 250);
+  --info-foreground: oklch(0.99 0 0);
+  --chart-1: oklch(0.58 0.14 158);
+  --chart-2: oklch(0.58 0.13 230);
+  --chart-3: oklch(0.62 0.15 285);
+  --chart-4: oklch(0.75 0.14 80);
+  --chart-5: oklch(0.6 0.2 25);
+  --sidebar: oklch(0.982 0.002 260);
+  --sidebar-foreground: oklch(0.28 0.005 260);
+  --sidebar-primary: oklch(0.53 0.135 158);
+  --sidebar-primary-foreground: oklch(0.99 0 0);
+  --sidebar-accent: oklch(0.945 0.003 260);
+  --sidebar-accent-foreground: oklch(0.21 0.005 260);
+  --sidebar-border: oklch(0.925 0.003 260);
+  --sidebar-ring: oklch(0.6 0.12 158);
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  /* Границы в тёмной теме чуть ярче, чтобы карточки не сливались с фоном */
-  --border: oklch(1 0 0 / 18%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --background: oklch(0.175 0.004 260);
+  --foreground: oklch(0.95 0.003 260);
+  --card: oklch(0.205 0.004 260);
+  --card-foreground: oklch(0.95 0.003 260);
+  --popover: oklch(0.225 0.004 260);
+  --popover-foreground: oklch(0.95 0.003 260);
+  --primary: oklch(0.74 0.15 158);
+  --primary-foreground: oklch(0.2 0.03 158);
+  --secondary: oklch(0.26 0.004 260);
+  --secondary-foreground: oklch(0.94 0.003 260);
+  --muted: oklch(0.25 0.004 260);
+  --muted-foreground: oklch(0.7 0.008 260);
+  --accent: oklch(0.28 0.005 260);
+  --accent-foreground: oklch(0.96 0.003 260);
+  --destructive: oklch(0.66 0.19 25);
+  --border: oklch(1 0 0 / 9%);
+  --input: oklch(1 0 0 / 13%);
+  --ring: oklch(0.7 0.13 158);
+  --success: oklch(0.72 0.15 155);
+  --success-foreground: oklch(0.2 0.04 155);
+  --warning: oklch(0.8 0.14 80);
+  --warning-foreground: oklch(0.25 0.05 80);
+  --info: oklch(0.72 0.12 250);
+  --info-foreground: oklch(0.2 0.04 250);
+  --chart-1: oklch(0.74 0.15 158);
+  --chart-2: oklch(0.72 0.12 230);
+  --chart-3: oklch(0.72 0.13 285);
+  --chart-4: oklch(0.8 0.13 80);
+  --chart-5: oklch(0.68 0.18 25);
+  --sidebar: oklch(0.155 0.004 260);
+  --sidebar-foreground: oklch(0.92 0.003 260);
+  --sidebar-primary: oklch(0.74 0.15 158);
+  --sidebar-primary-foreground: oklch(0.2 0.03 158);
+  --sidebar-accent: oklch(0.24 0.005 260);
+  --sidebar-accent-foreground: oklch(0.96 0.003 260);
+  --sidebar-border: oklch(1 0 0 / 8%);
+  --sidebar-ring: oklch(0.7 0.13 158);
 }
 
 @layer base {
@@ -138,11 +157,32 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground font-sans text-sm;
+    font-feature-settings: "cv11", "ss01", "calt";
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection {
+    background: oklch(0.6 0.12 158 / 0.22);
+  }
+  .dark ::selection {
+    background: oklch(0.74 0.15 158 / 0.3);
+  }
+
+  code,
+  kbd,
+  samp,
+  pre {
+    font-family: var(--font-geist-mono), ui-monospace, monospace;
   }
 }
 
-
+/* Фон входа/регистрации: плоский, с тонкой точечной сеткой (без градиентов) */
+.auth-canvas {
+  background-color: var(--background);
+  background-image: radial-gradient(var(--border) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
 
 /* ===== Sonner toasts: улучшенный дизайн ===== */
 [data-sonner-toaster] {
@@ -157,18 +197,12 @@
   transition: transform 0.2s ease-out, opacity 0.2s ease-out;
 }
 
-/* Тень для светлой темы — мягкая, глубокая */
+/* Тост: плоская карточка с тонкой тенью */
 :root [data-sonner-toast] {
-  box-shadow:
-    0 20px 45px -15px rgba(0, 0, 0, 0.12),
-    0 4px 12px -4px rgba(0, 0, 0, 0.06) !important;
+  box-shadow: 0 4px 16px -4px rgba(0, 0, 0, 0.12), 0 1px 3px rgba(0, 0, 0, 0.06) !important;
 }
-
-/* Тень для тёмной темы — более мягкая */
 .dark [data-sonner-toast] {
-  box-shadow:
-    0 20px 45px -15px rgba(0, 0, 0, 0.35),
-    0 0 0 1px rgba(255, 255, 255, 0.05) !important;
+  box-shadow: 0 8px 24px -6px rgba(0, 0, 0, 0.5) !important;
 }
 
 /* Крестик закрытия — в правом верхнем углу внутри тоста */

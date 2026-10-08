@@ -2,60 +2,85 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter, useParams } from 'next/navigation'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar"
-import { Separator } from "@/components/ui/separator"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
-import { toast } from 'sonner'
-import { Loader2, ArrowLeft, Clock, MessageSquare, Server, Calendar, Ban, AlertTriangle, CalendarPlus, StickyNote, Trash2, ShieldOff, Pencil, Wifi, WifiOff, XCircle, UserX } from 'lucide-react'
 import Link from 'next/link'
+import { toast } from 'sonner'
+import { AlertTriangle, Ban, CalendarPlus, Loader2, Pencil, ShieldOff, Trash2, UserX, Wifi } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
+import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { PasswordInput } from '@/components/ui/password-input'
+import { DatePicker } from '@/components/ui/date-picker'
+import { Field } from '@/components/ui/field'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import { getInitials, generateAvatarColor, formatRelativeTime, formatDate, getActivityLabel, formatActivityDetails } from '@/lib/utils'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Breadcrumbs } from '@/components/common/Breadcrumbs'
+import { ConfirmDialog } from '@/components/common/ConfirmDialog'
+import { EmptyState } from '@/components/common/EmptyState'
+import { PageContainer } from '@/components/common/PageHeader'
+import { Section } from '@/components/common/Section'
+import { getInitials, generateAvatarColor, formatRelativeTime, formatDate, getActivityLabel, formatActivityDetails } from '@/lib/utils'
+import { APP_ROLES, ROLE_LABELS, canManageUserWithRole, isVolunteerMember, roleChangeAssignableRoles, type AppRole } from '@/lib/roles'
 
-const ROLES = [
-  { value: 'USER', label: 'USER' },
-  { value: 'SUPPORT', label: 'SUPPORT' },
-  { value: 'ADMIN', label: 'ADMIN' },
-  { value: 'ADM', label: 'ADM' },
-  { value: 'VOL', label: 'VOL' },
-]
+const ROLES = APP_ROLES.map((r) => ({ value: r, label: ROLE_LABELS[r] }))
+
+function roleBadgeVariant(role: string): 'default' | 'info' | 'secondary' | 'muted' {
+  if (role === 'LEAD_SUP') return 'default'
+  if (role === 'SUP') return 'info'
+  if (role === 'ADM') return 'secondary'
+  return 'muted'
+}
+
+function messageStatusBadge(status: string) {
+  switch (status) {
+    case 'PENDING': return <Badge variant="muted">Ожидает</Badge>
+    case 'SENT': return <Badge variant="success">Отправлено</Badge>
+    case 'FAILED': return <Badge variant="danger">Ошибка</Badge>
+    case 'CANCELLED': return <Badge variant="muted">Отменено</Badge>
+    default: return <Badge variant="muted">{status}</Badge>
+  }
+}
+
+type ProfileUser = {
+  id: string
+  email: string
+  name: string | null
+  username: string | null
+  avatarUrl: string | null
+  role: string
+  isBlocked: boolean
+  blockedReason: string | null
+  volunteerExpiresAt: string | null
+  volunteerIntensive: string | null
+  lastLoginAt: string | null
+  createdAt: string
+}
+type CurrentUser = { id: string; role: string; restrictedFeatures?: string[] }
+type ProfileWorkspace = { id: string; workspaceName: string; workspaceUrl: string; username: string; isActive: boolean; lastConnected: string | null }
+type ProfileMessage = {
+  id: string
+  status: string
+  message: string
+  channelName: string
+  scheduledFor: string
+  sentAt: string | null
+  error?: string | null
+  workspace?: { workspaceName: string } | null
+}
+type ActivityLogItem = { id: string; action: string; details: string | null; createdAt: string }
+type ProfileNote = { id: string; text: string; important: boolean; createdAt: string; author?: { name: string | null; email: string } | null }
+
+function errorMessage(err: unknown, fallback: string): string {
+  return err instanceof Error && err.message ? err.message : fallback
+}
+
+const USERNAME_RE = /^[a-zA-Z0-9._-]+$/
 
 export default function UserActivityPage() {
   const router = useRouter()
@@ -63,34 +88,40 @@ export default function UserActivityPage() {
   const userId = params.id as string
 
   const [loading, setLoading] = useState(true)
-  const [user, setUser] = useState<any>(null)
-  const [workspaces, setWorkspaces] = useState<any[]>([])
-  const [messages, setMessages] = useState<any[]>([])
-  const [activityLogs, setActivityLogs] = useState<any[]>([])
-  const [notes, setNotes] = useState<any[]>([])
+  const [user, setUser] = useState<ProfileUser | null>(null)
+  const [workspaces, setWorkspaces] = useState<ProfileWorkspace[]>([])
+  const [messages, setMessages] = useState<ProfileMessage[]>([])
+  const [activityLogs, setActivityLogs] = useState<ActivityLogItem[]>([])
+  const [notes, setNotes] = useState<ProfileNote[]>([])
   const [noteOpen, setNoteOpen] = useState(false)
   const [noteText, setNoteText] = useState('')
   const [noteImportant, setNoteImportant] = useState(false)
   const [noteSubmitting, setNoteSubmitting] = useState(false)
-  const [extendLoading, setExtendLoading] = useState(false)
-  const [currentUser, setCurrentUser] = useState<any>(null)
+  const [noteToDelete, setNoteToDelete] = useState<ProfileNote | null>(null)
+  const [noteDeleting, setNoteDeleting] = useState(false)
+  const [extendLoading, setExtendLoading] = useState<number | null>(null)
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null)
   const [editRoleOpen, setEditRoleOpen] = useState(false)
-  const [editRoleForm, setEditRoleForm] = useState({ role: 'USER', volunteerExpiresAt: '', volunteerIntensive: '' })
+  const [editRoleForm, setEditRoleForm] = useState({ role: 'MEMBER', volunteerExpiresAt: '', volunteerIntensive: '' })
   const [editRoleLoading, setEditRoleLoading] = useState(false)
   const [blockOpen, setBlockOpen] = useState(false)
   const [blockReason, setBlockReason] = useState('')
   const [blockLoading, setBlockLoading] = useState(false)
+  const [unblockOpen, setUnblockOpen] = useState(false)
+  const [unblockLoading, setUnblockLoading] = useState(false)
   const [checkingWorkspaceId, setCheckingWorkspaceId] = useState<string | null>(null)
   const [deleteUserOpen, setDeleteUserOpen] = useState(false)
   const [deleteUserLoading, setDeleteUserLoading] = useState(false)
   const [editProfileOpen, setEditProfileOpen] = useState(false)
   const [editProfileForm, setEditProfileForm] = useState({ name: '', email: '', username: '', newPassword: '' })
+  const [editProfileErrors, setEditProfileErrors] = useState<Partial<Record<'email' | 'username' | 'newPassword', string>>>({})
   const [editProfileLoading, setEditProfileLoading] = useState(false)
   const [accessDenied, setAccessDenied] = useState(false)
   const [accessDeniedMessage, setAccessDeniedMessage] = useState('')
 
   useEffect(() => {
     loadUserActivity()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId])
 
   const loadUserActivity = async () => {
@@ -110,7 +141,7 @@ export default function UserActivityPage() {
         setAccessDeniedMessage(msg)
         toast.error(msg, {
           description: 'Недостаточно прав для просмотра этого пользователя',
-          action: { label: 'В админку', onClick: () => router.push('/dashboard/admin') },
+          action: { label: 'К пользователям', onClick: () => router.push('/dashboard/admin') },
         })
         setLoading(false)
         return
@@ -128,13 +159,14 @@ export default function UserActivityPage() {
       } else {
         setNotes([])
       }
-    } catch (error: any) {
+    } catch (error) {
       console.error('Load activity error:', error)
-      toast.error(error.message || 'Ошибка загрузки данных', {
-        action: { label: 'В админку', onClick: () => router.push('/dashboard/admin') },
+      toast.error(errorMessage(error, 'Ошибка загрузки данных'), {
+        description: 'Проверьте подключение и повторите.',
+        action: { label: 'К пользователям', onClick: () => router.push('/dashboard/admin') },
       })
       setAccessDenied(true)
-      setAccessDeniedMessage(error.message || 'Ошибка загрузки')
+      setAccessDeniedMessage(errorMessage(error, 'Ошибка загрузки'))
     } finally {
       setLoading(false)
     }
@@ -169,27 +201,31 @@ export default function UserActivityPage() {
       setNoteText('')
       setNoteImportant(false)
       await loadNotes()
-    } catch (err: any) {
-      toast.error(err.message || 'Ошибка')
+    } catch (err) {
+      toast.error(errorMessage(err, 'Не удалось добавить заметку'), { description: 'Повторите попытку.' })
     } finally {
       setNoteSubmitting(false)
     }
   }
 
-  const handleDeleteNote = async (noteId: string) => {
-    if (!confirm('Удалить заметку?')) return
+  const handleDeleteNote = async () => {
+    if (!noteToDelete) return
+    setNoteDeleting(true)
     try {
-      const res = await fetch(`/api/admin/users/${userId}/notes/${noteId}`, { method: 'DELETE' })
+      const res = await fetch(`/api/admin/users/${userId}/notes/${noteToDelete.id}`, { method: 'DELETE' })
       if (!res.ok) throw new Error('Failed')
       toast.success('Заметка удалена')
+      setNoteToDelete(null)
       await loadNotes()
     } catch {
-      toast.error('Ошибка удаления')
+      toast.error('Не удалось удалить заметку', { description: 'Повторите попытку.' })
+    } finally {
+      setNoteDeleting(false)
     }
   }
 
   const handleExtendVol = async (addDays: number) => {
-    setExtendLoading(true)
+    setExtendLoading(addDays)
     try {
       const res = await fetch(`/api/admin/users/${userId}/extend-vol`, {
         method: 'PATCH',
@@ -200,10 +236,10 @@ export default function UserActivityPage() {
       if (!res.ok) throw new Error(data.error)
       toast.success(`Доступ продлён на ${addDays} дн.`)
       await loadUserActivity()
-    } catch (err: any) {
-      toast.error(err.message || 'Ошибка')
+    } catch (err) {
+      toast.error(errorMessage(err, 'Не удалось продлить доступ'), { description: 'Повторите попытку.' })
     } finally {
-      setExtendLoading(false)
+      setExtendLoading(null)
     }
   }
 
@@ -217,8 +253,11 @@ export default function UserActivityPage() {
     setEditRoleOpen(true)
   }
 
+  const intensiveTooLong = editRoleForm.volunteerIntensive.trim().length > 50
+
   const handleEditRole = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (intensiveTooLong) return
     setEditRoleLoading(true)
     try {
       const res = await fetch(`/api/admin/users/${userId}/role`, {
@@ -235,8 +274,8 @@ export default function UserActivityPage() {
       toast.success('Роль обновлена')
       setEditRoleOpen(false)
       await loadUserActivity()
-    } catch (err: any) {
-      toast.error(err.message || 'Ошибка')
+    } catch (err) {
+      toast.error(errorMessage(err, 'Не удалось изменить роль'), { description: 'Повторите попытку.' })
     } finally {
       setEditRoleLoading(false)
     }
@@ -256,15 +295,30 @@ export default function UserActivityPage() {
       setBlockOpen(false)
       setBlockReason('')
       await loadUserActivity()
-    } catch (err: any) {
-      toast.error(err.message || 'Ошибка блокировки')
+    } catch (err) {
+      toast.error(errorMessage(err, 'Не удалось заблокировать'), { description: 'Повторите попытку.' })
     } finally {
       setBlockLoading(false)
     }
   }
 
+  const validateProfile = () => {
+    const errors: typeof editProfileErrors = {}
+    const email = editProfileForm.email.trim()
+    if (!email) errors.email = 'Укажите логин'
+    else if (/\s/.test(email)) errors.email = 'Логин не должен содержать пробелов'
+    const username = editProfileForm.username.trim()
+    if (username && !USERNAME_RE.test(username)) errors.username = 'Только латиница, цифры, точка, дефис и подчёркивание'
+    const pwd = editProfileForm.newPassword
+    if (pwd.trim() && pwd.length < 8) errors.newPassword = 'Пароль — не короче 8 символов'
+    return errors
+  }
+
   const handleEditProfile = async (e: React.FormEvent) => {
     e.preventDefault()
+    const errors = validateProfile()
+    setEditProfileErrors(errors)
+    if (Object.keys(errors).length > 0) return
     setEditProfileLoading(true)
     try {
       const body: { name?: string; email?: string; username?: string; newPassword?: string } = {}
@@ -287,32 +341,26 @@ export default function UserActivityPage() {
       toast.success('Профиль обновлён')
       setEditProfileOpen(false)
       await loadUserActivity()
-    } catch (err: any) {
-      toast.error(err.message || 'Ошибка обновления профиля')
+    } catch (err) {
+      toast.error(errorMessage(err, 'Не удалось обновить профиль'), { description: 'Проверьте данные и повторите.' })
     } finally {
       setEditProfileLoading(false)
     }
   }
 
   const handleUnblock = async () => {
+    setUnblockLoading(true)
     try {
       const res = await fetch(`/api/admin/users/${userId}/unblock`, { method: 'PATCH' })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
       toast.success('Пользователь разблокирован')
+      setUnblockOpen(false)
       await loadUserActivity()
-    } catch (err: any) {
-      toast.error(err.message || 'Ошибка разблокировки')
-    }
-  }
-
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case 'PENDING': return <Badge variant="secondary">Ожидает</Badge>
-      case 'SENT': return <Badge variant="default" className="bg-green-600">Отправлено</Badge>
-      case 'FAILED': return <Badge variant="destructive">Ошибка</Badge>
-      case 'CANCELLED': return <Badge variant="outline">Отменено</Badge>
-      default: return <Badge>{status}</Badge>
+    } catch (err) {
+      toast.error(errorMessage(err, 'Не удалось разблокировать'), { description: 'Повторите попытку.' })
+    } finally {
+      setUnblockLoading(false)
     }
   }
 
@@ -325,11 +373,11 @@ export default function UserActivityPage() {
         toast.success('Подключение успешно')
         await loadUserActivity()
       } else {
-        toast.error(data.error || 'Подключение не удалось')
+        toast.error(data.error || 'Подключение не удалось', { description: 'Проверьте URL и данные входа пространства.' })
         await loadUserActivity()
       }
     } catch {
-      toast.error('Ошибка проверки подключения')
+      toast.error('Ошибка проверки подключения', { description: 'Повторите попытку.' })
     } finally {
       setCheckingWorkspaceId(null)
     }
@@ -343,8 +391,8 @@ export default function UserActivityPage() {
       if (!res.ok) throw new Error(data.error)
       toast.success('Пользователь удалён')
       router.push('/dashboard/admin')
-    } catch (err: any) {
-      toast.error(err.message || 'Ошибка удаления')
+    } catch (err) {
+      toast.error(errorMessage(err, 'Не удалось удалить пользователя'), { description: 'Повторите попытку.' })
     } finally {
       setDeleteUserLoading(false)
       setDeleteUserOpen(false)
@@ -353,297 +401,239 @@ export default function UserActivityPage() {
 
   // Группировка сообщений по дате для таймлайна (дата запланирована или отправлена)
   const messagesByDate = (() => {
-    const map = new Map<string, any[]>()
+    const map = new Map<string, ProfileMessage[]>()
     for (const m of messages) {
       const dateKey = (m.sentAt ? new Date(m.sentAt) : new Date(m.scheduledFor)).toISOString().slice(0, 10)
       if (!map.has(dateKey)) map.set(dateKey, [])
       map.get(dateKey)!.push(m)
     }
-    const entries = Array.from(map.entries()).sort((a, b) => b[0].localeCompare(a[0])).slice(0, 31)
-    return entries
+    return Array.from(map.entries()).sort((a, b) => b[0].localeCompare(a[0])).slice(0, 31)
   })()
 
-  const failedMessages = messages.filter((m: any) => m.status === 'FAILED')
+  const failedMessages = messages.filter((m) => m.status === 'FAILED')
+  const sentCount = messages.filter((m) => m.status === 'SENT').length
+  const canManage = !!currentUser && !!user && user.id !== currentUser.id && canManageUserWithRole(currentUser.role, user.role)
+  const canEditNotes = !!currentUser && !!user && canManageUserWithRole(currentUser.role, user.role)
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
-        <Loader2 className="w-8 h-8 animate-spin text-primary" />
-      </div>
+      <PageContainer size="wide" className="px-4 sm:px-6">
+        <div role="status" aria-busy="true" aria-label="Загрузка" className="space-y-5">
+          <Skeleton className="h-4 w-56" />
+          <div className="flex items-center gap-4">
+            <Skeleton className="size-14 rounded-full" />
+            <div className="space-y-2">
+              <Skeleton className="h-6 w-48" />
+              <Skeleton className="h-4 w-64 max-w-full" />
+            </div>
+          </div>
+          <Skeleton className="h-16 w-full" />
+          <Skeleton className="h-64 w-full" />
+        </div>
+      </PageContainer>
     )
   }
 
-  if (!user && !accessDenied) {
-    return null
-  }
-
-  if (accessDenied) {
+  if (accessDenied || !user) {
     return (
-      <div className="w-full container max-w-6xl py-8 px-4 sm:px-6 mx-auto overflow-x-hidden">
+      <PageContainer size="wide" className="px-4 sm:px-6">
         <Breadcrumbs
           items={[
-            { label: 'Дашборд', href: '/dashboard' },
             { label: 'Админ панель', href: '/dashboard/admin' },
             { label: 'Пользователи', href: '/dashboard/admin' },
             { label: 'Нет доступа', current: true },
           ]}
           className="mb-6"
         />
-        <Card className="border-destructive/50">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-destructive">
-              <AlertTriangle className="h-5 w-5" />
-              Нет доступа
-            </CardTitle>
-            <CardDescription>
-              {accessDeniedMessage}
-            </CardDescription>
-            <p className="text-sm text-muted-foreground mt-2">
-              У вас нет прав для просмотра карточки этого пользователя. Администратор (ADM) может просматривать только пользователей с ролью VOL.
-            </p>
-          </CardHeader>
-          <CardContent>
-            <Button variant="outline" onClick={() => router.push('/dashboard/admin')}>
-              Вернуться в админку
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
+        <EmptyState
+          icon={<AlertTriangle />}
+          title="Нет доступа к карточке пользователя"
+          description={`${accessDeniedMessage || 'Карточка недоступна.'} SUP может открывать только пользователей с ролями ADM и MEMBER.`}
+          action={{ label: 'К пользователям', href: '/dashboard/admin' }}
+        />
+      </PageContainer>
     )
   }
 
-  if (!user) {
-    return null
-  }
+  const stats = [
+    { label: 'Пространства', value: workspaces.length },
+    { label: 'Сообщения', value: messages.length },
+    { label: 'Отправлено', value: sentCount },
+    { label: 'С ошибкой', value: failedMessages.length },
+  ]
 
   return (
-    <div className="w-full container max-w-6xl py-8 px-4 sm:px-6 mx-auto overflow-x-hidden">
+    <PageContainer size="wide" className="px-4 sm:px-6">
       <Breadcrumbs
         items={[
-          { label: 'Дашборд', href: '/dashboard' },
           { label: 'Админ панель', href: '/dashboard/admin' },
           { label: 'Пользователи', href: '/dashboard/admin' },
-          { label: user?.name || user?.email || 'Пользователь', current: true },
+          { label: user.name || user.email || 'Пользователь', current: true },
         ]}
-        className="mb-6"
+        className="mb-5"
       />
 
-      <div className="space-y-6">
-        {/* Информация о пользователе */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center gap-4">
-              <Avatar className="h-16 w-16">
-                {user.avatarUrl && <AvatarImage src={user.avatarUrl} alt="" />}
-                <AvatarFallback className={`${generateAvatarColor(user.email)} text-white text-lg`}>
-                  {getInitials(user.name || user.email)}
-                </AvatarFallback>
-              </Avatar>
-              <div className="flex-1">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <CardTitle>{user.name || 'Без имени'}</CardTitle>
-                  <Badge variant={user.role === 'SUPPORT' ? 'destructive' : user.role === 'ADM' ? 'default' : 'secondary'}>
-                    {user.role}
-                  </Badge>
-                  {user.isBlocked ? (
-                    <Badge variant="destructive" className="gap-1">
-                      <Ban className="h-3 w-3" />
-                      Заблокирован
-                    </Badge>
-                  ) : (
-                    <Badge variant="default" className="bg-green-600">Активен</Badge>
-                  )}
-                  {user.role === 'VOL' && user.volunteerExpiresAt && (
-                    <Badge variant="outline">
-                      Доступ до {formatDate(user.volunteerExpiresAt, { day: '2-digit', month: '2-digit', year: 'numeric' })}
-                    </Badge>
-                  )}
-                </div>
-                <CardDescription className="mt-1">
-                  Логин: {user.email}
-                  {user.username && <span className="ml-2">(@{user.username})</span>}
-                </CardDescription>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Зарегистрирован {formatRelativeTime(user.createdAt)}
-                </p>
-                {user.isBlocked && user.blockedReason && (
-                  <p className="text-sm text-destructive mt-2 flex items-center gap-1">
-                    <AlertTriangle className="h-4 w-4" />
-                    Причина: {user.blockedReason}
-                  </p>
-                )}
-                {user.role === 'VOL' && user.volunteerIntensive && (
-                  <p className="text-sm text-muted-foreground">Интенсив: {user.volunteerIntensive}</p>
-                )}
-                {user.role === 'VOL' && (
-                  <div className="flex gap-2 mt-3">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => handleExtendVol(30)}
-                      disabled={extendLoading}
-                    >
-                      {extendLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarPlus className="h-4 w-4 mr-1" />}
-                      Продлить на 30 дн.
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => handleExtendVol(7)}
-                      disabled={extendLoading}
-                    >
-                      Продлить на 7 дн.
-                    </Button>
-                  </div>
-                )}
-                {currentUser && user && user.id !== currentUser.id && (user.role !== 'ADMIN' || currentUser.role === 'ADMIN') && (currentUser.role === 'SUPPORT' || currentUser.role === 'ADMIN') && (
-                  <div className="flex flex-wrap gap-2 mt-3">
-                    <Button size="sm" variant="outline" onClick={() => { setEditProfileForm({ name: user.name || '', email: user.email || '', username: user.username || '', newPassword: '' }); setEditProfileOpen(true); }}>
-                      <Pencil className="h-4 w-4 mr-1" />
-                      Редактировать профиль
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={openEditRole}>
-                      <Pencil className="h-4 w-4 mr-1" />
-                      Изменить роль
-                    </Button>
-                    {user.isBlocked ? (
-                      <Button size="sm" variant="outline" onClick={handleUnblock}>
-                        <ShieldOff className="h-4 w-4 mr-1" />
-                        Разблокировать
-                      </Button>
-                    ) : (
-                      <Button size="sm" variant="destructive" onClick={() => { setBlockReason(''); setBlockOpen(true); }}>
-                        <Ban className="h-4 w-4 mr-1" />
-                        Заблокировать
-                      </Button>
-                    )}
-                  </div>
-                )}
-                {user.lastLoginAt && (
-                  <p className="text-sm text-muted-foreground mt-2">
-                    Последний вход: {formatRelativeTime(user.lastLoginAt)}
-                  </p>
-                )}
-                {currentUser && user && user.id !== currentUser.id && (user.role !== 'ADMIN' || currentUser.role === 'ADMIN') && (currentUser.role === 'SUPPORT' || currentUser.role === 'ADMIN') && (
-                  <div className="mt-3 pt-3 border-t">
-                    <Button size="sm" variant="destructive" onClick={() => setDeleteUserOpen(true)}>
-                      <UserX className="h-4 w-4 mr-1" />
-                      Удалить пользователя
-                    </Button>
-                  </div>
-                )}
-              </div>
+      {/* Шапка профиля */}
+      <header className="flex flex-col gap-4 pb-5 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex min-w-0 items-start gap-4">
+          <Avatar className="size-14 shrink-0">
+            {user.avatarUrl && <AvatarImage src={user.avatarUrl} alt="" />}
+            <AvatarFallback className={`${generateAvatarColor(user.email)} text-base font-semibold text-white`}>
+              {getInitials(user.name || user.email)}
+            </AvatarFallback>
+          </Avatar>
+          <div className="min-w-0 space-y-1.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="truncate text-xl font-semibold tracking-tight">{user.name || 'Без имени'}</h1>
+              <Badge variant={roleBadgeVariant(user.role)}>{ROLE_LABELS[user.role as AppRole] ?? user.role}</Badge>
+              {user.isBlocked ? <Badge variant="danger">Заблокирован</Badge> : <Badge variant="success">Активен</Badge>}
+              {isVolunteerMember(user) && (
+                <Badge variant="info">
+                  Волонтёр до {formatDate(user.volunteerExpiresAt as string, { day: '2-digit', month: '2-digit', year: 'numeric' })}
+                </Badge>
+              )}
             </div>
-          </CardHeader>
-        </Card>
-
-        {/* Статистика */}
-        <div className="grid gap-4 md:grid-cols-3">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">
-                Пространства
-              </CardTitle>
-              <Server className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{workspaces.length}</div>
-              <p className="text-xs text-muted-foreground">
-                подключенных
+            <p className="text-sm text-muted-foreground">
+              <span className="font-mono">{user.email}</span>
+              {user.username && <span className="ml-2">@{user.username}</span>}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Зарегистрирован {formatRelativeTime(user.createdAt)}
+              {user.lastLoginAt && <> · последний вход {formatRelativeTime(user.lastLoginAt)}</>}
+              {isVolunteerMember(user) && user.volunteerIntensive && <> · интенсив: {user.volunteerIntensive}</>}
+            </p>
+            {user.isBlocked && user.blockedReason && (
+              <p className="flex items-center gap-1.5 text-sm text-destructive">
+                <AlertTriangle className="size-4 shrink-0" aria-hidden />
+                Причина блокировки: {user.blockedReason}
               </p>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">
-                Сообщения
-              </CardTitle>
-              <MessageSquare className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{messages.length}</div>
-              <p className="text-xs text-muted-foreground">
-                всего запланировано
-              </p>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">
-                Отправлено
-              </CardTitle>
-              <Clock className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">
-                {messages.filter(m => m.status === 'SENT').length}
-              </div>
-              <p className="text-xs text-muted-foreground">
-                успешно
-              </p>
-            </CardContent>
-          </Card>
+            )}
+          </div>
         </div>
+        {canManage && (
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setEditProfileForm({ name: user.name || '', email: user.email || '', username: user.username || '', newPassword: '' })
+                setEditProfileErrors({})
+                setEditProfileOpen(true)
+              }}
+            >
+              <Pencil className="size-4" aria-hidden />
+              Профиль
+            </Button>
+            <Button size="sm" variant="outline" onClick={openEditRole}>
+              <Pencil className="size-4" aria-hidden />
+              Роль и доступ
+            </Button>
+            {user.isBlocked ? (
+              <Button size="sm" variant="outline" onClick={() => setUnblockOpen(true)}>
+                <ShieldOff className="size-4" aria-hidden />
+                Разблокировать
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-destructive hover:text-destructive"
+                onClick={() => {
+                  setBlockReason('')
+                  setBlockOpen(true)
+                }}
+              >
+                <Ban className="size-4" aria-hidden />
+                Заблокировать
+              </Button>
+            )}
+          </div>
+        )}
+      </header>
 
-        {/* Подключенные пространства */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Подключенные пространства</CardTitle>
-            <CardDescription>
-              Список всех Rocket.Chat пространств пользователя
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {workspaces.length > 0 ? (
-              <Table>
+      <div className="space-y-8">
+        <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border bg-border sm:grid-cols-4">
+          {stats.map((s) => (
+            <div key={s.label} className="bg-card px-4 py-3">
+              <dt className="text-xs text-muted-foreground">{s.label}</dt>
+              <dd className="mt-0.5 text-xl font-semibold tabular-nums">{s.value}</dd>
+            </div>
+          ))}
+        </dl>
+
+        {isVolunteerMember(user) && (
+          <Section
+            title="Доступ волонтёра"
+            description={`Действует до ${formatDate(user.volunteerExpiresAt as string, { day: '2-digit', month: '2-digit', year: 'numeric' })}. Продление отсчитывается от текущего срока или от сегодняшнего дня, если срок истёк.`}
+            actions={
+              <>
+                <Button size="sm" variant="outline" onClick={() => handleExtendVol(7)} disabled={extendLoading !== null}>
+                  {extendLoading === 7 ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <CalendarPlus className="size-4" aria-hidden />}
+                  +7 дн.
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => handleExtendVol(30)} disabled={extendLoading !== null}>
+                  {extendLoading === 30 ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <CalendarPlus className="size-4" aria-hidden />}
+                  +30 дн.
+                </Button>
+              </>
+            }
+          >
+            <></>
+          </Section>
+        )}
+
+        <Section
+          title="Подключённые пространства"
+          description="Rocket.Chat-пространства пользователя."
+          bare
+        >
+          {workspaces.length > 0 ? (
+            <div className="overflow-x-auto rounded-lg border bg-card">
+              <Table className="min-w-[640px]">
                 <TableHeader>
-                    <TableRow>
+                  <TableRow className="hover:bg-transparent">
                     <TableHead>Название</TableHead>
                     <TableHead>URL</TableHead>
                     <TableHead>Username</TableHead>
                     <TableHead>Статус</TableHead>
-                    <TableHead>Последнее подключение</TableHead>
-                    {(currentUser?.role === 'SUPPORT' || currentUser?.role === 'ADMIN') && user?.role !== 'ADMIN' && <TableHead className="text-right">Действия</TableHead>}
+                    <TableHead>Подключение</TableHead>
+                    {canEditNotes && (
+                      <TableHead className="w-12 text-right">
+                        <span className="sr-only">Действия</span>
+                      </TableHead>
+                    )}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {workspaces.map((workspace) => (
-                    <TableRow key={workspace.id}>
+                    <TableRow key={workspace.id} className="hover:bg-muted/40">
                       <TableCell className="font-medium">
-                        <Link href={`/dashboard/workspaces/${workspace.id}`} className="text-primary hover:underline">
+                        <Link href={`/dashboard/workspaces/${workspace.id}`} className="hover:underline">
                           {workspace.workspaceName}
                         </Link>
                       </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        <Link href={`/dashboard/workspaces/${workspace.id}`} className="text-primary hover:underline truncate block max-w-[200px]">
-                          {workspace.workspaceUrl}
-                        </Link>
+                      <TableCell className="max-w-[220px] truncate font-mono text-xs text-muted-foreground" title={workspace.workspaceUrl}>
+                        {workspace.workspaceUrl}
                       </TableCell>
                       <TableCell className="text-sm">{workspace.username}</TableCell>
                       <TableCell>
-                        <Badge variant={workspace.isActive ? 'default' : 'secondary'}>
-                          {workspace.isActive ? 'Активно' : 'Неактивно'}
-                        </Badge>
+                        <Badge variant={workspace.isActive ? 'success' : 'muted'}>{workspace.isActive ? 'Активно' : 'Неактивно'}</Badge>
                       </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
+                      <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
                         {workspace.lastConnected ? formatRelativeTime(workspace.lastConnected) : 'Никогда'}
                       </TableCell>
-                      {(currentUser?.role === 'SUPPORT' || currentUser?.role === 'ADMIN') && user?.role !== 'ADMIN' && (
+                      {canEditNotes && (
                         <TableCell className="text-right">
                           <Button
-                            size="sm"
-                            variant="outline"
+                            size="icon"
+                            variant="ghost"
+                            className="size-8"
+                            aria-label={`Проверить подключение: ${workspace.workspaceName}`}
+                            title="Проверить подключение"
                             onClick={() => handleCheckConnection(workspace.id)}
                             disabled={checkingWorkspaceId === workspace.id}
                           >
-                            {checkingWorkspaceId === workspace.id ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              <Wifi className="h-4 w-4 mr-1" />
-                            )}
-                            Проверить подключение
+                            {checkingWorkspaceId === workspace.id ? <Loader2 className="size-4 animate-spin" /> : <Wifi className="size-4" />}
                           </Button>
                         </TableCell>
                       )}
@@ -651,443 +641,385 @@ export default function UserActivityPage() {
                   ))}
                 </TableBody>
               </Table>
-            ) : (
-              <p className="text-center text-muted-foreground py-8">
-                Пользователь не подключил ни одного пространства
-              </p>
-            )}
-          </CardContent>
-        </Card>
+            </div>
+          ) : (
+            <p className="rounded-lg border border-dashed py-8 text-center text-sm text-muted-foreground">
+              Пользователь не подключил ни одного пространства
+            </p>
+          )}
+        </Section>
 
-        {/* Ошибки отправки */}
         {failedMessages.length > 0 && (
-          <Card className="border-destructive/50">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-destructive">
-                <XCircle className="h-5 w-5" />
-                Ошибки отправки ({failedMessages.length})
-              </CardTitle>
-              <CardDescription>
-                Сообщения со статусом «Ошибка» и текст ошибки
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <ul className="space-y-3">
-                {failedMessages.map((m: any) => (
-                  <li key={m.id} className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm">
-                    <div className="font-medium text-muted-foreground">
-                      {m.workspace?.workspaceName} · #{m.channelName} · {formatDate(m.scheduledFor)}
-                    </div>
-                    <p className="mt-1 line-clamp-2">{m.message}</p>
-                    {m.error && (
-                      <p className="mt-2 text-destructive text-xs">{m.error}</p>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </CardContent>
-          </Card>
+          <Section title={`Ошибки отправки (${failedMessages.length})`} description="Сообщения со статусом «Ошибка» и текст ошибки." bare>
+            <ul className="divide-y rounded-lg border bg-card">
+              {failedMessages.map((m) => (
+                <li key={m.id} className="space-y-1 px-4 py-3 text-sm">
+                  <div className="text-xs text-muted-foreground">
+                    {m.workspace?.workspaceName} · #{m.channelName} · {formatDate(m.scheduledFor)}
+                  </div>
+                  <p className="line-clamp-2">{m.message}</p>
+                  {m.error && <p className="text-xs text-destructive">{m.error}</p>}
+                </li>
+              ))}
+            </ul>
+          </Section>
         )}
 
-        {/* Таймлайн сообщений по датам */}
-        {messagesByDate.length > 0 && (
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Calendar className="h-5 w-5" />
-                Сообщения по датам
-              </CardTitle>
-              <CardDescription>
-                Запланированные и отправленные сообщения по дням
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
+        <Tabs defaultValue="messages" className="gap-4">
+          <TabsList variant="line" className="h-auto w-full justify-start overflow-x-auto border-b p-0 pb-1.5">
+            <TabsTrigger value="messages" className="flex-none">Сообщения</TabsTrigger>
+            <TabsTrigger value="activity" className="flex-none">Активность</TabsTrigger>
+            <TabsTrigger value="notes" className="flex-none">
+              Заметки{notes.length > 0 && <span className="text-xs tabular-nums text-muted-foreground">{notes.length}</span>}
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="messages">
+            {messagesByDate.length > 0 ? (
+              <div className="space-y-5">
+                <p className="text-[13px] text-muted-foreground">Запланированные и отправленные сообщения по дням (последние 31 день с сообщениями).</p>
                 {messagesByDate.map(([dateKey, dayMessages]) => (
-                  <div key={dateKey} className="border-l-2 border-primary/30 pl-4">
-                    <div className="text-sm font-medium text-muted-foreground mb-2">
+                  <div key={dateKey}>
+                    <h3 className="mb-1 text-xs font-medium text-muted-foreground">
                       {formatDate(dateKey, { day: 'numeric', month: 'long', year: 'numeric' })}
-                    </div>
-                    <ul className="space-y-2">
-                      {dayMessages.map((m: any) => (
-                        <li key={m.id} className="flex items-start gap-2 text-sm">
-                          <span className="shrink-0 text-muted-foreground w-20">
-                            {m.sentAt ? formatDate(m.sentAt, { hour: '2-digit', minute: '2-digit' }) : formatDate(m.scheduledFor, { hour: '2-digit', minute: '2-digit' })}
+                    </h3>
+                    <ul className="divide-y rounded-lg border bg-card">
+                      {dayMessages.map((m) => (
+                        <li key={m.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 text-sm hover:bg-muted/40">
+                          <span className="w-12 shrink-0 tabular-nums text-muted-foreground">
+                            {formatDate((m.sentAt || m.scheduledFor) as string, { hour: '2-digit', minute: '2-digit' })}
                           </span>
-                          {getStatusBadge(m.status)}
-                          <span className="text-muted-foreground">{m.workspace?.workspaceName} · #{m.channelName}</span>
-                          <span className="truncate max-w-[200px]">{m.message}</span>
+                          {messageStatusBadge(m.status)}
+                          <span className="text-muted-foreground">
+                            {m.workspace?.workspaceName} · #{m.channelName}
+                          </span>
+                          <span className="min-w-0 flex-1 basis-full truncate sm:basis-0">{m.message}</span>
                         </li>
                       ))}
                     </ul>
                   </div>
                 ))}
               </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Запланированные сообщения (таблица) */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <MessageSquare className="h-5 w-5" />
-              Все сообщения
-            </CardTitle>
-            <CardDescription>
-              История всех запланированных сообщений пользователя
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {messages.length > 0 ? (
-              <div className="overflow-x-auto -mx-1">
-              <Table className="min-w-[500px]">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Пространство</TableHead>
-                    <TableHead>Канал</TableHead>
-                    <TableHead>Сообщение</TableHead>
-                    <TableHead>Запланировано</TableHead>
-                    <TableHead>Статус</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {messages.slice(0, 20).map((message) => (
-                    <TableRow key={message.id}>
-                      <TableCell className="font-medium text-sm">
-                        {message.workspace.workspaceName}
-                      </TableCell>
-                      <TableCell className="text-sm">#{message.channelName}</TableCell>
-                      <TableCell className="text-sm max-w-xs truncate">
-                        {message.message}
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {formatDate(message.scheduledFor)}
-                      </TableCell>
-                      <TableCell>
-                        {getStatusBadge(message.status)}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-              </div>
             ) : (
-              <p className="text-center text-muted-foreground py-8">
-                Нет запланированных сообщений
-              </p>
+              <p className="rounded-lg border border-dashed py-8 text-center text-sm text-muted-foreground">Нет запланированных сообщений</p>
             )}
-          </CardContent>
-        </Card>
+          </TabsContent>
 
-        {/* Активность / аудит */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Активность</CardTitle>
-            <CardDescription>
-              Последние действия пользователя (вход, смена пароля, работа с пространствами и сообщениями)
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
+          <TabsContent value="activity">
             {activityLogs.length > 0 ? (
-              <ul className="space-y-2">
-                {activityLogs.map((log: any) => (
-                  <li
-                    key={log.id}
-                    className="flex items-center gap-3 py-2 border-b border-border/50 last:border-0 text-sm"
-                  >
-                    <span className="text-muted-foreground shrink-0 w-40">
-                      {formatRelativeTime(log.createdAt)}
-                    </span>
-                    <Badge variant="outline" className="text-xs whitespace-nowrap">
-                      {getActivityLabel(log.action)}
-                    </Badge>
-                    {log.details && (
-                      <span className="text-muted-foreground truncate max-w-md">
-                        {formatActivityDetails(log.details)}
-                      </span>
+              <ul className="divide-y rounded-lg border bg-card">
+                {activityLogs.map((log) => (
+                  <li key={log.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 text-sm hover:bg-muted/40">
+                    <span className="w-36 shrink-0 text-xs text-muted-foreground">{formatRelativeTime(log.createdAt)}</span>
+                    <Badge variant="muted" className="whitespace-nowrap">{getActivityLabel(log.action)}</Badge>
+                    {log.details && <span className="min-w-0 flex-1 basis-full truncate text-muted-foreground sm:basis-0">{formatActivityDetails(log.details)}</span>}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="rounded-lg border border-dashed py-8 text-center text-sm text-muted-foreground">Нет записей активности</p>
+            )}
+          </TabsContent>
+
+          <TabsContent value="notes" className="space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-[13px] text-muted-foreground">Заметки о пользователе видны только администраторам.</p>
+              {canEditNotes && (
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    setNoteOpen(true)
+                    setNoteText('')
+                    setNoteImportant(false)
+                  }}
+                >
+                  Добавить заметку
+                </Button>
+              )}
+            </div>
+            {notes.length > 0 ? (
+              <ul className="divide-y rounded-lg border bg-card">
+                {notes.map((note) => (
+                  <li key={note.id} className="flex items-start justify-between gap-3 px-4 py-3 text-sm">
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <p className="whitespace-pre-wrap break-words">{note.text}</p>
+                      <p className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                        {note.important && <Badge variant="warning">Важная</Badge>}
+                        {note.author?.name || note.author?.email} · {formatRelativeTime(note.createdAt)}
+                      </p>
+                    </div>
+                    {canEditNotes && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-8 shrink-0 text-muted-foreground hover:text-destructive"
+                        aria-label="Удалить заметку"
+                        onClick={() => setNoteToDelete(note)}
+                      >
+                        <Trash2 className="size-4" />
+                      </Button>
                     )}
                   </li>
                 ))}
               </ul>
             ) : (
-              <p className="text-center text-muted-foreground py-8">
-                Нет записей активности
+              <p className="rounded-lg border border-dashed py-8 text-center text-sm text-muted-foreground">
+                Заметок пока нет{canEditNotes ? ' — нажмите «Добавить заметку».' : '.'}
               </p>
             )}
-          </CardContent>
-        </Card>
+          </TabsContent>
+        </Tabs>
 
-        {/* Заметки администратора */}
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0">
-            <div>
-              <CardTitle className="flex items-center gap-2">
-                <StickyNote className="h-5 w-5" />
-                Заметки администратора
-              </CardTitle>
-              <CardDescription>
-                Заметки о пользователе (видны только SUP)
-              </CardDescription>
-            </div>
-            {(currentUser?.role === 'SUPPORT' || currentUser?.role === 'ADMIN') && (user?.role !== 'ADMIN' || currentUser?.role === 'ADMIN') && (
-              <Button size="sm" onClick={() => { setNoteOpen(true); setNoteText(''); setNoteImportant(false); }}>
-                Добавить заметку
+        {canManage && (
+          <Section title="Удаление" bare>
+            <div className="flex flex-col gap-3 rounded-lg border p-4 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm text-muted-foreground">
+                Пользователь и все его данные (пространства, сообщения, заметки) будут удалены безвозвратно.
+              </p>
+              <Button size="sm" variant="destructive" className="shrink-0" onClick={() => setDeleteUserOpen(true)}>
+                <UserX className="size-4" aria-hidden />
+                Удалить пользователя
               </Button>
-            )}
-          </CardHeader>
-          <CardContent>
-            {notes.length > 0 ? (
-              <ul className="space-y-3">
-                {notes.map((note: any) => (
-                  <li
-                    key={note.id}
-                    className={`rounded-lg border p-3 text-sm ${note.important ? 'border-amber-500/50 bg-amber-500/5' : 'border-border'}`}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="whitespace-pre-wrap flex-1">{note.text}</p>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <span className="text-xs text-muted-foreground">
-                          {note.author?.name || note.author?.email} · {formatRelativeTime(note.createdAt)}
-                        </span>
-                        {(currentUser?.role === 'SUPPORT' || currentUser?.role === 'ADMIN') && (user?.role !== 'ADMIN' || currentUser?.role === 'ADMIN') && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
-                            onClick={() => handleDeleteNote(note.id)}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        )}
-                      </div>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-center text-muted-foreground py-6">
-                Нет заметок. Нажмите «Добавить заметку».
-              </p>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Edit Role Dialog */}
-        <Dialog open={editRoleOpen} onOpenChange={setEditRoleOpen}>
-          <DialogContent className="sm:max-w-md">
-            <DialogHeader>
-              <DialogTitle>Изменить роль</DialogTitle>
-              <DialogDescription>Логин: {user?.email}</DialogDescription>
-            </DialogHeader>
-            <form onSubmit={handleEditRole} className="space-y-4">
-              <div className="space-y-2">
-                <Label>Роль</Label>
-                <Select value={editRoleForm.role} onValueChange={(v) => setEditRoleForm((f) => ({ ...f, role: v }))}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {ROLES.filter((r) => r.value !== 'ADMIN' || currentUser?.role === 'ADMIN').map((r) => (
-                      <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              {editRoleForm.role === 'VOL' && (
-                <>
-                  <div className="space-y-2">
-                    <Label htmlFor="edit-vol-expires">Дата окончания доступа</Label>
-                    <Input
-                      id="edit-vol-expires"
-                      type="date"
-                      value={editRoleForm.volunteerExpiresAt}
-                      onChange={(e) => setEditRoleForm((f) => ({ ...f, volunteerExpiresAt: e.target.value }))}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="edit-vol-intensive">Интенсив</Label>
-                    <Input
-                      id="edit-vol-intensive"
-                      value={editRoleForm.volunteerIntensive}
-                      onChange={(e) => setEditRoleForm((f) => ({ ...f, volunteerIntensive: e.target.value }))}
-                      placeholder="feb-26"
-                    />
-                  </div>
-                </>
-              )}
-              <DialogFooter>
-                <Button type="button" variant="outline" onClick={() => setEditRoleOpen(false)}>Отмена</Button>
-                <Button type="submit" disabled={editRoleLoading}>
-                  {editRoleLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                  Сохранить
-                </Button>
-              </DialogFooter>
-            </form>
-          </DialogContent>
-        </Dialog>
-
-        {/* Block User AlertDialog */}
-        <AlertDialog open={blockOpen} onOpenChange={setBlockOpen}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Заблокировать пользователя?</AlertDialogTitle>
-              <AlertDialogDescription>
-                Пользователь <strong>{user?.email}</strong> будет заблокирован и не сможет войти в систему до разблокировки. Причина (необязательно):
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <div className="py-2">
-              <Textarea
-                placeholder="Причина блокировки"
-                value={blockReason}
-                onChange={(e) => setBlockReason(e.target.value)}
-                className="min-h-[80px]"
-              />
             </div>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Отмена</AlertDialogCancel>
-              <AlertDialogAction
-                onClick={(e) => { e.preventDefault(); handleBlock(); }}
-                disabled={blockLoading}
-                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              >
-                {blockLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                Заблокировать
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-
-        {/* Edit Profile Dialog */}
-        <Dialog open={editProfileOpen} onOpenChange={setEditProfileOpen}>
-          <DialogContent className="sm:max-w-md">
-            <DialogHeader>
-              <DialogTitle>Редактировать профиль</DialogTitle>
-              <DialogDescription>
-                Измените имя, логин (email), имя пользователя или пароль. Оставьте пароль пустым, чтобы не менять.
-              </DialogDescription>
-            </DialogHeader>
-            <form onSubmit={handleEditProfile} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="edit-profile-name">Имя</Label>
-                <Input
-                  id="edit-profile-name"
-                  value={editProfileForm.name}
-                  onChange={(e) => setEditProfileForm((f) => ({ ...f, name: e.target.value }))}
-                  placeholder="Имя пользователя"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="edit-profile-email">Логин (email)</Label>
-                <Input
-                  id="edit-profile-email"
-                  type="email"
-                  value={editProfileForm.email}
-                  onChange={(e) => setEditProfileForm((f) => ({ ...f, email: e.target.value }))}
-                  placeholder="email@example.com"
-                  required
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="edit-profile-username">Имя пользователя (username)</Label>
-                <Input
-                  id="edit-profile-username"
-                  value={editProfileForm.username}
-                  onChange={(e) => setEditProfileForm((f) => ({ ...f, username: e.target.value }))}
-                  placeholder="username (необязательно)"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="edit-profile-password">Новый пароль</Label>
-                <Input
-                  id="edit-profile-password"
-                  type="password"
-                  value={editProfileForm.newPassword}
-                  onChange={(e) => setEditProfileForm((f) => ({ ...f, newPassword: e.target.value }))}
-                  placeholder="Оставьте пустым, чтобы не менять"
-                  autoComplete="new-password"
-                />
-                <p className="text-xs text-muted-foreground">Минимум 8 символов</p>
-              </div>
-              <DialogFooter>
-                <Button type="button" variant="outline" onClick={() => setEditProfileOpen(false)}>
-                  Отмена
-                </Button>
-                <Button type="submit" disabled={editProfileLoading}>
-                  {editProfileLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                  Сохранить
-                </Button>
-              </DialogFooter>
-            </form>
-          </DialogContent>
-        </Dialog>
-
-        {/* Delete User AlertDialog */}
-        <AlertDialog open={deleteUserOpen} onOpenChange={setDeleteUserOpen}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Удалить пользователя?</AlertDialogTitle>
-              <AlertDialogDescription>
-                Логин: {user?.email} — пользователь и все его данные (пространства, сообщения, заметки) будут удалены безвозвратно. Это действие нельзя отменить.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Отмена</AlertDialogCancel>
-              <AlertDialogAction
-                onClick={(e) => { e.preventDefault(); handleDeleteUser(); }}
-                disabled={deleteUserLoading}
-                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              >
-                {deleteUserLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                Удалить
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-
-        <Dialog open={noteOpen} onOpenChange={setNoteOpen}>
-          <DialogContent className="sm:max-w-md">
-            <DialogHeader>
-              <DialogTitle>Добавить заметку</DialogTitle>
-              <DialogDescription>
-                Заметка будет привязана к пользователю и видна только администраторам.
-              </DialogDescription>
-            </DialogHeader>
-            <form onSubmit={handleAddNote} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="note-text">Текст</Label>
-                <Textarea
-                  id="note-text"
-                  value={noteText}
-                  onChange={(e) => setNoteText(e.target.value)}
-                  placeholder="Заметка о пользователе..."
-                  className="min-h-[100px]"
-                  required
-                />
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  id="note-important"
-                  checked={noteImportant}
-                  onChange={(e) => setNoteImportant(e.target.checked)}
-                  className="rounded border-input"
-                />
-                <Label htmlFor="note-important">Важная</Label>
-              </div>
-              <DialogFooter>
-                <Button type="button" variant="outline" onClick={() => setNoteOpen(false)}>
-                  Отмена
-                </Button>
-                <Button type="submit" disabled={noteSubmitting}>
-                  {noteSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                  Добавить
-                </Button>
-              </DialogFooter>
-            </form>
-          </DialogContent>
-        </Dialog>
+          </Section>
+        )}
       </div>
-    </div>
+
+      {/* Роль и доступ */}
+      <Dialog open={editRoleOpen} onOpenChange={(o) => !editRoleLoading && setEditRoleOpen(o)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Роль и доступ</DialogTitle>
+            <DialogDescription>
+              Логин: <span className="font-mono">{user.email}</span>
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleEditRole} className="space-y-4">
+            <Field label="Роль" htmlFor="edit-role">
+              <Select value={editRoleForm.role} onValueChange={(v) => setEditRoleForm((f) => ({ ...f, role: v }))}>
+                <SelectTrigger id="edit-role" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {ROLES.filter((r) => roleChangeAssignableRoles(currentUser?.role ?? '').includes(r.value)).map((r) => (
+                    <SelectItem key={r.value} value={r.value}>
+                      {r.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+            {editRoleForm.role === 'MEMBER' && (
+              <>
+                <Field
+                  label="Дата окончания доступа"
+                  htmlFor="edit-vol-expires"
+                  hint="Оставьте пустым — участник без ограничения срока (не волонтёр)."
+                >
+                  <DatePicker
+                    id="edit-vol-expires"
+                    value={editRoleForm.volunteerExpiresAt}
+                    onChange={(v) => setEditRoleForm((f) => ({ ...f, volunteerExpiresAt: v }))}
+                    shortcuts={false}
+                  />
+                </Field>
+                <Field
+                  label="Интенсив"
+                  htmlFor="edit-vol-intensive"
+                  hint="Например, feb-26. Необязательно."
+                  error={intensiveTooLong ? 'Не длиннее 50 символов' : undefined}
+                >
+                  <Input
+                    id="edit-vol-intensive"
+                    value={editRoleForm.volunteerIntensive}
+                    onChange={(e) => setEditRoleForm((f) => ({ ...f, volunteerIntensive: e.target.value }))}
+                    placeholder="feb-26"
+                    aria-invalid={intensiveTooLong}
+                  />
+                </Field>
+              </>
+            )}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setEditRoleOpen(false)} disabled={editRoleLoading}>
+                Отмена
+              </Button>
+              <Button type="submit" disabled={editRoleLoading || intensiveTooLong}>
+                {editRoleLoading && <Loader2 className="size-4 animate-spin" aria-hidden />}
+                Сохранить
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Блокировка */}
+      <ConfirmDialog
+        open={blockOpen}
+        onOpenChange={setBlockOpen}
+        title="Заблокировать пользователя?"
+        description={
+          <>
+            <span className="font-mono">{user.email}</span> не сможет войти в систему до разблокировки. Запланированные им сообщения останутся.
+          </>
+        }
+        confirmLabel="Заблокировать"
+        destructive
+        loading={blockLoading}
+        onConfirm={handleBlock}
+      >
+        <Field label="Причина" htmlFor="block-reason" hint="Необязательно — увидит пользователь.">
+          <Textarea id="block-reason" value={blockReason} maxLength={500} onChange={(e) => setBlockReason(e.target.value)} className="min-h-[80px]" />
+        </Field>
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        open={unblockOpen}
+        onOpenChange={setUnblockOpen}
+        title="Разблокировать пользователя?"
+        description={
+          <>
+            <span className="font-mono">{user.email}</span> снова сможет входить в систему.
+          </>
+        }
+        confirmLabel="Разблокировать"
+        loading={unblockLoading}
+        onConfirm={handleUnblock}
+      />
+
+      {/* Профиль */}
+      <Dialog open={editProfileOpen} onOpenChange={(o) => !editProfileLoading && setEditProfileOpen(o)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Редактировать профиль</DialogTitle>
+            <DialogDescription>Имя, логин, username или пароль. Пароль оставьте пустым, чтобы не менять.</DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleEditProfile} className="space-y-4" noValidate>
+            <Field label="Имя" htmlFor="edit-profile-name">
+              <Input
+                id="edit-profile-name"
+                value={editProfileForm.name}
+                onChange={(e) => setEditProfileForm((f) => ({ ...f, name: e.target.value }))}
+                placeholder="Имя пользователя"
+              />
+            </Field>
+            <Field label="Логин" htmlFor="edit-profile-email" required error={editProfileErrors.email}>
+              <Input
+                id="edit-profile-email"
+                value={editProfileForm.email}
+                onChange={(e) => {
+                  setEditProfileForm((f) => ({ ...f, email: e.target.value }))
+                  setEditProfileErrors((er) => ({ ...er, email: undefined }))
+                }}
+                placeholder="login или email"
+                aria-invalid={!!editProfileErrors.email}
+                aria-describedby={editProfileErrors.email ? 'edit-profile-email-error' : undefined}
+                className="font-mono"
+              />
+            </Field>
+            <Field label="Username" htmlFor="edit-profile-username" hint="Необязательно." error={editProfileErrors.username}>
+              <Input
+                id="edit-profile-username"
+                value={editProfileForm.username}
+                onChange={(e) => {
+                  setEditProfileForm((f) => ({ ...f, username: e.target.value }))
+                  setEditProfileErrors((er) => ({ ...er, username: undefined }))
+                }}
+                aria-invalid={!!editProfileErrors.username}
+                aria-describedby={editProfileErrors.username ? 'edit-profile-username-error' : undefined}
+                className="font-mono"
+              />
+            </Field>
+            <Field label="Новый пароль" htmlFor="edit-profile-password" hint="Минимум 8 символов. Пусто — не менять." error={editProfileErrors.newPassword}>
+              <PasswordInput
+                id="edit-profile-password"
+                value={editProfileForm.newPassword}
+                onChange={(e) => {
+                  setEditProfileForm((f) => ({ ...f, newPassword: e.target.value }))
+                  setEditProfileErrors((er) => ({ ...er, newPassword: undefined }))
+                }}
+                autoComplete="new-password"
+                aria-invalid={!!editProfileErrors.newPassword}
+                aria-describedby={editProfileErrors.newPassword ? 'edit-profile-password-error' : undefined}
+              />
+            </Field>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setEditProfileOpen(false)} disabled={editProfileLoading}>
+                Отмена
+              </Button>
+              <Button type="submit" disabled={editProfileLoading}>
+                {editProfileLoading && <Loader2 className="size-4 animate-spin" aria-hidden />}
+                Сохранить
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Удаление пользователя */}
+      <ConfirmDialog
+        open={deleteUserOpen}
+        onOpenChange={setDeleteUserOpen}
+        title="Удалить пользователя?"
+        description={
+          <>
+            <span className="font-mono">{user.email}</span> и все его данные (пространства, сообщения, заметки) будут удалены безвозвратно.
+            Это действие нельзя отменить.
+          </>
+        }
+        confirmLabel="Удалить"
+        destructive
+        loading={deleteUserLoading}
+        onConfirm={handleDeleteUser}
+      />
+
+      {/* Удаление заметки */}
+      <ConfirmDialog
+        open={!!noteToDelete}
+        onOpenChange={(o) => !o && setNoteToDelete(null)}
+        title="Удалить заметку?"
+        description={<span className="line-clamp-3 whitespace-pre-wrap">{noteToDelete?.text}</span>}
+        confirmLabel="Удалить"
+        destructive
+        loading={noteDeleting}
+        onConfirm={handleDeleteNote}
+      />
+
+      {/* Новая заметка */}
+      <Dialog open={noteOpen} onOpenChange={(o) => !noteSubmitting && setNoteOpen(o)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Добавить заметку</DialogTitle>
+            <DialogDescription>Заметка привязана к пользователю и видна только администраторам.</DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleAddNote} className="space-y-4">
+            <Field label="Текст" htmlFor="note-text" required>
+              <Textarea
+                id="note-text"
+                value={noteText}
+                onChange={(e) => setNoteText(e.target.value)}
+                placeholder="Например: договорились о продлении до конца интенсива"
+                className="min-h-[100px]"
+                maxLength={2000}
+              />
+            </Field>
+            <div className="flex items-center gap-2">
+              <Checkbox id="note-important" checked={noteImportant} onCheckedChange={(c) => setNoteImportant(c === true)} />
+              <Label htmlFor="note-important" className="text-sm">
+                Важная
+              </Label>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setNoteOpen(false)} disabled={noteSubmitting}>
+                Отмена
+              </Button>
+              <Button type="submit" disabled={noteSubmitting || !noteText.trim()}>
+                {noteSubmitting && <Loader2 className="size-4 animate-spin" aria-hidden />}
+                Добавить
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </PageContainer>
   )
 }

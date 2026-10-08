@@ -22,8 +22,8 @@ export default function ImprovedToaster() {
       richColors={false}
       closeButton
       duration={5000}
-      offset="20px"
-      gap={10}
+      offset="16px"
+      gap={8}
       visibleToasts={5}
       icons={{
         success: (
@@ -44,37 +44,26 @@ export default function ImprovedToaster() {
       }}
       toastOptions={{
         style: {
-          borderRadius: "12px",
-          padding: "14px 16px 12px",
-          fontSize: "14px",
+          borderRadius: "8px",
+          padding: "12px 14px",
+          fontSize: "13px",
           minHeight: "auto",
           minWidth: "300px",
           maxWidth: "400px",
-          background: "var(--card)",
-          color: "var(--card-foreground)",
+          background: "var(--popover)",
+          color: "var(--popover-foreground)",
           border: "1px solid var(--border)",
         },
         classNames: {
-          toast:
-            "group/toast !rounded-xl !border !bg-card !text-card-foreground [--toast-accent:theme(colors.primary.DEFAULT)] toast-improved",
-          title: "!text-[14px] !font-medium !tracking-tight !text-foreground",
-          description:
-            "!text-[13px] !mt-1 !leading-relaxed !text-muted-foreground",
+          toast: "group/toast !rounded-lg !border !bg-popover !text-popover-foreground toast-improved",
+          title: "!text-[13px] !font-medium !tracking-tight !text-foreground",
+          description: "!text-[12.5px] !mt-0.5 !leading-relaxed !text-muted-foreground",
           actionButton:
-            "!bg-primary !text-primary-foreground !rounded-lg !px-3 !py-1.5 !text-sm !font-medium hover:!opacity-90 !transition-opacity",
+            "!bg-foreground !text-background !rounded-md !px-2.5 !py-1 !text-xs !font-medium hover:!opacity-90 !transition-opacity",
           cancelButton:
-            "!bg-muted !text-muted-foreground !rounded-lg !px-3 !py-1.5 !text-sm !font-medium !border !border-border hover:!bg-muted/80 !transition-colors",
+            "!bg-muted !text-muted-foreground !rounded-md !px-2.5 !py-1 !text-xs !font-medium hover:!bg-accent !transition-colors",
           closeButton:
-            "!rounded-lg !opacity-60 hover:!opacity-100 !text-muted-foreground hover:!text-foreground !transition-all !border-0",
-          success:
-            "!border-l-[3px] !border-l-emerald-500/80 dark:!border-l-emerald-400/80 [&_[data-icon]]:!text-emerald-600 dark:[&_[data-icon]]:!text-emerald-400",
-          error:
-            "!border-l-[3px] !border-l-red-500/80 dark:!border-l-red-400/80 [&_[data-icon]]:!text-red-600 dark:[&_[data-icon]]:!text-red-400",
-          warning:
-            "!border-l-[3px] !border-l-amber-500/80 dark:!border-l-amber-400/80 [&_[data-icon]]:!text-amber-600 dark:[&_[data-icon]]:!text-amber-400",
-          info: "!border-l-[3px] !border-l-sky-500/80 dark:!border-l-sky-400/80 [&_[data-icon]]:!text-sky-600 dark:[&_[data-icon]]:!text-sky-400",
-          loading:
-            "!border-l-[3px] !border-l-primary/80 [&_[data-icon]]:!text-primary [&_[data-icon]]:!animate-spin",
+            "!rounded-md !opacity-60 hover:!opacity-100 !text-muted-foreground hover:!text-foreground !transition-opacity !border-0 !bg-transparent",
         },
       }}
     />

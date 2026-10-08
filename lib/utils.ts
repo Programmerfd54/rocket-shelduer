@@ -97,14 +97,14 @@ export function formatLocalDate(d: Date): string {
   
   export function generateAvatarColor(text: string): string {
     const colors = [
-      'bg-red-500',
-      'bg-blue-500',
-      'bg-green-500',
-      'bg-yellow-500',
-      'bg-purple-500',
-      'bg-pink-500',
+      'bg-slate-600',
+      'bg-sky-600',
+      'bg-emerald-600',
+      'bg-amber-600',
+      'bg-violet-500',
+      'bg-rose-500',
       'bg-indigo-500',
-      'bg-teal-500',
+      'bg-teal-600',
     ]
   
     let hash = 0
@@ -115,13 +115,13 @@ export function formatLocalDate(d: Date): string {
     return colors[Math.abs(hash) % colors.length]
   }
 
-/** Цвета для тега/карточки канала по имени — 4 приятных цвета (синий, фиолетовый, бирюзовый, янтарный) */
+/**
+ * Цвета тега канала. Палитра намеренно нейтральная (Linear/Notion): различие каналов — по названию,
+ * а не по цвету; цветные «полоски» слева не используются.
+ */
 export function getChannelTagColors(name: string): { bar: string; bg: string; text: string } {
   const palettes = [
-    { bar: 'border-blue-500', bg: 'bg-blue-50 dark:bg-blue-950/40', text: 'text-blue-700 dark:text-blue-300' },
-    { bar: 'border-violet-500', bg: 'bg-violet-50 dark:bg-violet-950/40', text: 'text-violet-700 dark:text-violet-300' },
-    { bar: 'border-teal-500', bg: 'bg-teal-50 dark:bg-teal-950/40', text: 'text-teal-700 dark:text-teal-300' },
-    { bar: 'border-amber-500', bg: 'bg-amber-50 dark:bg-amber-950/40', text: 'text-amber-700 dark:text-amber-300' },
+    { bar: 'border-border', bg: 'bg-muted', text: 'text-foreground/80' },
   ]
   let hash = 0
   const str = (name || '').toString()

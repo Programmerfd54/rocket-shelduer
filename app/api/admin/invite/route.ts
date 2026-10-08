@@ -1,43 +1,66 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { requireSupportOrAdmin, isForbiddenError } from '@/lib/auth';
-import crypto from 'crypto';
+import { isForbiddenError } from '@/lib/auth';
+import { requireAuth } from '@/lib/api-auth';
+import { canPerformAction } from '@/lib/permissions';
+import { inviteAssignableRoles } from '@/lib/roles';
+import { inviteBodySchema, zodErrorBody } from '@/lib/admin-user-schemas';
+import { generateInviteToken } from '@/lib/invite-token';
 
-const TOKEN_BYTES = 32;
-const EXPIRES_HOURS = 1;
-
-/** POST — сгенерировать ссылку-приглашение на регистрацию. SUPPORT не может выдавать ADMIN. Body: { role, email? } */
+/**
+ * POST — ссылка-приглашение на регистрацию.
+ * Lead_SUP: роли SUP / ADM / MEMBER. SUP: ADM / MEMBER.
+ * Body: { role, email?, volunteerExpiresAt?, volunteerIntensive?, expiresInHours? (1 | 24 | 72 | 168, по умолчанию 1) }
+ */
 export async function POST(request: Request) {
   try {
-    const user = await requireSupportOrAdmin();
-
-    const body = await request.json();
-    const role = body?.role ?? 'USER';
-    const email = typeof body?.email === 'string' ? body.email.trim() || null : null;
-
-    const allowedRoles = ['USER', 'ADM', 'VOL', 'SUPPORT', 'ADMIN'];
-    if (!allowedRoles.includes(role)) {
-      return NextResponse.json(
-        { error: 'Недопустимая роль' },
-        { status: 400 }
-      );
-    }
-    if (user.role === 'SUPPORT' && role === 'ADMIN') {
-      return NextResponse.json(
-        { error: 'SUPPORT не может создавать приглашения с ролью ADMIN' },
-        { status: 400 }
-      );
+    const user = await requireAuth();
+    if (!canPerformAction(user, 'admin:invite')) {
+      return NextResponse.json({ error: 'Недостаточно прав' }, { status: 403 });
     }
 
-    const token = crypto.randomBytes(TOKEN_BYTES).toString('base64url');
-    const expiresAt = new Date(Date.now() + EXPIRES_HOURS * 60 * 60 * 1000);
+    const raw = await request.json().catch(() => null);
+    const parsed = inviteBodySchema.safeParse(raw ?? {});
+    if (!parsed.success) {
+      return NextResponse.json(zodErrorBody(parsed.error), { status: 400 });
+    }
+    const { role, email, expiresInHours } = parsed.data;
+
+    const allowed = inviteAssignableRoles(user.role);
+    if (!allowed.includes(role)) {
+      return NextResponse.json(
+        { error: `Вы не можете приглашать с ролью ${role}`, fieldErrors: { role: 'Роль недоступна для вашей учётной записи' } },
+        { status: 403 }
+      );
+    }
+
+    const isMember = role === 'MEMBER';
+    const volunteerExpiresAt = isMember ? parsed.data.volunteerExpiresAt : null;
+    const volunteerIntensive = isMember && volunteerExpiresAt ? parsed.data.volunteerIntensive : null;
+
+    const emailHint = email ? email.toLowerCase() : null;
+    if (emailHint) {
+      const existing = await prisma.user.findUnique({ where: { email: emailHint }, select: { id: true } });
+      if (existing) {
+        return NextResponse.json(
+          { error: 'Пользователь с таким логином уже существует', fieldErrors: { email: 'Логин уже занят' } },
+          { status: 409 }
+        );
+      }
+    }
+
+    // В БД — только sha256 токена; сырой токен уходит один раз в этой ссылке
+    const { raw: token, stored: storedToken } = generateInviteToken();
+    const expiresAt = new Date(Date.now() + expiresInHours * 60 * 60 * 1000);
 
     await prisma.inviteToken.create({
       data: {
-        token,
+        token: storedToken,
         createdById: user.id,
-        role: role as 'USER' | 'ADM' | 'VOL' | 'SUPPORT' | 'ADMIN',
-        email,
+        role,
+        email: emailHint,
+        volunteerExpiresAt,
+        volunteerIntensive,
         expiresAt,
       },
     });
@@ -55,8 +78,11 @@ export async function POST(request: Request) {
       link,
       token,
       expiresAt: expiresAt.toISOString(),
+      expiresInHours,
       role,
-      email,
+      email: emailHint,
+      volunteerExpiresAt: volunteerExpiresAt?.toISOString() ?? null,
+      volunteerIntensive,
     });
   } catch (e) {
     if (isForbiddenError(e)) return NextResponse.json({ error: 'Недостаточно прав' }, { status: 403 });

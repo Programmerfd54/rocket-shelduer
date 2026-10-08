@@ -77,11 +77,11 @@ describe('isSuspiciousInput', () => {
 });
 
 describe('getClientIp', () => {
-  it('extracts first IP from x-forwarded-for', () => {
+  it('takes the entry appended by the trusted proxy (rightmost), not the client-supplied one', () => {
     const req = new Request('http://localhost', {
-      headers: { 'x-forwarded-for': '192.168.1.1, 10.0.0.1' },
+      headers: { 'x-forwarded-for': '6.6.6.6, 203.0.113.7' },
     });
-    expect(getClientIp(req)).toBe('192.168.1.1');
+    expect(getClientIp(req)).toBe('203.0.113.7');
   });
 
   it('uses x-real-ip when no forwarded', () => {

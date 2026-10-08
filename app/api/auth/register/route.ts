@@ -1,12 +1,11 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { hashPassword, generateToken, setAuthCookie, ensureDeviceCookie, getSessionFingerprint, hashDeviceId } from '@/lib/auth';
+import { hashPassword, createSessionAndSetCookie, validateNewPassword } from '@/lib/auth';
 import {
   logSecurityEvent,
   getClientIp,
   isSuspiciousInput,
   isAuthEndpointRateLimited,
-  recordAuthEndpointHit,
   SecurityEventType,
 } from '@/lib/security';
 
@@ -31,7 +30,6 @@ export async function POST(request: Request) {
       { status: 429 }
     );
   }
-  recordAuthEndpointHit(ip ?? null);
 
   try {
     if (process.env.ALLOW_PUBLIC_REGISTER !== 'true') {
@@ -50,20 +48,20 @@ export async function POST(request: Request) {
       );
     }
 
-    const body = await request.json();
-    const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
-    const password = body.password;
-    const name = body.name;
-    const role = 'USER';
+    const body = await request.json().catch(() => null);
+    const email = typeof body?.email === 'string' ? body.email.trim().toLowerCase() : '';
+    const password = body?.password;
+    const name = typeof body?.name === 'string' ? body.name.trim().slice(0, 100) : null;
+    const role = 'MEMBER';
 
-    if (!email || !password) {
+    if (!email || typeof password !== 'string' || !password || email.length > 254 || /\s/.test(email)) {
       return NextResponse.json(
         { error: 'Email and password are required' },
         { status: 400 }
       );
     }
 
-    if (isSuspiciousInput(email) || isSuspiciousInput(password) || isSuspiciousInput(name)) {
+    if (isSuspiciousInput(email) || isSuspiciousInput(name)) {
       await logSecurityEvent({
         type: SecurityEventType.SUSPICIOUS_INPUT,
         path: '/api/auth/register',
@@ -79,19 +77,9 @@ export async function POST(request: Request) {
       );
     }
 
-    if (password.length < 8) {
-      return NextResponse.json(
-        { error: 'Password must be at least 8 characters long' },
-        { status: 400 }
-      );
-    }
-    const { checkPasswordStrength } = await import('@/lib/utils');
-    const strength = checkPasswordStrength(password);
-    if (!strength.valid || strength.strength === 'weak') {
-      return NextResponse.json(
-        { error: strength.message || 'Пароль слишком простой: используйте буквы разного регистра, цифры и спецсимволы' },
-        { status: 400 }
-      );
+    const passwordError = await validateNewPassword(password, [email]);
+    if (passwordError) {
+      return NextResponse.json({ error: passwordError }, { status: 400 });
     }
 
     const existingUser = await prisma.user.findUnique({
@@ -121,7 +109,7 @@ export async function POST(request: Request) {
         email,
         password: hashedPassword,
         name: name || null,
-        role: role || 'USER',
+        role: role || 'MEMBER',
       },
       select: {
         id: true,
@@ -131,31 +119,12 @@ export async function POST(request: Request) {
       },
     });
 
-    const expiresAt = new Date(Date.now() + DEFAULT_SESSION_MINUTES * 60 * 1000);
-    const deviceId = await ensureDeviceCookie();
-    const fingerprint = getSessionFingerprint(request.headers);
-    const session = await prisma.session.create({
-      data: {
-        userId: user.id,
-        userAgent: userAgent?.slice(0, 500) ?? null,
-        fingerprint,
-        deviceIdHash: hashDeviceId(deviceId),
-        ipAddress: ip,
-        expiresAt,
-      },
+    await createSessionAndSetCookie({
+      user: { id: user.id, email: user.email, role: user.role },
+      sessionMinutes: DEFAULT_SESSION_MINUTES,
+      requestHeaders: request.headers,
+      ip,
     });
-
-    const token = generateToken(
-      {
-        userId: user.id,
-        email: user.email,
-        role: user.role,
-        sessionId: session.id,
-      },
-      DEFAULT_SESSION_MINUTES * 60
-    );
-
-    await setAuthCookie(token, DEFAULT_SESSION_MINUTES * 60);
 
     return NextResponse.json({
       success: true,

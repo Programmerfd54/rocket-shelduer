@@ -2,6 +2,9 @@
  * Логика применения и проверки настроек Rocket.Chat для подготовки пространства.
  */
 
+// SSRF-защита для запросов к Rocket.Chat (URL, DNS, редиректы).
+import { safeFetch as fetch } from '@/lib/ssrf';
+
 export type SettingKey =
   | 'hideSystemMessages'
   | 'threadDefault'
@@ -62,6 +65,7 @@ export async function fetchSettings(
     await fetchAll('/api/v1/settings.public');
     // Дополнительно запрашиваем по конкретным _id — в некоторых версиях RC они не попадают в общий список
     const ids = [
+      'Hide_System_Messages',
       'Message_Hide_System_Messages',
       'Message_AllowEditing',
       'Message_AllowDeleting',
@@ -168,34 +172,130 @@ function buildHideSystemMessagesList(availableValues?: string[]): string[] {
   return all.filter((v) => !excludeSet.has(v.toLowerCase()));
 }
 
+function isHideSystemMessagesSettingId(id: string | undefined): boolean {
+  if (!id) return false;
+  const lower = id.toLowerCase();
+  return (
+    id === 'Hide_System_Messages' ||
+    id === 'Message_Hide_System_Messages' ||
+    id === 'message_hide_system_messages' ||
+    (lower.includes('hide') && lower.includes('system') && lower.includes('message'))
+  );
+}
+
+/** Все глобальные настройки «скрыть системные» (в разных версиях RC разные _id). */
+export function findAllHideSystemMessagesSettings(settings: RcSetting[]): RcSetting[] {
+  return settings.filter((x) => isHideSystemMessagesSettingId(x._id));
+}
+
+function findHideSystemMessagesSetting(settings: RcSetting[]): RcSetting | undefined {
+  const all = findAllHideSystemMessagesSettings(settings);
+  return (
+    all.find((x) => x._id === 'Hide_System_Messages') ||
+    all.find((x) => x._id === 'Message_Hide_System_Messages') ||
+    all[0]
+  );
+}
+
+function clearValueForHideSystemSetting(s: RcSetting): unknown {
+  if (s.type === 'boolean') return false;
+  if (Array.isArray(s.packageValue) && s.packageValue.length === 0) return [];
+  return [];
+}
+
+function hideSystemMessagesSettingError(settings: RcSetting[]): string {
+  const similar = settings.filter((x) => x._id?.toLowerCase().includes('message')).map((x) => x._id);
+  return similar.length
+    ? `Настройка Message_Hide_System_Messages не найдена. Похожие: ${similar.slice(0, 5).join(', ')}`
+    : 'Настройка Message_Hide_System_Messages не найдена. Проверьте версию Rocket.Chat и права администратора.';
+}
+
+/** Ошибка RC из‑за отсутствия прав администратора (часто при входе личным токеном не‑админа). */
+export function isRcSettingsPermissionError(error?: string): boolean {
+  if (!error) return false;
+  const e = error.toLowerCase();
+  return (
+    e.includes('admin') ||
+    e.includes('403') ||
+    e.includes('прав') ||
+    e.includes('permission') ||
+    e.includes('not authorized') ||
+    e.includes('unauthorized') ||
+    e.includes('forbidden')
+  );
+}
+
 export async function applyHideSystemMessages(
   baseUrl: string,
   authToken: string,
   userId: string
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; error?: string; permissionDenied?: boolean }> {
   const settings = await fetchSettings(baseUrl, authToken, userId);
-  const s = settings.find(
-    (x) =>
-      x._id === 'Message_Hide_System_Messages' ||
-      x._id === 'message_hide_system_messages' ||
-      (x._id && x._id.toLowerCase().includes('hide') && x._id.toLowerCase().includes('system'))
-  ) as RcSetting | undefined;
-  if (!s?._id) {
-    const similar = settings.filter((x) => x._id?.toLowerCase().includes('message')).map((x) => x._id);
-    return {
-      ok: false,
-      error: similar.length
-        ? `Настройка Message_Hide_System_Messages не найдена. Похожие: ${similar.slice(0, 5).join(', ')}`
-        : 'Настройка Message_Hide_System_Messages не найдена. Проверьте версию Rocket.Chat и права администратора.',
-    };
+  const targets = findAllHideSystemMessagesSettings(settings);
+  const primary = findHideSystemMessagesSetting(settings);
+  if (!primary?._id) {
+    return { ok: false, error: hideSystemMessagesSettingError(settings) };
   }
   let availableValues: string[] = [];
-  if (s.values && Array.isArray(s.values)) {
-    availableValues = s.values.map((v) => (typeof v === 'string' ? v : (v as { key: string }).key));
+  if (primary.values && Array.isArray(primary.values)) {
+    availableValues = primary.values.map((v) =>
+      typeof v === 'string' ? v : (v as { key: string }).key
+    );
   }
   const toHide = buildHideSystemMessagesList(availableValues);
-  const r = await updateSetting(baseUrl, authToken, userId, s._id, toHide);
-  return r.ok ? { ok: true } : { ok: false, error: r.error || 'Не удалось обновить' };
+  const errors: string[] = [];
+  for (const s of targets) {
+    const r = await updateSetting(baseUrl, authToken, userId, s._id, toHide);
+    if (!r.ok) errors.push(`${s._id}: ${r.error || 'ошибка'}`);
+  }
+  if (errors.length === 0) return { ok: true };
+  const permissionDenied = errors.some((e) => isRcSettingsPermissionError(e));
+  return {
+    ok: false,
+    error: errors.join('; '),
+    permissionDenied,
+  };
+}
+
+/**
+ * Полный сброс глобального «Скрыть системные сообщения»:
+ * пустой multiselect + выключение дубликатов настроек в старых/новых версиях RC.
+ */
+export async function clearHideSystemMessages(
+  baseUrl: string,
+  authToken: string,
+  userId: string
+): Promise<{ ok: boolean; error?: string; permissionDenied?: boolean; skipped?: boolean }> {
+  const settings = await fetchSettings(baseUrl, authToken, userId);
+  const targets = findAllHideSystemMessagesSettings(settings);
+  if (targets.length === 0) {
+    return { ok: true, skipped: true };
+  }
+
+  const needsUpdate = targets.filter((s) => {
+    const v = s.value;
+    if (v === false || v === null || v === undefined) return false;
+    if (Array.isArray(v)) return v.length > 0;
+    return true;
+  });
+
+  if (needsUpdate.length === 0) {
+    return { ok: true, skipped: true };
+  }
+
+  const errors: string[] = [];
+  for (const s of needsUpdate) {
+    const clearValue = clearValueForHideSystemSetting(s);
+    let r = await updateSetting(baseUrl, authToken, userId, s._id, clearValue);
+    if (!r.ok && Array.isArray(clearValue)) {
+      r = await updateSetting(baseUrl, authToken, userId, s._id, false);
+    }
+    if (!r.ok) errors.push(`${s._id}: ${r.error || 'ошибка'}`);
+  }
+
+  if (errors.length === 0) return { ok: true };
+  const permissionDenied = errors.some((e) => isRcSettingsPermissionError(e));
+  return { ok: false, error: errors.join('; '), permissionDenied };
 }
 
 /** Список типов для скрытия (статический fallback). */
@@ -210,12 +310,7 @@ export async function getHideSystemMessagesValuesAsync(
   userId: string
 ): Promise<string[]> {
   const settings = await fetchSettings(baseUrl, authToken, userId);
-  const s = settings.find(
-    (x) =>
-      x._id === 'Message_Hide_System_Messages' ||
-      x._id === 'message_hide_system_messages' ||
-      (x._id && x._id.toLowerCase().includes('hide') && x._id.toLowerCase().includes('system'))
-  ) as RcSetting | undefined;
+  const s = findHideSystemMessagesSetting(settings);
   let availableValues: string[] = [];
   if (s?.values && Array.isArray(s.values)) {
     availableValues = s.values.map((v) => (typeof v === 'string' ? v : (v as { key: string }).key));
@@ -226,6 +321,7 @@ export async function getHideSystemMessagesValuesAsync(
 export function checkHideSystemMessages(current: unknown): boolean {
   if (!Array.isArray(current)) return false;
   const arr = current as string[];
+  if (arr.length === 0) return false;
   return (
     arr.includes('au') &&
     arr.includes('ru') &&

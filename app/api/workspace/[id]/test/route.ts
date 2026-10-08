@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
+import { isUnsafeId } from '@/lib/security';
 import prisma from '@/lib/prisma';
-import { requireAuth } from '@/lib/auth';
+import { requireAuth } from '@/lib/api-auth';
 import { RocketChatClient } from '@/lib/rocketchat';
 import { getEffectiveConnectionForRc } from '@/lib/workspace-rc';
 import { rcNotConnectedResponse, rcUnauthorizedResponse } from '@/lib/rc-http';
@@ -12,15 +13,17 @@ export async function POST(
   try {
     const user = await requireAuth();
     const { id } = await params;
+    if (isUnsafeId(id)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
 
     let workspace = await prisma.workspaceConnection.findFirst({
       where: { id, userId: user.id },
+      select: { id: true },
     });
     if (!workspace) {
       const assignment = await prisma.workspaceAdminAssignment.findFirst({
         where: { workspaceId: id, userId: user.id },
       });
-      if (assignment) workspace = await prisma.workspaceConnection.findUnique({ where: { id } });
+      if (assignment) workspace = await prisma.workspaceConnection.findUnique({ where: { id }, select: { id: true } });
     }
 
     if (!workspace) {

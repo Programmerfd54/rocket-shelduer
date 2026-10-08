@@ -2,21 +2,15 @@
 // Настрой в Vercel/Railway: GET /api/cron/cleanup-archives каждый день
 
 import { NextResponse } from 'next/server';
+import { verifyCronRequest } from '@/lib/security';
 import prisma from '@/lib/prisma';
 
 export async function GET(request: Request) {
   try {
-    const authHeader = request.headers.get('authorization');
-    const cronSecret = process.env.CRON_SECRET;
-    if (process.env.NODE_ENV === 'production') {
-      if (!cronSecret) {
-        return NextResponse.json({ error: 'CRON_SECRET must be set in production' }, { status: 503 });
-      }
-      if (authHeader !== `Bearer ${cronSecret}`) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-      }
-    } else if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    // Bearer CRON_SECRET: сравнение за постоянное время, в production секрет обязателен
+    const denied = verifyCronRequest(request);
+    if (denied) {
+      return NextResponse.json({ error: denied.error }, { status: denied.status });
     }
 
     const now = new Date();
@@ -70,12 +64,11 @@ export async function GET(request: Request) {
 
           return { success: true, id: ws.id, name: ws.workspaceName };
         } catch (error) {
-          console.error(`Failed to delete workspace ${ws.id}:`, error);
+          console.error(`Failed to delete workspace ${ws.id}:`, error instanceof Error ? error.message : 'unknown');
           return {
             success: false,
             id: ws.id,
             name: ws.workspaceName,
-            ...(process.env.NODE_ENV !== 'production' && { error }),
           };
         }
       })

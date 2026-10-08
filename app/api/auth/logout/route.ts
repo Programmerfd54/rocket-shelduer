@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { clearAuthCookie, verifyToken, deleteSession } from '@/lib/auth';
+import { clearAuthCookie, verifyToken, deleteSession, readAuthCookie } from '@/lib/auth';
 
 export async function POST() {
   try {
     const cookieStore = await cookies();
-    const token = cookieStore.get('auth-token')?.value;
+    const token = readAuthCookie(cookieStore);
     if (token) {
       const payload = verifyToken(token);
       if (payload?.sessionId) {

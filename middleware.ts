@@ -1,143 +1,205 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { jwtVerify } from 'jose';
+import {
+  AUTH_COOKIE_HOST,
+  AUTH_COOKIE_LEGACY,
+  buildAllowedOrigins,
+  buildPageCsp,
+  checkCsrf,
+  createFixedWindowLimiter,
+  generateCspNonce,
+  getClientIpFromHeaders,
+  isApiCacheablePath,
+  isOriginAllowed,
+  isPasswordChangeExemptPath,
+  isProtectedUploadPath,
+  readCookiePreferHost,
+  resolveJwtSecret,
+  API_CSP,
+} from '@/lib/http-security';
 
-const STATE_CHANGING_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE'];
+// Глобальный rate limit для API: макс запросов с одного IP за окно (1 мин).
+// IP определяется с учётом TRUSTED_PROXY_HOPS (см. lib/http-security.ts), карта ограничена по размеру.
+// Счётчик живёт в памяти процесса (на каждую реплику свой) — общий лимит задаётся в nginx (limit_req),
+// см. deploy/nginx-example.conf.
+const apiLimiter = createFixedWindowLimiter({ windowMs: 60 * 1000, max: 300, maxKeys: 20_000 });
 
-// Глобальный rate limit для API: макс запросов с одного IP за окно (1 мин)
-const API_RATE_WINDOW_MS = 60 * 1000;
-const API_RATE_MAX = 300;
-const apiRateMap = new Map<string, { count: number; resetAt: number }>();
+const IS_PROD = process.env.NODE_ENV === 'production';
 
-function getApiRateKey(request: NextRequest): string | null {
-  const forwarded = request.headers.get('x-forwarded-for');
-  const ip = forwarded ? forwarded.split(',')[0]?.trim() : null;
-  return ip || request.headers.get('x-real-ip') || null;
+/** Заголовки для всех ответов (страницы, API, загрузки). CSP и Cache-Control — отдельно по типу ответа. */
+const BASE_SECURITY_HEADERS: Record<string, string> = {
+  // SAMEORIGIN: в iframe можно встраивать только со своего же origin
+  'X-Frame-Options': 'SAMEORIGIN',
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+  'Permissions-Policy':
+    'camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), browsing-topics=()',
+  'X-DNS-Prefetch-Control': 'off',
+  'X-Permitted-Cross-Domain-Policies': 'none',
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Resource-Policy': 'same-origin',
+  'Origin-Agent-Cluster': '?1',
+};
+
+function applyBaseHeaders(res: NextResponse): NextResponse {
+  for (const [k, v] of Object.entries(BASE_SECURITY_HEADERS)) res.headers.set(k, v);
+  if (IS_PROD) {
+    res.headers.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
+  }
+  return res;
 }
 
-function isApiRateLimited(key: string | null): boolean {
-  if (!key) return false;
-  const now = Date.now();
-  const entry = apiRateMap.get(key);
-  if (!entry) {
-    apiRateMap.set(key, { count: 1, resetAt: now + API_RATE_WINDOW_MS });
-    return false;
-  }
-  if (now >= entry.resetAt) {
-    apiRateMap.set(key, { count: 1, resetAt: now + API_RATE_WINDOW_MS });
-    return false;
-  }
-  entry.count++;
-  return entry.count > API_RATE_MAX;
+/** API-ответы: JSON/файлы не исполняются как документ; по умолчанию не кэшируются (персональные данные). */
+function applyApiHeaders(res: NextResponse, pathname: string): NextResponse {
+  applyBaseHeaders(res);
+  res.headers.set('Content-Security-Policy', API_CSP);
+  // Заголовок middleware имеет приоритет над заголовком route handler'а (Next не перезаписывает уже
+  // выставленные), поэтому маршруты со своим кэшированием (картинки эмодзи) исключены.
+  if (!isApiCacheablePath(pathname)) res.headers.set('Cache-Control', 'no-store');
+  return res;
 }
 
-function getAllowedOrigins(request: NextRequest): string[] {
-  const origin = request.nextUrl.origin;
-  const envOrigin = process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL;
-  const allowed = [origin];
-  if (envOrigin) {
-    const base = envOrigin.startsWith('http') ? envOrigin : `https://${envOrigin}`;
-    allowed.push(base.replace(/\/$/, ''));
-  }
-  return allowed;
+function jsonError(
+  status: number,
+  body: Record<string, unknown>,
+  pathname: string,
+  extraHeaders?: Record<string, string>
+) {
+  const res = new NextResponse(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json', ...(extraHeaders ?? {}) },
+  });
+  return applyApiHeaders(res, pathname);
 }
 
-function isOriginAllowed(request: NextRequest, origin: string | null): boolean {
-  if (!origin) return true;
-  const allowed = getAllowedOrigins(request);
-  return allowed.some((a) => origin === a || origin === a + '/' || a.startsWith(origin));
-}
+type TokenClaims = { sessionId?: string; pwc?: boolean };
 
-/** Проверка JWT в Edge (без Prisma). */
-async function isTokenValid(token: string): Promise<boolean> {
-  const secret = process.env.JWT_SECRET || 'your-secret-key';
-  if (process.env.NODE_ENV === 'production' && (secret === 'your-secret-key' || !process.env.JWT_SECRET)) {
-    return false;
-  }
+/** Проверка JWT в Edge (без Prisma). Секрет без значения по умолчанию: не задан → токен невалиден. */
+async function verifyTokenEdge(token: string): Promise<TokenClaims | null> {
+  const secret = resolveJwtSecret(process.env);
+  if (!secret) return null;
   try {
     const key = new TextEncoder().encode(secret);
-    await jwtVerify(token, key, { algorithms: ['HS256'] });
-    return true;
+    const { payload } = await jwtVerify(token, key, { algorithms: ['HS256'] });
+    // Токены без привязки к сессии (Session) не принимаются — их нельзя отозвать
+    if (typeof payload.sessionId !== 'string' || !payload.sessionId) return null;
+    return { sessionId: payload.sessionId, pwc: payload.pwc === true };
   } catch {
-    return false;
+    return null;
   }
 }
 
 export async function middleware(request: NextRequest) {
-  const token = request.cookies.get('auth-token')?.value;
-  const { pathname } = request.nextUrl;
-  const response = NextResponse.next();
-
-  // Security headers (защита от XSS, clickjacking, MIME-sniffing)
-  response.headers.set('X-Frame-Options', 'DENY');
-  response.headers.set('X-Content-Type-Options', 'nosniff');
-  response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
-  response.headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), interest-cohort=()');
-  response.headers.set('X-DNS-Prefetch-Control', 'off');
-  // CSP: убран unsafe-eval, оставлен unsafe-inline для React/Next
-  response.headers.set(
-    'Content-Security-Policy',
-    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+  // __Host-auth-token (production, Secure) → legacy auth-token (dev/HTTP и сессии до переименования)
+  const token = readCookiePreferHost(
+    (n) => request.cookies.get(n)?.value,
+    AUTH_COOKIE_HOST,
+    AUTH_COOKIE_LEGACY
   );
-  if (process.env.NODE_ENV === 'production') {
-    response.headers.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
-  }
+  const { pathname } = request.nextUrl;
 
   if (pathname.startsWith('/api')) {
-    const rateKey = getApiRateKey(request);
-    if (isApiRateLimited(rateKey)) {
-      return new NextResponse(
-        JSON.stringify({ error: 'Too many requests' }),
-        { status: 429, headers: { 'Content-Type': 'application/json' } }
-      );
+    const clientIp = getClientIpFromHeaders(request.headers);
+    if (apiLimiter.hit(clientIp)) {
+      return jsonError(429, { error: 'Too many requests' }, pathname, { 'Retry-After': '60' });
     }
+
+    const allowed = buildAllowedOrigins({
+      requestOrigin: request.nextUrl.origin,
+      host: request.headers.get('host'),
+      forwardedProto: request.headers.get('x-forwarded-proto'),
+    });
     const origin = request.headers.get('origin');
-    if (origin && isOriginAllowed(request, origin)) {
-      response.headers.set('Access-Control-Allow-Origin', origin);
+
+    // CORS: только точное совпадение с allow-list; для остальных origin заголовки не выставляются
+    const corsHeaders: Record<string, string> = { Vary: 'Origin' };
+    if (origin && isOriginAllowed(origin, allowed)) {
+      corsHeaders['Access-Control-Allow-Origin'] = origin;
+      corsHeaders['Access-Control-Allow-Credentials'] = 'true';
+      corsHeaders['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS';
+      corsHeaders['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Error-Handling';
     }
-    response.headers.set('Access-Control-Allow-Credentials', 'true');
-    response.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-    response.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
     if (request.method === 'OPTIONS') {
-      return new NextResponse(null, { status: 204, headers: response.headers });
+      return applyApiHeaders(new NextResponse(null, { status: 204, headers: corsHeaders }), pathname);
     }
 
-    if (STATE_CHANGING_METHODS.includes(request.method)) {
-      const reqOrigin = request.headers.get('origin');
-      const referer = request.headers.get('referer');
-      const allowed = getAllowedOrigins(request);
-      const originOk = !reqOrigin || allowed.some((a) => reqOrigin === a || reqOrigin.startsWith(a + '/'));
-      const refererOk = !referer || allowed.some((a) => referer.startsWith(a + '/') || referer.startsWith(a + '?'));
-      if (reqOrigin || referer) {
-        if (!originOk && !refererOk) {
-          return new NextResponse(JSON.stringify({ error: 'Invalid origin' }), {
-            status: 403,
-            headers: { 'Content-Type': 'application/json' },
-          });
-        }
+    const csrf = checkCsrf({
+      method: request.method,
+      origin,
+      referer: request.headers.get('referer'),
+      secFetchSite: request.headers.get('sec-fetch-site'),
+      allowed,
+    });
+    if (!csrf.ok) {
+      return jsonError(403, { error: 'Invalid origin' }, pathname, { Vary: 'Origin' });
+    }
+
+    // Обязательная смена пароля: пока не задан постоянный пароль, доступны только auth-эндпоинты
+    if (token && !isPasswordChangeExemptPath(pathname)) {
+      const claims = await verifyTokenEdge(token);
+      if (claims?.pwc) {
+        return jsonError(
+          403,
+          { error: 'Необходимо сменить пароль', code: 'PASSWORD_CHANGE_REQUIRED' },
+          pathname,
+          { 'X-Password-Change-Required': '1', ...corsHeaders }
+        );
       }
     }
-  } else {
-    let isAuthenticated = false;
-    if (token) {
-      try {
-        isAuthenticated = await isTokenValid(token);
-      } catch {
-        isAuthenticated = false;
-      }
-    }
-    if (!isAuthenticated && pathname.startsWith('/dashboard')) {
-      return NextResponse.redirect(new URL('/login', request.url));
-    }
+
+    const response = NextResponse.next();
+    for (const [k, v] of Object.entries(corsHeaders)) response.headers.set(k, v);
+    return applyApiHeaders(response, pathname);
   }
 
-  return response;
+  let claims: TokenClaims | null = null;
+  if (token) claims = await verifyTokenEdge(token);
+
+  // Пользовательские загрузки (/help-uploads/*, /uploads/*): только с валидной сессией, 401 без редиректа.
+  // Полная проверка сессии (БД, device-id) и заголовки файла — в /api/uploads/[bucket]/[name]
+  // (next.config.ts переписывает эти URL туда; CSP/Cache-Control здесь не ставим — их задаёт обработчик).
+  if (isProtectedUploadPath(pathname)) {
+    if (!claims) {
+      const res = new NextResponse(JSON.stringify({ error: 'Unauthorized' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+      });
+      return applyBaseHeaders(res);
+    }
+    return applyBaseHeaders(NextResponse.next());
+  }
+
+  if (!claims && pathname.startsWith('/dashboard')) {
+    return applyBaseHeaders(NextResponse.redirect(new URL('/login', request.url)));
+  }
+  if (
+    claims?.pwc &&
+    pathname.startsWith('/dashboard') &&
+    pathname !== '/dashboard/change-password'
+  ) {
+    return applyBaseHeaders(NextResponse.redirect(new URL('/dashboard/change-password', request.url)));
+  }
+
+  // Страницы: CSP с nonce на каждый запрос. Next читает nonce из заголовка запроса
+  // Content-Security-Policy и проставляет его своим <script>; app/layout.tsx передаёт x-nonce в next-themes.
+  const nonce = generateCspNonce();
+  const csp = buildPageCsp(nonce, { dev: !IS_PROD });
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set('x-nonce', nonce);
+  requestHeaders.set('Content-Security-Policy', csp);
+  const response = NextResponse.next({ request: { headers: requestHeaders } });
+  response.headers.set('Content-Security-Policy', csp);
+  return applyBaseHeaders(response);
 }
 
 export const config = {
   matcher: [
     '/api/:path*',
-    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    // Загрузки — явно (иначе исключение по расширению .png/.jpg ниже пропустило бы их без проверки)
+    '/help-uploads/:path*',
+    '/uploads/:path*',
+    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|woff2?)$).*)',
   ],
 };

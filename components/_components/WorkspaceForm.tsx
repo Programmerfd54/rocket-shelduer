@@ -1,50 +1,32 @@
 "use client"
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
+import { useState, type MouseEvent } from 'react'
+import Link from 'next/link'
+import { toast } from 'sonner'
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
-import {
-  RefreshCw,
-  Server,
-  CheckCircle2,
-  XCircle,
-  Shield,
+  Archive,
   Calendar,
   Copy,
-  Archive,
-  AlertTriangle,
-  MessageSquare,
-  Star,
-  Activity,
-  Wifi,
-  WifiOff,
-  TrendingUp,
-  Clock,
+  MoreHorizontal,
+  RefreshCw,
   Settings,
+  Shield,
+  Star,
 } from 'lucide-react'
-import { Spinner } from '@/components/ui/spinner'
-import { formatRelativeTime } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
-import Link from 'next/link'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
-import { useState } from 'react'
-import { toast } from 'sonner'
-import { cn } from '@/lib/utils'
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { ConfirmDialog } from '@/components/common/ConfirmDialog'
+import { formatRelativeTime, cn } from '@/lib/utils'
 
 export interface Workspace {
   id: string
@@ -81,12 +63,21 @@ interface WorkspaceFormProps {
   userRole?: string
   volunteerExpiresAt?: string | null
   volunteerIntensive?: string | null
+  /** 'compact' — плотный список (по умолчанию в проводнике), 'grid' — плоские карточки */
   viewMode?: 'grid' | 'compact'
   groupNamesByWorkspaceId?: Record<string, string>
   isFavorite?: (workspaceId: string) => boolean
   onToggleFavorite?: (workspaceId: string) => void
   /** Название, даты интенсива, URL, архив (владелец); у назначенных — открыть пространство для подключения к RC */
   onWorkspaceSettings?: (workspace: Workspace) => void
+}
+
+function pluralDays(n: number) {
+  const m10 = n % 10
+  const m100 = n % 100
+  if (m10 === 1 && m100 !== 11) return 'день'
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return 'дня'
+  return 'дней'
 }
 
 function formatIntensiveDates(start?: Date | string | null, end?: Date | string | null): string | null {
@@ -102,45 +93,62 @@ function getEndDateStatus(endDate?: Date | string | null): { label: string; warn
   const now = new Date()
   if (end < now) {
     const days = Math.ceil((now.getTime() - end.getTime()) / (1000 * 60 * 60 * 24))
-    return { label: `Завершён ${days} ${days === 1 ? 'день' : 'дней'} назад`, warning: true }
+    return { label: `Завершён ${days} ${pluralDays(days)} назад`, warning: true }
   }
   const days = Math.ceil((end.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
-  if (days <= 7) return { label: `Завершится через ${days} ${days === 1 ? 'день' : 'дней'}`, warning: true }
+  if (days <= 7) return { label: `Завершится через ${days} ${pluralDays(days)}`, warning: true }
   return { label: `До ${end.toLocaleDateString('ru-RU')}`, warning: false }
 }
 
-// Helper functions for workspace status
-function getWorkspaceStatus(workspace: Workspace): 'active' | 'expiring' | 'expired' | 'inactive' {
+type WsStatus = 'active' | 'expiring' | 'expired' | 'inactive'
+
+function getWorkspaceStatus(workspace: Workspace): WsStatus {
   if (!workspace.endDate) return workspace.isActive ? 'active' : 'inactive'
   const now = new Date()
   const endDate = new Date(workspace.endDate)
   const daysUntilEnd = Math.ceil((endDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
-  
+
   if (endDate < now) return 'expired'
   if (daysUntilEnd <= 7) return 'expiring'
   return 'active'
 }
 
-function getConnectionQuality(workspace: Workspace): 'excellent' | 'good' | 'fair' | 'poor' | 'unknown' {
+type Quality = 'excellent' | 'good' | 'fair' | 'poor' | 'unknown'
+
+function getConnectionQuality(workspace: Workspace): Quality {
   if (!workspace.lastConnected) return 'unknown'
   const hoursSinceConnection = Math.floor((Date.now() - new Date(workspace.lastConnected).getTime()) / (1000 * 60 * 60))
-  
+
   if (hoursSinceConnection < 1) return 'excellent'
   if (hoursSinceConnection < 24) return 'good'
   if (hoursSinceConnection < 168) return 'fair'
   return 'poor'
 }
 
+const QUALITY_TEXT: Record<Quality, string> = {
+  excellent: 'Отлично',
+  good: 'Хорошо',
+  fair: 'Средне',
+  poor: 'Плохо',
+  unknown: 'Нет данных',
+}
+
+const QUALITY_DOT: Record<Quality, string> = {
+  excellent: 'bg-emerald-500',
+  good: 'bg-emerald-500/70',
+  fair: 'bg-amber-500',
+  poor: 'bg-red-500',
+  unknown: 'bg-muted-foreground/40',
+}
+
 function getLastActivityText(workspace: Workspace): string {
   if (!workspace.lastConnected) return 'Нет данных'
-  const now = Date.now()
-  const lastConnected = new Date(workspace.lastConnected).getTime()
-  const diff = now - lastConnected
-  
+  const diff = Date.now() - new Date(workspace.lastConnected).getTime()
+
   const minutes = Math.floor(diff / (1000 * 60))
   const hours = Math.floor(diff / (1000 * 60 * 60))
   const days = Math.floor(diff / (1000 * 60 * 60 * 24))
-  
+
   if (minutes < 5) return 'Только что'
   if (minutes < 60) return `${minutes} мин. назад`
   if (hours < 24) return `${hours} ч. назад`
@@ -155,47 +163,105 @@ function getIntensiveProgress(workspace: Workspace): number | null {
   const end = new Date(workspace.endDate).getTime()
   const total = end - start
   const elapsed = now - start
+  if (total <= 0) return 100
   return Math.min(100, Math.max(0, (elapsed / total) * 100))
 }
 
-function getStatusBorderColor(status: string): string {
-  switch (status) {
-    case 'active': return 'border-l-green-500'
-    case 'expiring': return 'border-l-yellow-500'
-    case 'expired': return 'border-l-red-500'
-    case 'inactive': return 'border-l-gray-400'
-    default: return 'border-l-gray-300'
-  }
+function shortUrl(url: string) {
+  return url.replace(/^https?:\/\//, '')
 }
 
-function getConnectionIcon(quality: string) {
-  switch (quality) {
-    case 'excellent':
-    case 'good': return Wifi
-    case 'fair':
-    case 'poor': return WifiOff
-    default: return Activity
-  }
+/** Индикатор «последняя активность» — точка качества подключения + относительное время. */
+function ActivityInfo({ workspace, isSup }: { workspace: Workspace; isSup: boolean }) {
+  const quality = getConnectionQuality(workspace)
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex items-center gap-1.5">
+          <span className={cn('size-1.5 shrink-0 rounded-full', QUALITY_DOT[quality])} aria-hidden />
+          <span>{getLastActivityText(workspace)}</span>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-xs">
+        <div className="space-y-0.5">
+          <p>Последняя активность · подключение: {QUALITY_TEXT[quality].toLowerCase()}</p>
+          {isSup && workspace.lastEmojiImport && (
+            <p className="opacity-80">
+              Импорт эмодзи: {workspace.lastEmojiImport.userName || workspace.lastEmojiImport.userEmail} ·{' '}
+              {formatRelativeTime(workspace.lastEmojiImport.at)}
+            </p>
+          )}
+          {isSup && workspace.lastUsersAdd && (
+            <p className="opacity-80">
+              Добавление пользователей: {workspace.lastUsersAdd.userName || workspace.lastUsersAdd.userEmail} ·{' '}
+              {formatRelativeTime(workspace.lastUsersAdd.at)}
+            </p>
+          )}
+        </div>
+      </TooltipContent>
+    </Tooltip>
+  )
 }
 
-function getConnectionColor(quality: string): string {
-  switch (quality) {
-    case 'excellent': return 'text-green-500'
-    case 'good': return 'text-blue-500'
-    case 'fair': return 'text-yellow-500'
-    case 'poor': return 'text-red-500'
-    default: return 'text-gray-400'
-  }
+/** Бейджи состояния: показываем только то, что требует внимания или объясняет роль пространства. */
+function WorkspaceBadges({
+  workspace,
+  status,
+  groupName,
+  isMyIntensive,
+}: {
+  workspace: Workspace
+  status: WsStatus
+  groupName?: string
+  isMyIntensive: boolean
+}) {
+  return (
+    <>
+      {status === 'expiring' && <Badge variant="warning">Скоро истекает</Badge>}
+      {status === 'expired' && <Badge variant="danger">Истёк</Badge>}
+      {status === 'inactive' && <Badge variant="muted">Неактивен</Badge>}
+      {isMyIntensive && <Badge variant="info">Ваш интенсив</Badge>}
+      {workspace.isAssigned && <Badge variant="muted">Назначено</Badge>}
+      {groupName && <Badge variant="outline">{groupName}</Badge>}
+      {workspace.has2FA && (
+        <Badge variant="outline" title="Включена двухфакторная аутентификация">
+          <Shield aria-hidden />
+          2FA
+        </Badge>
+      )}
+      <Badge
+        variant="outline"
+        className="hidden sm:inline-flex"
+        title={workspace.isMultiUser ? 'Есть назначенные участники' : 'Только владелец'}
+      >
+        {workspace.isMultiUser ? 'Многопользовательское' : 'Индивидуальное'}
+      </Badge>
+    </>
+  )
 }
 
-function getConnectionQualityText(quality: string): string {
-  switch (quality) {
-    case 'excellent': return 'Отлично'
-    case 'good': return 'Хорошо'
-    case 'fair': return 'Средне'
-    case 'poor': return 'Плохо'
-    default: return 'Неизвестно'
-  }
+/** Строка про сегодняшний день интенсива и ближайший анонс. */
+function IntensiveLine({ workspace }: { workspace: Workspace }) {
+  if (workspace.todayIntensiveDay == null || workspace.totalIntensiveDays == null) return null
+  const channels = workspace.nextAnnouncementChannels ?? []
+  return (
+    <p className="text-xs text-muted-foreground">
+      <span>
+        День {workspace.todayIntensiveDay} из {workspace.totalIntensiveDays}
+      </span>
+      {workspace.messageDueToday !== undefined && (
+        <span className={workspace.messageDueToday ? 'font-medium text-foreground' : undefined}>
+          {' · '}
+          {workspace.messageDueToday ? 'по шаблонам: отправить сегодня' : 'по шаблонам сегодня отправки нет'}
+        </span>
+      )}
+      {workspace.nextAnnouncementDay != null && channels.length > 0 && (
+        <span>
+          {' · '}след. анонс: день {workspace.nextAnnouncementDay} · {channels.map((c) => `#${c.replace(/^#/, '')}`).join(', ')}
+        </span>
+      )}
+    </p>
+  )
 }
 
 export default function WorkspaceForm({
@@ -204,7 +270,7 @@ export default function WorkspaceForm({
   onTestConnection,
   onArchive,
   loading,
-  userRole = 'USER',
+  userRole = 'MEMBER',
   volunteerExpiresAt,
   volunteerIntensive,
   viewMode = 'grid',
@@ -221,684 +287,298 @@ export default function WorkspaceForm({
     setArchiving(true)
     try {
       await onArchive(archiveTarget.id)
-      toast.success(`Пространство «${archiveTarget.workspaceName}» заархивировано`)
+      toast.success(`Пространство «${archiveTarget.workspaceName}» заархивировано`, {
+        description: 'Восстановить его можно в разделе «Архивы».',
+      })
       setArchiveTarget(null)
-    } catch {
-      toast.error('Ошибка архивации')
+    } catch (e) {
+      toast.error('Не удалось заархивировать пространство', {
+        description: e instanceof Error && e.message ? e.message : 'Повторите попытку позже.',
+      })
     } finally {
       setArchiving(false)
     }
   }
 
-  const handleCopyUrl = (e: React.MouseEvent, url: string) => {
-    e.preventDefault()
-    e.stopPropagation()
-    navigator.clipboard.writeText(url)
-    toast.success('Ссылка скопирована')
+  const handleCopyUrl = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url)
+      toast.success('Ссылка скопирована')
+    } catch {
+      toast.error('Не удалось скопировать ссылку', { description: 'Выделите адрес и скопируйте вручную.' })
+    }
   }
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-16">
-        <Spinner className="h-8 w-8 text-muted-foreground" />
+      <div className="divide-y overflow-hidden rounded-lg border bg-card" role="status" aria-busy="true" aria-label="Загрузка">
+        {[1, 2, 3, 4, 5].map((i) => (
+          <div key={i} className="flex items-center gap-3 px-4 py-3">
+            <Skeleton className="size-4 shrink-0" />
+            <div className="min-w-0 flex-1 space-y-1.5">
+              <Skeleton className="h-4 w-1/3 max-w-[220px]" />
+              <Skeleton className="h-3 w-1/2 max-w-[320px]" />
+            </div>
+            <Skeleton className="h-8 w-20 shrink-0" />
+          </div>
+        ))}
       </div>
     )
   }
 
-  if (workspaces.length === 0) {
-    return (
-      <Card className="rounded-xl border-border/80 border-dashed bg-muted/20 relative overflow-hidden">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_120%,rgba(120,119,198,0.1),rgba(255,255,255,0))]" />
-        <CardContent className="relative flex flex-col items-center justify-center py-16">
-          <div className="p-6 rounded-full bg-gradient-to-br from-blue-500/10 to-purple-500/10 mb-6">
-            <Server className="h-12 w-12 text-primary" />
-          </div>
-          <h3 className="text-xl font-semibold mb-2">Пока нет пространств</h3>
-          <p className="text-sm text-muted-foreground text-center max-w-md">
-            Добавьте первое Rocket.Chat пространство, чтобы планировать отложенные сообщения
-          </p>
-        </CardContent>
-      </Card>
-    )
-  }
+  // Пустое состояние показывает родитель (с учётом поиска и прав на добавление)
+  if (workspaces.length === 0) return null
 
-  const isSup = userRole === 'SUPPORT' || userRole === 'ADMIN'
-  const isVol = userRole === 'VOL'
+  const isSup = userRole === 'SUP' || userRole === 'LEAD_SUP' || userRole === 'ADM'
+  const isVol = userRole === 'MEMBER' && !!volunteerExpiresAt
   const canArchive = isSup && !!onArchive
+
+  /** Меню действий: копирование, проверка, календарь, настройки, архив. */
+  const renderActions = (workspace: Workspace, showArchive: boolean) => (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={`Действия: ${workspace.workspaceName}`}
+          className="text-muted-foreground data-[state=open]:bg-accent data-[state=open]:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100 [@media(hover:hover)]:focus-visible:opacity-100"
+        >
+          <MoreHorizontal aria-hidden />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuItem onSelect={() => onTestConnection(workspace.id)}>
+          <RefreshCw aria-hidden />
+          Проверить подключение
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link href={`/dashboard/calendar?workspaceId=${workspace.id}`}>
+            <Calendar aria-hidden />
+            Календарь
+          </Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => void handleCopyUrl(workspace.workspaceUrl)}>
+          <Copy aria-hidden />
+          Копировать адрес
+        </DropdownMenuItem>
+        {onWorkspaceSettings && (
+          <DropdownMenuItem onSelect={() => onWorkspaceSettings(workspace)}>
+            <Settings aria-hidden />
+            {workspace.isAssigned ? 'Подключение к Rocket.Chat' : 'Настройки пространства'}
+          </DropdownMenuItem>
+        )}
+        {showArchive && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem variant="destructive" onSelect={() => setArchiveTarget(workspace)}>
+              <Archive aria-hidden />
+              В архив
+            </DropdownMenuItem>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+
+  const renderFavorite = (workspace: Workspace, favorite: boolean) =>
+    onToggleFavorite ? (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="size-7 shrink-0"
+            onClick={() => onToggleFavorite(workspace.id)}
+            aria-label={favorite ? 'Убрать из избранного' : 'Добавить в избранное'}
+            aria-pressed={favorite}
+          >
+            <Star
+              className={cn(
+                'size-4',
+                favorite ? 'fill-amber-400 text-amber-400' : 'text-muted-foreground/60 hover:text-foreground',
+              )}
+              aria-hidden
+            />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>{favorite ? 'Убрать из избранного' : 'В избранное'}</TooltipContent>
+      </Tooltip>
+    ) : null
+
+  /** Клик по строке/карточке открывает пространство, кроме кликов по кнопкам, ссылкам и пунктам меню. */
+  const handleRowClick = (e: MouseEvent<HTMLElement>, workspace: Workspace) => {
+    if (!e.currentTarget.contains(e.target as Node)) return // событие из портала (меню)
+    if ((e.target as HTMLElement).closest('button, a, [role="menuitem"]')) return
+    onOpenWorkspace(workspace)
+  }
 
   return (
     <>
-      <style jsx global>{`
-        @keyframes fadeInUp {
-          from {
-            opacity: 0;
-            transform: translateY(20px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
-        }
+      {viewMode === 'compact' ? (
+        <div className="divide-y overflow-hidden rounded-lg border bg-card">
+          {workspaces.map((workspace) => {
+            const endStatus = getEndDateStatus(workspace.endDate)
+            const isEnded = !!workspace.endDate && new Date(workspace.endDate) < new Date()
+            const showArchive = canArchive && isEnded
+            const groupName = groupNamesByWorkspaceId[workspace.id]
+            const isMyIntensive =
+              !!(isVol && volunteerIntensive && workspace.workspaceUrl?.toLowerCase().includes(volunteerIntensive.toLowerCase()))
+            const status = getWorkspaceStatus(workspace)
+            const favorite = isFavorite?.(workspace.id) ?? false
+            const pending = workspace.messageCountPending ?? 0
 
-        .workspace-card-animate {
-          animation: fadeInUp 0.5s ease-out;
-        }
-
-        @keyframes pulse-ring {
-          0% {
-            transform: scale(0.95);
-            opacity: 1;
-          }
-          50% {
-            transform: scale(1.05);
-            opacity: 0.7;
-          }
-          100% {
-            transform: scale(0.95);
-            opacity: 1;
-          }
-        }
-
-        .pulse-ring {
-          animation: pulse-ring 2s ease-in-out infinite;
-        }
-      `}</style>
-
-      <div className={viewMode === 'compact' ? 'space-y-2' : 'grid gap-4 md:grid-cols-2 lg:grid-cols-3'}>
-        {workspaces.map((workspace, index) => {
-          const endStatus = getEndDateStatus(workspace.endDate)
-          const intensiveDates = formatIntensiveDates(workspace.startDate, workspace.endDate)
-          const isEnded = workspace.endDate && new Date(workspace.endDate) < new Date()
-          const showArchive = canArchive && isEnded
-          const groupName = groupNamesByWorkspaceId[workspace.id]
-          const isMyIntensive = isVol && volunteerIntensive && workspace.workspaceUrl?.toLowerCase().includes(volunteerIntensive.toLowerCase())
-          const status = getWorkspaceStatus(workspace)
-          const connectionQuality = getConnectionQuality(workspace)
-          const progress = getIntensiveProgress(workspace)
-          const ConnectionIcon = getConnectionIcon(connectionQuality)
-          const favorite = isFavorite?.(workspace.id) ?? false
-
-          if (viewMode === 'compact') {
             return (
               <div
                 key={workspace.id}
-                className="workspace-card-animate opacity-0"
-                style={{
-                  animationDelay: `${index * 30}ms`,
-                  animationFillMode: 'forwards'
-                }}
+                data-workspace-id={workspace.id}
+                className="group flex cursor-pointer items-start gap-2 px-3 py-2.5 transition-colors hover:bg-muted/40 sm:items-center sm:gap-3 sm:px-4"
+                onClick={(e) => handleRowClick(e, workspace)}
               >
-                
-                <Card
-                  className={cn(
-                    "rounded-xl overflow-hidden cursor-pointer transition-all duration-300 flex flex-row border-l-4",
-                    "hover:shadow-lg hover:-translate-y-0.5",
-                    getStatusBorderColor(status),
-                    favorite && "ring-2 ring-yellow-400/50 shadow-md"
+                {renderFavorite(workspace, favorite)}
+
+                <div className="min-w-0 flex-1 space-y-1">
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                    <button
+                      type="button"
+                      onClick={() => onOpenWorkspace(workspace)}
+                      className="max-w-full truncate rounded-sm text-left text-sm font-medium outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/40"
+                      title={workspace.workspaceName}
+                    >
+                      {workspace.workspaceName}
+                    </button>
+                    <WorkspaceBadges workspace={workspace} status={status} groupName={groupName} isMyIntensive={isMyIntensive} />
+                  </div>
+                  <p className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+                    <span className="max-w-full truncate font-mono" title={workspace.workspaceUrl}>
+                      {shortUrl(workspace.workspaceUrl)}
+                    </span>
+                    {workspace.username && <span className="truncate font-mono">{workspace.username}</span>}
+                    <ActivityInfo workspace={workspace} isSup={isSup} />
+                  </p>
+                  <IntensiveLine workspace={workspace} />
+                </div>
+
+                <div className="hidden shrink-0 flex-col items-end gap-0.5 text-right text-xs md:flex">
+                  {endStatus && (
+                    <span className={endStatus.warning ? 'font-medium text-amber-700 dark:text-amber-300' : 'text-muted-foreground'}>
+                      {endStatus.label}
+                    </span>
                   )}
-                  onClick={() => onOpenWorkspace(workspace)}
-                >
-                  <CardContent className="flex flex-1 items-center gap-4 py-3 px-4">
-                    
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <div className="relative">
-                            <div 
-                              className={cn(
-                                "w-10 h-10 rounded-lg shrink-0 flex items-center justify-center shadow-sm transition-all duration-300",
-                                status === 'active' && "bg-green-100 dark:bg-green-950",
-                                status === 'expiring' && "bg-yellow-100 dark:bg-yellow-950",
-                                status === 'expired' && "bg-red-100 dark:bg-red-950",
-                                status === 'inactive' && "bg-gray-100 dark:bg-gray-950"
-                              )}
-                            >
-                              <Server className={cn(
-                                "h-5 w-5",
-                                status === 'active' && "text-green-600 dark:text-green-400",
-                                status === 'expiring' && "text-yellow-600 dark:text-yellow-400",
-                                status === 'expired' && "text-red-600 dark:text-red-400",
-                                status === 'inactive' && "text-gray-600 dark:text-gray-400"
-                              )} />
-                            </div>
-                            {connectionQuality !== 'unknown' && (
-                              <div className="absolute -bottom-1 -right-1">
-                                <div className={cn(
-                                  "h-3 w-3 rounded-full border-2 border-background",
-                                  connectionQuality === 'excellent' && "bg-green-500 pulse-ring",
-                                  connectionQuality === 'good' && "bg-blue-500",
-                                  connectionQuality === 'fair' && "bg-yellow-500",
-                                  connectionQuality === 'poor' && "bg-red-500"
-                                )} />
-                              </div>
-                            )}
-                          </div>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <div className="text-xs space-y-1">
-                            <p className="font-medium">Статус: {status === 'active' ? 'Активен' : status === 'expiring' ? 'Скоро истекает' : status === 'expired' ? 'Истёк' : 'Неактивен'}</p>
-                            <p className="text-muted-foreground">Подключение: {getConnectionQualityText(connectionQuality)}</p>
-                          </div>
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
+                  {workspace.messageCountTotal !== undefined && (
+                    <span className="text-muted-foreground" title="Ожидают отправки / всего сообщений">
+                      {pending > 0 ? `${pending} в очереди` : 'очередь пуста'}
+                    </span>
+                  )}
+                </div>
 
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 min-w-0 flex-wrap">
-                      <p className="font-medium truncate">{workspace.workspaceName}</p>
-                      {workspace.isAssigned && (
-                        <Badge variant="secondary" className="text-[10px] shrink-0">Назначено</Badge>
-                      )}
-                      <Badge variant="outline" className="text-[10px] shrink-0" title={workspace.isMultiUser ? 'Есть назначенные участники' : 'Только владелец'}>
-                        {workspace.isMultiUser ? 'Многопользовательское' : 'Индивидуальное'}
-                      </Badge>
-                    </div>
-                      <div className="flex items-center gap-2 mt-1">
-                        <p className="text-xs text-muted-foreground truncate">{workspace.workspaceUrl.replace(/^https?:\/\//, '')}</p>
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <div className="flex items-center gap-1 text-xs text-muted-foreground shrink-0">
-                                <Activity className="h-3 w-3" />
-                                <span>{getLastActivityText(workspace)}</span>
-                              </div>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p className="text-xs">Последняя активность</p>
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                      </div>
-                      {(workspace.todayIntensiveDay != null && workspace.totalIntensiveDays != null) && (
-                        <div className="mt-1 space-y-0.5 text-[11px] text-muted-foreground">
-                          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                            <span>День {workspace.todayIntensiveDay} из {workspace.totalIntensiveDays}</span>
-                            {workspace.messageDueToday !== undefined && (
-                              <span className={workspace.messageDueToday ? 'text-primary font-medium' : ''}>
-                                {workspace.messageDueToday ? 'Отправить по шаблонам' : 'По шаблонам нет'}
-                              </span>
-                            )}
-                          </div>
-                          {workspace.nextAnnouncementDay != null && workspace.nextAnnouncementChannels && workspace.nextAnnouncementChannels.length > 0 && (
-                            <span>
-                              След. анонс: День {workspace.nextAnnouncementDay} · {workspace.nextAnnouncementChannels.map((c) => `#${c.replace(/^#/, '')}`).join(', ')}
-                            </span>
-                          )}
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="flex items-center gap-2 shrink-0">
-                      {workspace.messageCountPending !== undefined && workspace.messageCountPending > 0 && (
-                        <Badge variant="secondary" className="text-xs" title="Ожидают отправки">
-                          <MessageSquare className="h-3 w-3 mr-1" />
-                          {workspace.messageCountPending}
-                        </Badge>
-                      )}
-                      {onWorkspaceSettings && (
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                className="h-8 w-8 p-0"
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  onWorkspaceSettings(workspace)
-                                }}
-                                aria-label="Настройки пространства"
-                              >
-                                <Settings className="h-4 w-4" />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p className="text-xs">
-                                {workspace.isAssigned
-                                  ? 'Открыть пространство (подключение к Rocket.Chat)'
-                                  : 'Название, даты, архив'}
-                              </p>
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                      )}
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button 
-                              size="sm" 
-                              variant="ghost" 
-                              onClick={(e) => { e.stopPropagation(); onTestConnection(workspace.id) }}
-                              className="gap-1.5"
-                            >
-                              <RefreshCw className="h-4 w-4 shrink-0" />
-                              <span className="hidden sm:inline">Проверить</span>
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p className="text-xs">Проверить подключение к Rocket.Chat</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                      <Button size="sm" onClick={(e) => { e.stopPropagation(); onOpenWorkspace(workspace) }}>Открыть</Button>
-                    </div>
-                  </CardContent>
-                </Card>
+                <div className="flex shrink-0 items-center gap-1">
+                  <Button size="sm" variant="outline" onClick={() => onOpenWorkspace(workspace)}>
+                    Открыть
+                  </Button>
+                  {renderActions(workspace, showArchive)}
+                </div>
               </div>
             )
-          }
+          })}
+        </div>
+      ) : (
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {workspaces.map((workspace) => {
+            const endStatus = getEndDateStatus(workspace.endDate)
+            const intensiveDates = formatIntensiveDates(workspace.startDate, workspace.endDate)
+            const isEnded = !!workspace.endDate && new Date(workspace.endDate) < new Date()
+            const showArchive = canArchive && isEnded
+            const groupName = groupNamesByWorkspaceId[workspace.id]
+            const isMyIntensive =
+              !!(isVol && volunteerIntensive && workspace.workspaceUrl?.toLowerCase().includes(volunteerIntensive.toLowerCase()))
+            const status = getWorkspaceStatus(workspace)
+            const progress = getIntensiveProgress(workspace)
+            const favorite = isFavorite?.(workspace.id) ?? false
 
-          return (
-            <div
-              key={workspace.id}
-              className="workspace-card-animate opacity-0"
-              style={{
-                animationDelay: `${index * 50}ms`,
-                animationFillMode: 'forwards'
-              }}
-            >
-              <Card
+            return (
+              <div
+                key={workspace.id}
+                data-workspace-id={workspace.id}
                 className={cn(
-                  "rounded-xl overflow-hidden transition-all duration-300 border-l-4 cursor-pointer h-full",
-                  "hover:shadow-lg hover:-translate-y-1",
-                  getStatusBorderColor(status),
-                  favorite && "ring-2 ring-yellow-400/50 shadow-md",
-                  isMyIntensive && "ring-2 ring-primary/30"
+                  'group flex cursor-pointer flex-col gap-3 rounded-lg border bg-card p-4 transition-colors hover:bg-muted/30',
+                  isMyIntensive && 'border-primary/40',
                 )}
-                onClick={() => onOpenWorkspace(workspace)}
+                onClick={(e) => handleRowClick(e, workspace)}
               >
-                <CardHeader className="pb-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-3 flex-1 min-w-0">
-                      <div className="relative">
-                        <div className={cn(
-                          "p-2.5 rounded-lg transition-all duration-300",
-                          status === 'active' && "bg-green-100 dark:bg-green-950",
-                          status === 'expiring' && "bg-yellow-100 dark:bg-yellow-950",
-                          status === 'expired' && "bg-red-100 dark:bg-red-950",
-                          status === 'inactive' && "bg-gray-100 dark:bg-gray-950"
-                        )}>
-                          <Server className={cn(
-                            "h-5 w-5",
-                            status === 'active' && "text-green-600 dark:text-green-400",
-                            status === 'expiring' && "text-yellow-600 dark:text-yellow-400",
-                            status === 'expired' && "text-red-600 dark:text-red-400",
-                            status === 'inactive' && "text-gray-600 dark:text-gray-400"
-                          )} />
-                        </div>
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <div className="absolute -bottom-1 -right-1">
-                                {connectionQuality !== 'unknown' && (
-                                  <div className={cn(
-                                    "h-3 w-3 rounded-full border-2 border-background",
-                                    connectionQuality === 'excellent' && "bg-green-500 pulse-ring",
-                                    connectionQuality === 'good' && "bg-blue-500",
-                                    connectionQuality === 'fair' && "bg-yellow-500",
-                                    connectionQuality === 'poor' && "bg-red-500"
-                                  )} />
-                                )}
-                              </div>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <div className="text-xs">
-                                <p className="font-medium">Качество подключения</p>
-                                <p className="text-muted-foreground">{getConnectionQualityText(connectionQuality)}</p>
-                              </div>
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                      </div>
-                      
-                      <div className="flex-1 min-w-0">
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <div className="space-y-1">
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  <CardTitle className="text-base font-semibold line-clamp-1 cursor-help">
-                                    {workspace.workspaceName}
-                                  </CardTitle>
-                                  {groupName && (
-                                    <Badge variant="outline" className="text-xs shrink-0">{groupName}</Badge>
-                                  )}
-                                </div>
-                                <CardDescription className="text-xs">
-                                  {workspace.username}
-                                </CardDescription>
-                              </div>
-                            </TooltipTrigger>
-                            <TooltipContent className="max-w-xs">
-                              <div className="space-y-1 text-xs">
-                                <p className="font-medium">{workspace.workspaceName}</p>
-                                <p className="text-muted-foreground">{workspace.workspaceUrl}</p>
-                                {groupName && <p className="text-primary">Группа: {groupName}</p>}
-                                <p className="text-muted-foreground">Логин: {workspace.username}</p>
-                              </div>
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-
-                        <div className="flex items-center gap-2 mt-1.5">
-                          <TooltipProvider>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                                  <Activity className="h-3 w-3" />
-                                  <span>{getLastActivityText(workspace)}</span>
-                                </div>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                <p className="text-xs">Последняя активность</p>
-                               
-                              </TooltipContent>
-                            </Tooltip>
-                          </TooltipProvider>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-0.5 shrink-0">
-                      {onWorkspaceSettings && (
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8 hover:bg-muted/80"
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  onWorkspaceSettings(workspace)
-                                }}
-                                aria-label="Настройки пространства"
-                              >
-                                <Settings className="h-[18px] w-[18px] text-muted-foreground hover:text-foreground" />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent side="bottom" className="max-w-[220px]">
-                              <p className="text-xs">
-                                {workspace.isAssigned
-                                  ? 'Открыть пространство: подключение к Rocket.Chat и работа с каналами'
-                                  : 'Название, даты интенсива, адрес сервера, архив'}
-                              </p>
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                      )}
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 shrink-0 hover:bg-transparent"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          onToggleFavorite?.(workspace.id)
-                        }}
-                      >
-                        <Star className={cn(
-                          "h-5 w-5 transition-all duration-300",
-                          favorite ? "fill-yellow-400 text-yellow-400 scale-110" : "text-muted-foreground hover:text-yellow-400"
-                        )} />
-                      </Button>
-                    </div>
-                  </div>
-                </CardHeader>
-
-                <CardContent className="space-y-3" onClick={(e) => e.stopPropagation()}>
-                  {/* Progress bar for intensives */}
-                  {progress !== null && (
-                    <div className="space-y-1.5">
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="text-muted-foreground flex items-center gap-1">
-                          <TrendingUp className="h-3 w-3" />
-                          Прогресс интенсива
-                        </span>
-                        <span className="font-medium">{Math.round(progress)}%</span>
-                      </div>
-                      <Progress value={progress} className={cn(
-                        "h-2 transition-all",
-                        status === 'expiring' && "[&>div]:bg-yellow-500",
-                        status === 'expired' && "[&>div]:bg-red-500"
-                      )} />
-                      {intensiveDates && (
-                        <p className="text-xs text-muted-foreground">
-                          {intensiveDates}
-                          {endStatus && <span className={endStatus.warning ? ' text-amber-600 font-medium' : ''}> · {endStatus.label}</span>}
-                        </p>
-                      )}
-                    </div>
-                  )}
-
-                  <div className="rounded-xl bg-muted/30 p-3 border border-border/60 hover:bg-muted/50 transition-colors">
-                    <p className="text-xs text-muted-foreground mb-1.5 flex items-center gap-1">
-                      <Server className="h-3 w-3" />
-                      Адрес сервера
-                    </p>
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm font-mono truncate flex-1" title={workspace.workspaceUrl}>
-                        {workspace.workspaceUrl.replace(/^https?:\/\//, '')}
-                      </p>
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button 
-                              variant="ghost" 
-                              size="icon" 
-                              className="h-8 w-8 shrink-0" 
-                              onClick={(e) => handleCopyUrl(e, workspace.workspaceUrl)}
-                            >
-                              <Copy className="h-4 w-4" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p className="text-xs">Копировать ссылку</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    </div>
-                  </div>
-
-                  {/* Status badges */}
-                  <div className="flex items-center gap-2 flex-wrap">
-                    {status === 'active' && (
-                      <Badge variant="secondary" className="text-xs bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400">
-                        <CheckCircle2 className="mr-1 h-3 w-3" />
-                        Активен
-                      </Badge>
-                    )}
-                    {status === 'expiring' && (
-                      <Badge variant="secondary" className="text-xs bg-yellow-100 text-yellow-700 dark:bg-yellow-950 dark:text-yellow-400">
-                        <Clock className="h-3 w-3 mr-1" />
-                        Скоро истекает
-                      </Badge>
-                    )}
-                    {status === 'expired' && (
-                      <Badge variant="secondary" className="text-xs bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-400">
-                        <XCircle className="mr-1 h-3 w-3" />
-                        Истёк
-                      </Badge>
-                    )}
-                    {status === 'inactive' && (
-                      <Badge variant="secondary" className="text-xs">
-                        <XCircle className="mr-1 h-3 w-3" />
-                        Неактивен
-                      </Badge>
-                    )}
-                    
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Badge variant="outline" className="text-xs">
-                            <ConnectionIcon className={cn("mr-1 h-3 w-3", getConnectionColor(connectionQuality))} />
-                            {getConnectionQualityText(connectionQuality)}
-                          </Badge>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p className="text-xs">Качество подключения</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-
-                    {workspace.isAssigned && (
-                      <Badge variant="secondary" className="text-xs">Назначено</Badge>
-                    )}
-                    {isMyIntensive && (
-                      <Badge variant="default" className="text-xs">Ваш интенсив</Badge>
-                    )}
-                    {workspace.has2FA && (
-                      <Badge variant="outline" className="text-xs">
-                        <Shield className="mr-1 h-3 w-3" />
-                        2FA
-                      </Badge>
-                    )}
-                    {workspace.messageCountTotal !== undefined && (
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Badge variant="outline" className="text-xs">
-                              <MessageSquare className="mr-1 h-3 w-3" />
-                              {workspace.messageCountPending ?? 0} / {workspace.messageCountTotal}
-                            </Badge>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p className="text-xs">Ожидают отправки / всего сообщений</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    )}
-                    <Badge variant="outline" className="text-[10px] shrink-0" title={workspace.isMultiUser ? 'Есть назначенные участники' : 'Только владелец'}>
-                      {workspace.isMultiUser ? 'Многопользовательское' : 'Индивидуальное'}
-                    </Badge>
-                  </div>
-
-                  {(workspace.todayIntensiveDay != null && workspace.totalIntensiveDays != null) && (
-                    <div className="flex flex-col gap-1 text-xs text-muted-foreground">
-                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                        <span className="font-medium">Сегодня: День {workspace.todayIntensiveDay} из {workspace.totalIntensiveDays}</span>
-                        {workspace.messageDueToday !== undefined && (
-                          <span className={workspace.messageDueToday ? 'text-primary font-medium' : ''}>
-                            По шаблонам: {workspace.messageDueToday ? 'отправить сегодня' : 'отправки нет'}
-                          </span>
-                        )}
-                      </div>
-                      {workspace.nextAnnouncementDay != null && workspace.nextAnnouncementChannels && workspace.nextAnnouncementChannels.length > 0 && (
-                        <p className="text-[11px]">
-                          След. анонс: День {workspace.nextAnnouncementDay}
-                          {workspace.nextAnnouncementChannels.length > 0 && (
-                            <span className="ml-1">
-                              · {workspace.nextAnnouncementChannels.map((c) => `#${c.replace(/^#/, '')}`).join(', ')}
-                            </span>
-                          )}
-                        </p>
-                      )}
-                    </div>
-                  )}
-
-                  {isSup && (workspace.lastEmojiImport || workspace.lastUsersAdd) && (
-                    <div className="text-xs text-muted-foreground space-y-0.5 pt-1">
-                      {workspace.lastEmojiImport && (
-                        <p>Импорт эмодзи: {workspace.lastEmojiImport.userName || workspace.lastEmojiImport.userEmail} · {formatRelativeTime(workspace.lastEmojiImport.at)}</p>
-                      )}
-                      {workspace.lastUsersAdd && (
-                        <p>Добавление пользователей: {workspace.lastUsersAdd.userName || workspace.lastUsersAdd.userEmail} · {formatRelativeTime(workspace.lastUsersAdd.at)}</p>
-                      )}
-                    </div>
-                  )}
-
-                  <div className="flex flex-wrap gap-2 pt-2">
-                    {onWorkspaceSettings && (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="gap-1.5 border-border/80"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          onWorkspaceSettings(workspace)
-                        }}
-                      >
-                        <Settings className="h-4 w-4 shrink-0" />
-                        <span className="hidden sm:inline">Настройки</span>
-                      </Button>
-                    )}
-                    <Button 
-                      onClick={(e) => { e.stopPropagation(); onOpenWorkspace(workspace) }} 
-                      className="flex-1 min-w-[100px]" 
-                      size="sm"
+                <div className="flex items-start gap-1">
+                  <div className="min-w-0 flex-1 space-y-0.5">
+                    <button
+                      type="button"
+                      onClick={() => onOpenWorkspace(workspace)}
+                      className="block max-w-full truncate rounded-sm text-left text-sm font-semibold outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/40"
+                      title={workspace.workspaceName}
                     >
-                      Открыть
-                    </Button>
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button 
-                            onClick={(e) => { e.stopPropagation(); onTestConnection(workspace.id) }} 
-                            variant="outline" 
-                            size="sm" 
-                            className="px-3 gap-1.5"
-                          >
-                            <RefreshCw className="h-4 w-4 shrink-0" />
-                            <span className="hidden sm:inline">Проверить</span>
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p className="text-xs">Проверить подключение к Rocket.Chat</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                    <Button variant="outline" size="sm" asChild>
-                      <Link href={`/dashboard/calendar?workspaceId=${workspace.id}`} onClick={(e) => e.stopPropagation()}>
-                        <Calendar className="h-4 w-4 mr-1" />
-                        <span className="hidden sm:inline">Календарь</span>
-                      </Link>
-                    </Button>
-                    {showArchive && (
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button 
-                              variant="outline" 
-                              size="sm" 
-                              className="text-amber-600 border-amber-200 hover:bg-amber-50 dark:hover:bg-amber-950/20" 
-                              onClick={(e) => { e.stopPropagation(); setArchiveTarget(workspace) }}
-                            >
-                              <Archive className="h-4 w-4 mr-1" />
-                              <span className="hidden sm:inline">В архив</span>
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p className="text-xs">Заархивировать пространство</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    )}
+                      {workspace.workspaceName}
+                    </button>
+                    <p className="truncate font-mono text-xs text-muted-foreground" title={workspace.workspaceUrl}>
+                      {shortUrl(workspace.workspaceUrl)}
+                    </p>
                   </div>
-                </CardContent>
-              </Card>
-            </div>
-          )
-        })}
-      </div>
+                  {renderFavorite(workspace, favorite)}
+                  {renderActions(workspace, showArchive)}
+                </div>
 
-      <AlertDialog open={!!archiveTarget} onOpenChange={(open) => !open && setArchiveTarget(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Заархивировать пространство?</AlertDialogTitle>
-            <AlertDialogDescription>
-              {archiveTarget && (
-                <>Пространство «{archiveTarget.workspaceName}» будет перемещено в архивы. Через 2 недели его можно будет удалить.</>
-              )}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Отмена</AlertDialogCancel>
-            <AlertDialogAction onClick={handleArchive} disabled={archiving}>
-              {archiving ? 'Архивация…' : 'В архив'}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <WorkspaceBadges workspace={workspace} status={status} groupName={groupName} isMyIntensive={isMyIntensive} />
+                </div>
+
+                {progress !== null && (
+                  <div className="space-y-1.5">
+                    <Progress value={progress} className="h-1" />
+                    <p className="text-xs text-muted-foreground">
+                      {intensiveDates}
+                      {endStatus && (
+                        <span className={endStatus.warning ? 'font-medium text-amber-700 dark:text-amber-300' : undefined}>
+                          {intensiveDates ? ' · ' : ''}
+                          {endStatus.label}
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                )}
+
+                <IntensiveLine workspace={workspace} />
+
+                <div className="mt-auto flex items-center justify-between gap-2 pt-1">
+                  <p className="min-w-0 truncate text-xs text-muted-foreground">
+                    <ActivityInfo workspace={workspace} isSup={isSup} />
+                    {workspace.messageCountTotal !== undefined && (workspace.messageCountPending ?? 0) > 0 && (
+                      <span> · {workspace.messageCountPending} в очереди</span>
+                    )}
+                  </p>
+                  <Button size="sm" variant="outline" onClick={() => onOpenWorkspace(workspace)}>
+                    Открыть
+                  </Button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      <ConfirmDialog
+        open={!!archiveTarget}
+        onOpenChange={(open) => !open && setArchiveTarget(null)}
+        title="Заархивировать пространство?"
+        description={
+          archiveTarget && (
+            <>
+              Пространство «{archiveTarget.workspaceName}» будет перемещено в архив. Все запланированные сообщения
+              будут отменены. Через 2 недели пространство удаляется безвозвратно; до этого его можно восстановить в
+              разделе «Архивы».
+            </>
+          )
+        }
+        confirmLabel={archiving ? 'Архивация…' : 'В архив'}
+        destructive
+        loading={archiving}
+        onConfirm={handleArchive}
+      />
     </>
   )
 }

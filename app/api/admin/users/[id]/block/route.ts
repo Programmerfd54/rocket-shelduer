@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { requireAuth } from '@/lib/auth';
+import { requireAuth } from '@/lib/api-auth';
 import { createActivityLog } from '@/app/api/activity/route';
+import { canPerformAction } from '@/lib/permissions';
+import { canManageUserWithRole } from '@/lib/roles';
+import { isUnsafeId } from '@/lib/security';
 
 export async function PATCH(
   request: Request,
@@ -11,13 +14,14 @@ export async function PATCH(
     const currentUser = await requireAuth();
     const { id } = await params;
 
-    if (currentUser.role !== 'SUPPORT' && currentUser.role !== 'ADMIN') {
+    if (!canPerformAction(currentUser, 'admin:users:block')) {
       return NextResponse.json(
         { error: 'Insufficient permissions' },
         { status: 403 }
       );
     }
 
+    if (isUnsafeId(id)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
     if (currentUser.id === id) {
       return NextResponse.json(
         { error: 'Cannot block yourself' },
@@ -25,11 +29,12 @@ export async function PATCH(
       );
     }
 
-    const body = await request.json();
-    const reason = body.reason != null ? String(body.reason).trim() : null;
+    const body = await request.json().catch(() => ({}));
+    const reason = body?.reason != null ? String(body.reason).trim().slice(0, 1000) || null : null;
 
     const targetUser = await prisma.user.findUnique({
       where: { id },
+      select: { id: true, role: true, isBlocked: true },
     });
 
     if (!targetUser) {
@@ -39,10 +44,11 @@ export async function PATCH(
       );
     }
 
-    // SUP не может блокировать суперпользователя
-    if (targetUser.role === 'ADMIN' && currentUser.role !== 'ADMIN') {
+    if (
+      !canManageUserWithRole(currentUser.role, targetUser.role)
+    ) {
       return NextResponse.json(
-        { error: 'Cannot block superuser' },
+        { error: 'Недостаточно прав для блокировки этого пользователя' },
         { status: 403 }
       );
     }
@@ -69,6 +75,7 @@ export async function PATCH(
     const archiveDeleteAt = new Date(archivedAt.getTime() + 14 * 24 * 60 * 60 * 1000);
     const userWorkspaces = await prisma.workspaceConnection.findMany({
       where: { userId: id, isArchived: false },
+      select: { id: true, workspaceName: true },
     });
 
     for (const ws of userWorkspaces) {

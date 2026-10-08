@@ -1,7 +1,16 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { requireAuth } from '@/lib/auth';
+import { requireAuth } from '@/lib/api-auth';
 import { createActivityLog } from '@/app/api/activity/route';
+import { canPerformAction } from '@/lib/permissions';
+import { isUnsafeId } from '@/lib/security';
+
+/** Число дней продления: целое 1..3650 (по умолчанию 30). null — некорректное значение. */
+function parseAddDays(value: unknown): number | null {
+  if (value === undefined || value === null) return 30;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 3650) return null;
+  return value;
+}
 
 export async function PATCH(
   request: Request,
@@ -11,18 +20,23 @@ export async function PATCH(
     const currentUser = await requireAuth();
     const { id } = await params;
 
-    if (currentUser.role !== 'SUPPORT' && currentUser.role !== 'ADMIN') {
+    if (!canPerformAction(currentUser, 'admin:users:extend-vol')) {
       return NextResponse.json(
         { error: 'Insufficient permissions' },
         { status: 403 }
       );
     }
+    if (isUnsafeId(id)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
 
-    const body = await request.json();
-    const addDays = typeof body.addDays === 'number' ? body.addDays : 30;
+    const body = await request.json().catch(() => ({}));
+    const addDays = parseAddDays(body?.addDays);
+    if (addDays == null) {
+      return NextResponse.json({ error: 'addDays: целое число от 1 до 3650' }, { status: 400 });
+    }
 
     const targetUser = await prisma.user.findUnique({
       where: { id },
+      select: { id: true, role: true, volunteerExpiresAt: true },
     });
 
     if (!targetUser) {
@@ -32,7 +46,7 @@ export async function PATCH(
       );
     }
 
-    if (targetUser.role !== 'VOL') {
+    if (targetUser.role !== 'MEMBER' || !targetUser.volunteerExpiresAt) {
       return NextResponse.json(
         { error: 'User is not a volunteer' },
         { status: 400 }

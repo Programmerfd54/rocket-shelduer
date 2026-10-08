@@ -1,10 +1,8 @@
 import { NextResponse } from 'next/server';
-import prisma from '@/lib/prisma';
-import { getCurrentUser } from '@/lib/auth';
+import { getCurrentUser } from '@/lib/api-auth';
+import { getSystemSettings, getBool } from '@/lib/system-settings';
 
-const VISIBILITY_KEYS = ['templatesTabVisible', 'helpMainVisible', 'helpAdminVisible'] as const;
-
-/** Видимость вкладок «Шаблоны» и «Справка» для текущего пользователя (любой авторизованный) */
+/** Оставлено для совместимости: справка отключена; «Шаблоны» в меню не используем. */
 export async function GET() {
   try {
     const user = await getCurrentUser();
@@ -12,19 +10,14 @@ export async function GET() {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
-    const rows = await prisma.systemSetting.findMany({
-      where: { key: { in: [...VISIBILITY_KEYS] } },
-    });
-    const get = (k: string) => rows.find((r) => r.key === k)?.value ?? 'true';
-    const templatesTabVisible = get('templatesTabVisible') !== 'false';
-    const helpMainVisible = get('helpMainVisible') !== 'false';
-    const helpAdminVisible = get('helpAdminVisible') !== 'false';
+    const settings = await getSystemSettings();
+    const templatesTabVisible = getBool(settings, 'templatesTabVisible');
 
     return NextResponse.json({
       templatesTabVisible,
-      helpMainVisible,
-      helpAdminVisible,
-      isAdmin: user.role === 'ADMIN',
+      helpMainVisible: false,
+      helpAdminVisible: false,
+      isAdmin: user.role === 'LEAD_SUP',
     });
   } catch (e) {
     console.error('Help visibility error:', e);

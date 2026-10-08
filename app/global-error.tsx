@@ -16,7 +16,7 @@ export default function GlobalError({
 
   return (
     <html lang="ru">
-      <body>
+      <body className="antialiased font-sans">
         <ErrorPage
           type="server-error"
           errorDetails={error.message}

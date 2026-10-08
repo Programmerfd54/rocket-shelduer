@@ -24,6 +24,7 @@ export type Action =
   | 'admin:audit'
   | 'admin:health'
   | 'admin:invite'
+  | 'admin:users:create'
   | 'admin:workspaces:check'
   | 'admin:workspaces:assign-adm'
   | 'admin:templates:edit'
@@ -47,52 +48,68 @@ export type Action =
   | 'templates:official'
   | 'templates:mine'
   | 'activity:view'
-  | 'dashboard:stats';
+  | 'dashboard:stats'
+  | 'queue:status'
+  // Интенсивы (docs/intensives-api.md)
+  | 'intensives:view'
+  | 'intensives:manage'
+  | 'intensives:link-messages'
+  | 'org-spaces:manage';
 
 /** Роли, которым разрешено действие. */
 const ACTION_ROLES: Record<Action, string[]> = {
-  'admin:panel': ['ADMIN', 'SUPPORT', 'ADM'],
-  'admin:users': ['ADMIN', 'SUPPORT', 'ADM'],
-  'admin:users:edit': ['ADMIN', 'SUPPORT'],
-  'admin:users:block': ['ADMIN', 'SUPPORT'],
-  'admin:users:reset-password': ['ADMIN', 'SUPPORT'],
-  'admin:users:edit-role': ['ADMIN', 'SUPPORT'],
-  'admin:users:edit-restrictions': ['ADMIN'],
-  'admin:users:notes': ['ADMIN', 'SUPPORT'],
-  'admin:users:extend-vol': ['ADMIN', 'SUPPORT'],
-  'admin:users:bulk-extend': ['ADMIN', 'SUPPORT'],
-  'admin:users:assign-workspace': ['ADMIN', 'SUPPORT'],
-  'admin:help': ['ADMIN'],
-  'admin:help:upload': ['ADMIN'],
-  'admin:settings': ['ADMIN'],
-  'admin:security': ['ADMIN'],
-  'admin:audit': ['ADMIN', 'SUPPORT'],
-  'admin:health': ['ADMIN'],
-  'admin:invite': ['ADMIN', 'SUPPORT'],
-  'admin:workspaces:check': ['ADMIN', 'SUPPORT'],
-  'admin:workspaces:assign-adm': ['ADMIN', 'SUPPORT'],
-  'admin:templates:edit': ['ADMIN'],
-  'workspace:archive': ['ADMIN', 'SUPPORT', 'ADM'],
-  'workspace:archive:restore': ['ADMIN', 'SUPPORT', 'ADM'],
-  'workspace:add': ['ADMIN', 'SUPPORT', 'ADM', 'VOL'],
-  'workspace:leave': ['ADMIN', 'SUPPORT', 'ADM'],
-  'workspace:confirm-assignment': ['ADM', 'VOL'],
-  'workspace:users:add': ['ADMIN', 'SUPPORT', 'ADM'],
-  'workspace:users:remove': ['ADMIN', 'SUPPORT', 'ADM'],
-  'workspace:admin:reset-password': ['ADMIN', 'SUPPORT', 'ADM'],
-  'workspace:emoji-import': ['ADMIN', 'SUPPORT', 'ADM'],
-  'workspace:space-settings': ['ADMIN', 'SUPPORT', 'ADM'],
-  'workspace:channels:create': ['ADMIN', 'SUPPORT', 'ADM'],
-  'workspace:channels:set-default': ['ADMIN', 'SUPPORT', 'ADM'],
-  'messages:create': ['ADMIN', 'SUPPORT', 'ADM', 'VOL'],
-  'messages:edit': ['ADMIN', 'SUPPORT', 'ADM', 'VOL'],
-  'messages:delete': ['ADMIN', 'SUPPORT', 'ADM', 'VOL'],
-  'messages:retry': ['ADMIN', 'SUPPORT', 'ADM', 'VOL'],
-  'messages:send-as': ['ADMIN', 'SUPPORT', 'ADM'],
-  'templates:official': ['ADMIN', 'SUPPORT', 'ADM'],
-  'templates:mine': ['ADMIN', 'SUPPORT', 'ADM', 'VOL'],
-  'activity:view': ['ADMIN', 'SUPPORT', 'ADM'],
-  'dashboard:stats': ['ADMIN', 'SUPPORT', 'ADM'],
+  'admin:panel': ['LEAD_SUP', 'SUP'],
+  'admin:users': ['LEAD_SUP', 'SUP'],
+  'admin:users:edit': ['LEAD_SUP', 'SUP'],
+  'admin:users:block': ['LEAD_SUP', 'SUP'],
+  'admin:users:reset-password': ['LEAD_SUP', 'SUP'],
+  'admin:users:edit-role': ['LEAD_SUP', 'SUP'],
+  'admin:users:edit-restrictions': ['LEAD_SUP'],
+  'admin:users:notes': ['LEAD_SUP', 'SUP'],
+  'admin:users:extend-vol': ['LEAD_SUP', 'SUP'],
+  'admin:users:bulk-extend': ['LEAD_SUP', 'SUP'],
+  'admin:users:assign-workspace': ['LEAD_SUP', 'SUP'],
+  'admin:help': ['LEAD_SUP'],
+  'admin:help:upload': ['LEAD_SUP'],
+  'admin:settings': ['LEAD_SUP'],
+  'admin:security': ['LEAD_SUP'],
+  'admin:audit': ['LEAD_SUP', 'SUP'],
+  'admin:health': ['LEAD_SUP'],
+  'admin:invite': ['LEAD_SUP', 'SUP'],
+  'admin:users:create': ['LEAD_SUP', 'SUP'],
+  'admin:workspaces:check': ['LEAD_SUP', 'SUP'],
+  'admin:workspaces:assign-adm': ['LEAD_SUP', 'SUP'],
+  'admin:templates:edit': ['LEAD_SUP'],
+  'workspace:archive': ['LEAD_SUP', 'SUP', 'ADM'],
+  'workspace:archive:restore': ['LEAD_SUP', 'SUP', 'ADM'],
+  'workspace:add': ['LEAD_SUP', 'SUP', 'ADM', 'MEMBER'],
+  'workspace:leave': ['LEAD_SUP', 'SUP', 'ADM'],
+  'workspace:confirm-assignment': ['ADM', 'MEMBER'],
+  'workspace:users:add': ['LEAD_SUP', 'SUP', 'ADM'],
+  'workspace:users:remove': ['LEAD_SUP', 'SUP', 'ADM'],
+  'workspace:admin:reset-password': ['LEAD_SUP', 'SUP', 'ADM'],
+  'workspace:emoji-import': ['LEAD_SUP', 'SUP', 'ADM'],
+  'workspace:space-settings': ['LEAD_SUP', 'SUP', 'ADM'],
+  'workspace:channels:create': ['LEAD_SUP', 'SUP', 'ADM'],
+  'workspace:channels:set-default': ['LEAD_SUP', 'SUP', 'ADM'],
+  'messages:create': ['LEAD_SUP', 'SUP', 'ADM', 'MEMBER'],
+  'messages:edit': ['LEAD_SUP', 'SUP', 'ADM', 'MEMBER'],
+  'messages:delete': ['LEAD_SUP', 'SUP', 'ADM', 'MEMBER'],
+  'messages:retry': ['LEAD_SUP', 'SUP', 'ADM', 'MEMBER'],
+  'messages:send-as': ['LEAD_SUP', 'SUP', 'ADM'],
+  'templates:official': ['LEAD_SUP', 'SUP', 'ADM'],
+  'templates:mine': ['LEAD_SUP', 'SUP', 'ADM', 'MEMBER'],
+  'activity:view': ['LEAD_SUP', 'SUP', 'ADM'],
+  'dashboard:stats': ['LEAD_SUP', 'SUP', 'ADM'],
+  'queue:status': ['LEAD_SUP', 'SUP'],
+  // Смотреть опубликованные интенсивы своих OrgSpace (доступ к пространству проверяется отдельно)
+  'intensives:view': ['LEAD_SUP', 'SUP', 'ADM', 'MEMBER'],
+  // Создать/изменить/опубликовать/отменить/архивировать интенсив, состав плана, пропуск пункта
+  'intensives:manage': ['LEAD_SUP'],
+  // Инструмент привязки старых сообщений к пунктам плана
+  'intensives:link-messages': ['LEAD_SUP'],
+  // OrgSpace: создание, привязка подключений
+  'org-spaces:manage': ['LEAD_SUP'],
 };
 
 /** Ограничения по restrictedFeatures (ключи). */
@@ -101,12 +118,34 @@ const ACTION_RESTRICTIONS: Partial<Record<Action, string>> = {
   'messages:send-as': 'sendAs',
 };
 
+/**
+ * Действия раздела «Админ панель → Пользователи». Ограничение adminPanel (restrictedFeatures)
+ * скрывает не только ссылку, но и запрещает эти действия через API.
+ */
+const ADMIN_PANEL_ACTIONS: ReadonlySet<Action> = new Set<Action>([
+  'admin:panel',
+  'admin:users',
+  'admin:users:edit',
+  'admin:users:block',
+  'admin:users:reset-password',
+  'admin:users:edit-role',
+  // 'admin:users:edit-restrictions' не включаем: Lead_SUP должен иметь возможность снять ограничение
+  'admin:users:notes',
+  'admin:users:extend-vol',
+  'admin:users:bulk-extend',
+  'admin:users:create',
+  'admin:invite',
+  'admin:audit',
+]);
+
 export function canPerformAction(user: CurrentUser, action: Action): boolean {
   if (user.isBlocked) return false;
   const roles = ACTION_ROLES[action];
   if (!roles?.includes(user.role)) return false;
+  const restricted = user.restrictedFeatures ?? [];
   const restrictionKey = ACTION_RESTRICTIONS[action];
-  if (restrictionKey && (user.restrictedFeatures ?? []).includes(restrictionKey)) return false;
+  if (restrictionKey && restricted.includes(restrictionKey)) return false;
+  if (ADMIN_PANEL_ACTIONS.has(action) && restricted.includes('adminPanel')) return false;
   return true;
 }
 
@@ -117,13 +156,8 @@ export function requireAction(user: CurrentUser, action: Action): void {
 }
 
 export function requireAdmin(user: CurrentUser): void {
-  if (user.role !== 'ADMIN') throw new Error('Forbidden');
+  if (user.role !== 'LEAD_SUP') throw new Error('Forbidden');
 }
 
-export function requireSupportOrAdmin(user: CurrentUser): void {
-  if (user.role !== 'SUPPORT' && user.role !== 'ADMIN') throw new Error('Forbidden');
-}
-
-export function requireSupportAdmOrAdmin(user: CurrentUser): void {
-  if (user.role !== 'SUPPORT' && user.role !== 'ADM' && user.role !== 'ADMIN') throw new Error('Forbidden');
-}
+// requireSupportOrAdmin / requireSupportAdmOrAdmin удалены: не использовались и не проверяли блокировку.
+// Для API используйте guards из lib/api-auth (они отклоняют заблокированных) или requireAction.

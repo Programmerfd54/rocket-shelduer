@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { sameRcInstanceUrl } from '@/lib/workspace-rc';
-import { requireAuth, isUserEffectivelyBlocked } from '@/lib/auth';
+import { isUserEffectivelyBlocked } from '@/lib/auth';
+import { requireAuth } from '@/lib/api-auth';
 import { encryptPassword, encryptAuthToken } from '@/lib/encryption';
 import { RocketChatClient } from '@/lib/rocketchat';
 import { logSecurityEvent, getClientIp, getSafeErrorMessage, isSuspiciousInput, SecurityEventType } from '@/lib/security';
@@ -51,6 +52,8 @@ export async function GET(request: Request) {
         workspaceName: true,
         workspaceUrl: true,
         username: true,
+        rcAuthMethod: true,
+        userId_RC: true,
         has2FA: true,
         isActive: true,
         lastConnected: true,
@@ -65,8 +68,8 @@ export async function GET(request: Request) {
       orderBy: { createdAt: 'desc' },
     });
 
-    // ADM, VOL и SUPPORT: свои пространства + назначенные. При том же URL показываем только назначенное (A), своё (B) скрываем — нет дубля, всегда многопользовательское и без повторного ввода кредов.
-    if (user.role === 'ADM' || user.role === 'VOL' || user.role === 'SUPPORT') {
+    // Все роли: свои пространства + назначенные (WorkspaceAdminAssignment). При том же инстансе RC показываем только назначенное (A), своё (B) скрываем — нет дубля, всегда многопользовательское и без повторного ввода кредов.
+    {
       try {
         const assignments = await prisma.workspaceAdminAssignment.findMany({
           where: { userId: user.id },
@@ -109,8 +112,6 @@ export async function GET(request: Request) {
       } catch (_) {
         workspaces = ownWorkspaces.map((w) => ({ ...w, isAssigned: false }));
       }
-    } else {
-      workspaces = ownWorkspaces.map((w) => ({ ...w }));
     }
 
     const workspaceIds = workspaces.map((w) => w.id);
@@ -158,7 +159,7 @@ export async function GET(request: Request) {
     let actionLogWorkspaceIds = workspaceIds;
     let connectionIdToNormalizedUrl: Record<string, string> = {};
     let userWorkspaceIdsByNormalizedUrl: Record<string, string[]> = {};
-    if (user.role === 'SUPPORT') {
+    if (user.role === 'SUP') {
       const normalizeUrl = (url: string) => url.replace(/\/$/, '').toLowerCase();
       for (const w of workspaces) {
         const key = normalizeUrl(w.workspaceUrl);
@@ -190,7 +191,7 @@ export async function GET(request: Request) {
         _count: { id: true },
         where: { workspaceId: { in: workspaceIds }, status: 'PENDING' },
       }),
-      user.role === 'SUPPORT' && actionLogWorkspaceIds.length > 0
+      user.role === 'SUP' && actionLogWorkspaceIds.length > 0
         ? prisma.workspaceActionLog.findMany({
             where: { workspaceId: { in: actionLogWorkspaceIds } },
             orderBy: { createdAt: 'desc' },
@@ -203,7 +204,7 @@ export async function GET(request: Request) {
     const pendingByWs = Object.fromEntries(pendingCounts.map((c) => [c.workspaceId, c._count.id]));
     const lastEmojiByWs: Record<string, { userName: string | null; userEmail: string; at: string }> = {};
     const lastUsersAddByWs: Record<string, { userName: string | null; userEmail: string; at: string }> = {};
-    if (user.role === 'SUPPORT' && Object.keys(connectionIdToNormalizedUrl).length > 0 && Object.keys(userWorkspaceIdsByNormalizedUrl).length > 0) {
+    if (user.role === 'SUP' && Object.keys(connectionIdToNormalizedUrl).length > 0 && Object.keys(userWorkspaceIdsByNormalizedUrl).length > 0) {
       for (const log of actionLogsRaw) {
         const entry = { userName: log.user.name, userEmail: log.user.email, at: log.createdAt.toISOString() };
         const url = connectionIdToNormalizedUrl[log.workspaceId];
@@ -258,7 +259,8 @@ export async function GET(request: Request) {
         }
       }
       const messageDueToday =
-        todayIntensiveDay != null && (userTemplateDays.has(todayIntensiveDay) || ['ADM', 'SUPPORT'].includes(user.role));
+        todayIntensiveDay != null &&
+        (userTemplateDays.has(todayIntensiveDay) || ['ADM', 'SUP'].includes(user.role));
 
       // Следующий анонс: ближайший день (>= сегодня) с шаблоном и каналы для него
       let nextAnnouncementDay: number | undefined;
@@ -270,7 +272,10 @@ export async function GET(request: Request) {
           officialByDay.get(t.intensiveDay)!.add(t.channel);
         };
         if (user.role === 'ADM') ADM_TEMPLATES.forEach(addOfficial);
-        if (user.role === 'SUPPORT') { ADM_TEMPLATES.forEach(addOfficial); SUP_TEMPLATES.forEach(addOfficial); }
+        if (user.role === 'SUP') {
+          ADM_TEMPLATES.forEach(addOfficial);
+          SUP_TEMPLATES.forEach(addOfficial);
+        }
         let nextDay: number | null = null;
         for (let d = todayIntensiveDay; d <= totalIntensiveDays; d++) {
           const userCh = userTemplatesByDay.get(d);
@@ -304,7 +309,7 @@ export async function GET(request: Request) {
         messageDueToday: w.startDate && w.endDate ? messageDueToday : undefined,
         nextAnnouncementDay: nextAnnouncementDay ?? undefined,
         nextAnnouncementChannels: nextAnnouncementChannels ?? undefined,
-        ...(user.role === 'SUPPORT'
+        ...(user.role === 'SUP'
           ? {
               lastEmojiImport: lastEmojiByWs[w.id] ?? null,
               lastUsersAdd: lastUsersAddByWs[w.id] ?? null,
@@ -337,27 +342,71 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const user = await requireAuth();
-    // Волонтёр не может создавать пространство — только получать по назначению от администраторов
-    if (user.role === 'VOL') {
+    // Волонтёр (MEMBER с периодом) не может создавать пространство — только получать по назначению
+    if (user.role === 'MEMBER' && user.volunteerExpiresAt != null) {
       return NextResponse.json(
-        { error: 'Волонтёр не может создавать пространство. Добавить вас в пространство может только администратор (SUP/ADMIN).' },
+        { error: 'Волонтёр не может создавать пространство. Добавить вас в пространство может только администратор (SUP / Lead_SUP).' },
         { status: 403 }
       );
     }
     const body = await request.json();
-    const { workspaceName, workspaceUrl, username, password, has2FA, startDate, endDate, totpCode } = body;
+    const authMethodRaw = body?.authMethod;
+    const authMethod =
+      authMethodRaw === 'personal_token' || authMethodRaw === 'token' ? 'personal_token' : 'password';
+    const {
+      workspaceName,
+      workspaceUrl,
+      username,
+      password,
+      has2FA,
+      startDate,
+      endDate,
+      totpCode,
+    } = body;
+    const personalToken =
+      typeof body.personalToken === 'string' ? body.personalToken.trim() : '';
+    const rcUserIdFromBody =
+      typeof body.rcUserId === 'string' ? body.rcUserId.trim() : '';
 
-    if (!workspaceName || !workspaceUrl || !username || !password) {
+    if (!workspaceName || !workspaceUrl || !username) {
       return NextResponse.json(
-        { error: 'All fields are required' },
+        { error: 'Укажите название пространства, URL и логин Rocket.Chat.' },
         { status: 400 }
       );
+    }
+    const isDateOrEmpty = (v: unknown) =>
+      v === undefined || v === null || v === '' || (typeof v === 'string' && !Number.isNaN(new Date(v).getTime()));
+    if (
+      typeof workspaceName !== 'string' || workspaceName.length > 200 ||
+      typeof workspaceUrl !== 'string' || workspaceUrl.length > 500 ||
+      typeof username !== 'string' || username.length > 256 ||
+      (password !== undefined && password !== null && (typeof password !== 'string' || password.length > 4096)) ||
+      (totpCode !== undefined && totpCode !== null && typeof totpCode !== 'string') ||
+      personalToken.length > 4096 || rcUserIdFromBody.length > 256 ||
+      !isDateOrEmpty(startDate) || !isDateOrEmpty(endDate)
+    ) {
+      return NextResponse.json({ error: 'Invalid input' }, { status: 400 });
+    }
+
+    if (authMethod === 'password') {
+      if (!password) {
+        return NextResponse.json({ error: 'Укажите пароль.' }, { status: 400 });
+      }
+    } else {
+      if (!personalToken || !rcUserIdFromBody) {
+        return NextResponse.json(
+          { error: 'Укажите личный токен доступа и User ID из профиля Rocket.Chat.' },
+          { status: 400 }
+        );
+      }
     }
 
     if (
       isSuspiciousInput(workspaceUrl) ||
       isSuspiciousInput(username) ||
-      isSuspiciousInput(password)
+      (authMethod === 'password' && password && isSuspiciousInput(password)) ||
+      (authMethod === 'personal_token' &&
+        (isSuspiciousInput(personalToken) || isSuspiciousInput(rcUserIdFromBody)))
     ) {
       const ip = getClientIp(request);
       const userAgent = request.headers.get('user-agent') ?? undefined;
@@ -429,67 +478,105 @@ export async function POST(request: Request) {
       );
     }
 
-    // Запрет: другой пользователь уже подключил это пространство с такими же учётными данными (тестовый пользователь)
-    const sameCredentialsByOther = await prisma.workspaceConnection.findFirst({
-      where: {
-        userId: { not: user.id },
-        OR: [
-          { workspaceUrl: normalizedUrl },
-          { workspaceUrl: normalizedUrl + '/' },
-        ],
-        username: username.trim(),
-      },
-    });
-
-    if (sameCredentialsByOther) {
-      return NextResponse.json(
-        {
-          error:
-            'Подключение с такими учётными данными уже используется другим пользователем. Подключайтесь со своими учётными данными: логин — ваш логин в системе (как в планировщике), пароль — пароль от LDAP.',
+    // Запрет: другой пользователь уже подключил это пространство с теми же учётными данными
+    if (authMethod === 'password') {
+      const sameCredentialsByOther = await prisma.workspaceConnection.findFirst({
+        where: {
+          userId: { not: user.id },
+          OR: [
+            { workspaceUrl: normalizedUrl },
+            { workspaceUrl: normalizedUrl + '/' },
+          ],
+          username: username.trim(),
         },
-        { status: 403 }
-      );
+      });
+
+      if (sameCredentialsByOther) {
+        return NextResponse.json(
+          {
+            error:
+              'Подключение с такими учётными данными уже используется другим пользователем. Подключайтесь со своими учётными данными: логин — ваш логин в системе (как в планировщике), пароль — пароль от LDAP.',
+          },
+          { status: 403 }
+        );
+      }
+    } else {
+      const sameTokenAccountByOther = await prisma.workspaceConnection.findFirst({
+        where: {
+          userId: { not: user.id },
+          OR: [
+            { workspaceUrl: normalizedUrl },
+            { workspaceUrl: normalizedUrl + '/' },
+          ],
+          userId_RC: rcUserIdFromBody,
+          rcAuthMethod: 'personal_token',
+        },
+      });
+      if (sameTokenAccountByOther) {
+        return NextResponse.json(
+          {
+            error:
+              'Этот User ID Rocket.Chat уже подключён к этому серверу другим пользователем системы.',
+          },
+          { status: 403 }
+        );
+      }
     }
 
     const STAFF_HOST = 'rocketchat-staff.21-school.ru';
     const isStaffHost = normalizedUrl.toLowerCase().includes(STAFF_HOST);
 
-    const rcClient = new RocketChatClient(normalizedUrl);
-    let authToken: string;
+    let encryptedPassword: string;
+    let encryptedToken: string;
     let rcUserId: string;
-    try {
-      const loginResult = await rcClient.login(
-        username,
-        password,
-        typeof totpCode === 'string' && totpCode.trim() ? totpCode.trim() : undefined
-      );
-      authToken = loginResult.authToken;
-      rcUserId = loginResult.userId;
-    } catch (loginErr: unknown) {
-      const e = loginErr as Error & { code?: string };
-      if (e?.message === 'TOTP_REQUIRED' || e?.code === 'totp-required') {
-        return NextResponse.json(
-          {
-            requiresTotp: true,
-            error: 'Требуется код двухфакторной аутентификации из приложения-аутентификатора.',
-          },
-          { status: 400 }
-        );
-      }
-      throw loginErr;
-    }
+    let has2FAEffective: boolean;
 
-    const encryptedPassword = encryptPassword(password);
-    const encryptedToken = encryptAuthToken(authToken);
+    if (authMethod === 'personal_token') {
+      await RocketChatClient.validatePersonalAccessToken(
+        normalizedUrl,
+        personalToken,
+        rcUserIdFromBody,
+      );
+      encryptedPassword = encryptPassword('');
+      encryptedToken = encryptAuthToken(personalToken);
+      rcUserId = rcUserIdFromBody;
+      has2FAEffective = false;
+    } else {
+      const rcClient = new RocketChatClient(normalizedUrl);
+      try {
+        const loginResult = await rcClient.login(
+          String(username).trim(),
+          password,
+          typeof totpCode === 'string' && totpCode.trim() ? totpCode.trim() : undefined
+        );
+        encryptedPassword = encryptPassword(password);
+        encryptedToken = encryptAuthToken(loginResult.authToken);
+        rcUserId = loginResult.userId;
+        has2FAEffective = Boolean(has2FA) || isStaffHost;
+      } catch (loginErr: unknown) {
+        const e = loginErr as Error & { code?: string };
+        if (e?.message === 'TOTP_REQUIRED' || e?.code === 'totp-required') {
+          return NextResponse.json(
+            {
+              requiresTotp: true,
+              error: 'Требуется код двухфакторной аутентификации из приложения-аутентификатора.',
+            },
+            { status: 400 }
+          );
+        }
+        throw loginErr;
+      }
+    }
 
     const workspace = await prisma.workspaceConnection.create({
       data: {
         userId: user.id,
         workspaceName,
         workspaceUrl: normalizedUrl,
-        username,
+        username: String(username).trim(),
         encryptedPassword,
-        has2FA: Boolean(has2FA) || isStaffHost,
+        rcAuthMethod: authMethod,
+        has2FA: has2FAEffective,
         authToken: encryptedToken,
         userId_RC: rcUserId,
         isActive: true,
@@ -502,6 +589,7 @@ export async function POST(request: Request) {
         workspaceName: true,
         workspaceUrl: true,
         username: true,
+        rcAuthMethod: true,
         has2FA: true,
         isActive: true,
         lastConnected: true,

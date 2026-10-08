@@ -25,7 +25,7 @@
 
 **Важно:** на сервере без нормального интернета **не используйте** `build --no-cache`. Из-за этого Docker пересоберёт всё с нуля, `npm install` снова пойдет в сеть и упадёт по таймауту. Для обновления кода достаточно `up -d --build` — подхватятся изменения и пересоберутся только нужные слои (кэш `npm install` сохранится).
 
-**После запуска:** открыть в браузере **https://sheduler.yar.21-school.ru** (через nginx) или **http://IP:4001**, войти как **admin** / **admin** и сменить пароль в настройках.
+**После запуска:** открыть в браузере **https://sheduler.yar.21-school.ru** (через nginx) или **http://IP:4001**, войти как **admin** с временным паролем из лога (`docker compose --env-file .env -f deploy/docker-compose.yml logs app | grep -A1 'Временный пароль'`) и задать новый пароль (система потребует это при первом входе).
 
 **Остановка:** `docker compose -f deploy/docker-compose.yml down`
 
@@ -44,7 +44,10 @@
 Скрипт создаёт:
 - `JWT_SECRET`, `ENCRYPTION_KEY` — случайные строки
 - `CRON_SECRET`, `HEALTH_CHECK_SECRET` (случайные строки)
-- `DATABASE_URL=postgresql://postgres:password@postgres:5432/rocketchat_scheduler` (хост `postgres` — имя сервиса в docker-compose)
+- `POSTGRES_PASSWORD` (случайный) и `DATABASE_URL=postgresql://postgres:<POSTGRES_PASSWORD>@postgres:5432/rocketchat_scheduler` (хост `postgres` — имя сервиса в docker-compose)
+- `TRUSTED_PROXY_HOPS=1`, `APP_BIND_ADDRESS=127.0.0.1` (порт 4001 доступен только nginx на этом хосте)
+
+Файл `.env` содержит секреты: создавайте его с правами 600 (`(umask 077; ./deploy/generate-env.sh > .env)`) и не перегенерируйте на работающей инсталляции (смена `ENCRYPTION_KEY` сделает сохранённые пароли Rocket.Chat нерасшифровываемыми).
 - `NEXT_PUBLIC_APP_URL` и `APP_URL` = `https://sheduler.yar.21-school.ru`
 - `COOKIE_SECURE=true` (для HTTPS)
 
@@ -65,15 +68,15 @@ APP_HOST=другой-хост.ru ./deploy/generate-env.sh > .env
 Или вручную:
 
 ```bash
-./deploy/generate-env.sh > .env
-docker compose -f deploy/docker-compose.yml up -d --build
+(umask 077; bash ./deploy/generate-env.sh > .env)
+docker compose --env-file .env -f deploy/docker-compose.yml up -d --build
 ```
 
 Что происходит:
-- **postgres**: создаётся БД `rocketchat_scheduler`, пользователь `postgres`, пароль `password`.
+- **postgres**: создаётся БД `rocketchat_scheduler`, пользователь `postgres`, пароль из `POSTGRES_PASSWORD` (если переменной нет — устаревший `password`; см. «Смена пароля БД» ниже).
 - **app**: `npm install` уже выполнен в образе, при старте контейнера:
   - `npx prisma migrate deploy`
-  - `npm run create-superuser` (логин `admin`, пароль `admin` — сменить после входа)
+  - `create-superuser` (только если Lead_SUP ещё нет: логин `admin`, случайный временный пароль в логе или `SUPERUSER_PASSWORD`; смена при первом входе обязательна)
   - `npm start`
 
 Приложение слушает порт **4001**. Nginx должен проксировать на `http://127.0.0.1:4001` (или `http://IP:4001`).
@@ -82,7 +85,16 @@ docker compose -f deploy/docker-compose.yml up -d --build
 
 - Список контейнеров: `docker compose -f deploy/docker-compose.yml ps`
 - Логи приложения: `docker compose -f deploy/docker-compose.yml logs -f app`
-- Первый вход: логин `admin`, пароль `admin`; затем сменить в настройках.
+- Первый вход: логин `admin`, временный пароль из лога контейнера `app`; система сразу попросит задать новый.
+
+### Смена пароля БД (для инсталляций, созданных со старым `password`)
+
+```bash
+NEW=$(openssl rand -hex 24)
+docker compose --env-file .env -f deploy/docker-compose.yml exec postgres psql -U postgres -c "ALTER USER postgres PASSWORD '$NEW';"
+echo "POSTGRES_PASSWORD=\"$NEW\"" >> .env   # и обновите DATABASE_URL, если он задан в .env
+docker compose --env-file .env -f deploy/docker-compose.yml up -d
+```
 
 ## 4. Остановка
 

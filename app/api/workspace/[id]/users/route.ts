@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { requireAuth } from '@/lib/auth';
+import { getSafeErrorMessage } from '@/lib/security';
+import { requireAuth } from '@/lib/api-auth';
+import { assertWorkspaceBulkUsersAccess } from '@/lib/workspace-bulk-users-access';
 
 export async function GET(
   request: Request,
@@ -18,18 +20,9 @@ export async function GET(
     }
     const { id: workspaceId } = await params;
 
-    const workspace = await prisma.workspaceConnection.findFirst({
-      where: {
-        id: workspaceId,
-        userId: user.id,
-      },
-    });
-
-    if (!workspace) {
-      return NextResponse.json(
-        { error: 'Workspace not found' },
-        { status: 404 }
-      );
+    const access = await assertWorkspaceBulkUsersAccess(user.id, workspaceId);
+    if (!access.ok) {
+      return NextResponse.json({ error: access.error }, { status: access.status });
     }
 
     const added = await prisma.workspaceAddedUser.findMany({
@@ -61,7 +54,7 @@ export async function GET(
       );
     }
     return NextResponse.json(
-      { error: error?.message || 'Failed to fetch users' },
+      { error: getSafeErrorMessage(error, 'Failed to fetch users') },
       { status: 500 }
     );
   }

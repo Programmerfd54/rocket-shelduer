@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import type { ActivityType } from '@prisma/client';
-import { requireAuth } from '@/lib/auth';
+import { ActivityType as ActivityTypeEnum } from '@prisma/client';
+import { requireAuth } from '@/lib/api-auth';
 
 export async function GET(request: Request) {
   try {
@@ -11,16 +12,16 @@ export async function GET(request: Request) {
     const scope = searchParams.get('scope'); // vol — только VOL (для SUP), all — все (для ADMIN)
 
     const where: any = { userId: user.id };
-    if (user.role === 'ADMIN' && scope === 'all') {
+    if (user.role === 'LEAD_SUP' && scope === 'all') {
       delete where.userId; // ADMIN видит всю активность
-    } else if (user.role === 'SUPPORT' && scope === 'vol') {
+    } else if (user.role === 'SUP' && scope === 'vol') {
       // SUP видит только активность VOL, никогда — ADM и других
       const restricted = (user.restrictedFeatures ?? []) as string[];
       const sys = await prisma.systemSetting.findUnique({ where: { key: 'activityViewVolSup' } });
       const sysEnabled = (sys?.value ?? 'true') === 'true';
       if (!restricted.includes('activityView') && sysEnabled) {
         const volUserIds = await prisma.user.findMany({
-          where: { role: 'VOL' },
+          where: { role: 'MEMBER', volunteerExpiresAt: { not: null } },
           select: { id: true },
         }).then((rows) => rows.map((r) => r.id));
         where.userId = { in: volUserIds };
@@ -28,6 +29,9 @@ export async function GET(request: Request) {
       // иначе остаётся where.userId = user.id (только своя активность)
     }
     if (action && action !== 'all') {
+      if (!(Object.values(ActivityTypeEnum) as string[]).includes(action)) {
+        return NextResponse.json({ error: 'Bad request' }, { status: 400 });
+      }
       where.action = action;
     }
 

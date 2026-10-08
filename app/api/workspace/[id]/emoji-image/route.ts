@@ -1,11 +1,79 @@
 import { NextResponse } from 'next/server';
-import prisma from '@/lib/prisma';
 import { requireAuth } from '@/lib/auth';
-import { decryptAuthToken } from '@/lib/encryption';
+import { resolveEmojiWorkspace } from '@/lib/emoji-workspace';
+import { isSsrfUrl, safeFetch } from '@/lib/ssrf';
+import {
+  classifyEmojiImage,
+  isSafeEmojiKey,
+  leadingJunkOffset,
+  normalizeEmojiExt,
+  EMOJI_IMAGE_MAX_BYTES,
+  EMOJI_SVG_MAX_BYTES,
+  RASTER_CONTENT_TYPE,
+} from '@/lib/emoji-image';
+import { readBodyLimited } from '@/lib/emoji-safe-fetch';
+
+/** Картинки эмодзи меняются редко; в URL есть &t=<updatedAt>, поэтому кэш безопасен. private — ответ зависит от сессии. */
+const OK_CACHE = 'private, max-age=3600';
+/** Ошибки кэшируем ненадолго, чтобы не долбить RC на каждый рендер, но и не «залипать». */
+const ERR_CACHE = 'private, max-age=30';
+const RC_IMAGE_TIMEOUT_MS = 10_000;
+const MAX_REDIRECTS = 3;
+/** Защита от «пиксельной бомбы» при растеризации SVG/конвертации. */
+const SHARP_LIMIT_PIXELS = 16_000_000;
+
+/**
+ * Заголовки ответа-картинки: тип зафиксирован, nosniff, а CSP sandbox не даёт исполнить что-либо,
+ * даже если ответ откроют напрямую в браузере (защита от stored XSS через SVG/HTML от сервера RC).
+ */
+const imageHeaders = (contentType: string) => ({
+  'Content-Type': contentType,
+  'Cache-Control': OK_CACHE,
+  'X-Content-Type-Options': 'nosniff',
+  'Content-Security-Policy': "default-src 'none'; sandbox",
+  'Content-Disposition': 'inline; filename="emoji"',
+});
+
+const errorResponse = (status: number) =>
+  new NextResponse(null, {
+    status,
+    headers: { 'Cache-Control': ERR_CACHE, 'X-Content-Type-Options': 'nosniff' },
+  });
+const notFound = () => errorResponse(404);
+
+/**
+ * GET к RC без автоматических редиректов: следуем только за редиректами на тот же origin
+ * (иначе X-Auth-Token/X-User-Id ушли бы на чужой хост, а редирект мог бы вести во внутреннюю сеть).
+ */
+async function fetchRc(url: string, origin: string, headers: Record<string, string>): Promise<Response | null> {
+  let current = url;
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    // safeFetch: DNS-проверка + проверка адреса в момент подключения (DNS rebinding)
+    const res = await safeFetch(current, {
+      headers,
+      cache: 'no-store',
+      redirect: 'manual',
+      signal: AbortSignal.timeout(RC_IMAGE_TIMEOUT_MS),
+    });
+    if (res.status >= 300 && res.status < 400) {
+      const loc = res.headers.get('location');
+      await res.body?.cancel().catch(() => {});
+      if (!loc) return null;
+      const next = new URL(loc, current);
+      if (next.origin !== origin) return null;
+      current = next.toString();
+      continue;
+    }
+    return res;
+  }
+  return null;
+}
 
 /**
  * Прокси изображений кастомных эмодзи Rocket.Chat.
  * Запрос с нашего домена устраняет CORS — картинки отображаются в пикере и в предпросмотре.
+ * Доступ и креды — как у /emojis (своё подключение, назначение ADM, «эффективное» подключение к тому же RC).
+ * Отдаются только растровые картинки (png/gif/jpeg/webp); SVG растеризуется в PNG, SVG/HTML как есть не отдаются никогда.
  */
 export async function GET(
   request: Request,
@@ -13,11 +81,14 @@ export async function GET(
 ) {
   try {
     const user = await requireAuth();
-    const { id: rawId } = await params;
+    const { id: workspaceParam } = await params;
     const { searchParams } = new URL(request.url);
-    const name = searchParams.get('name');
-    const emojiId = searchParams.get('id');
-    const extension = searchParams.get('ext') || 'png';
+    const rawName = searchParams.get('name');
+    const rawId = searchParams.get('id');
+    // name/id подставляются в путь RC: отбрасываем «.», «..», разделители пути, управляющие символы
+    const name = isSafeEmojiKey(rawName) ? rawName : null;
+    const emojiId = isSafeEmojiKey(rawId) ? rawId : null;
+    const extension = normalizeEmojiExt(searchParams.get('ext'));
 
     if (!name && !emojiId) {
       return NextResponse.json(
@@ -26,158 +97,125 @@ export async function GET(
       );
     }
 
-    // Если в путь попал URL воркспейса (например из закладки), ищем по workspaceUrl
-    const looksLikeUrl = /^https?:\//i.test(rawId) || rawId.includes('://') || /^[a-z0-9.-]+\.(ru|com|org)/i.test(rawId);
-    const normalizeUrl = (u: string) => u.replace(/^https?:\/+/, 'https://').replace(/([^:])\/+/g, '$1/').replace(/\/$/, '');
-    const normalized = looksLikeUrl ? normalizeUrl(rawId) : null;
-    const workspace = await prisma.workspaceConnection.findFirst({
-      where: looksLikeUrl
-        ? {
-            userId: user.id,
-            OR: [
-              { workspaceUrl: rawId },
-              { workspaceUrl: normalized! },
-              { workspaceUrl: `${normalized}/` },
-              { workspaceUrl: rawId.startsWith('http') ? rawId : `https://${rawId}` },
-            ],
-          }
-        : {
-            id: rawId,
-            userId: user.id,
-          },
-      select: { workspaceUrl: true, authToken: true, userId_RC: true },
-    });
-
-    if (!workspace?.workspaceUrl) {
-      return new NextResponse(null, { status: 404 });
+    const access = await resolveEmojiWorkspace(user.id, workspaceParam);
+    if (!access?.workspaceUrl) {
+      return notFound();
     }
 
-    const baseUrl = workspace.workspaceUrl.replace(/\/$/, '');
-    const decryptedToken = decryptAuthToken(workspace.authToken);
+    const baseUrl = access.workspaceUrl.replace(/\/$/, '');
+    // URL воркспейса проверяется при сохранении; повторная проверка — защита от старых/изменённых записей.
+    if (!/^https?:\/\//i.test(baseUrl) || isSsrfUrl(baseUrl)) {
+      return notFound();
+    }
+    const origin = new URL(baseUrl).origin;
     const authHeaders: Record<string, string> = {}
-    if (decryptedToken && workspace.userId_RC) {
-      authHeaders['X-Auth-Token'] = decryptedToken
-      authHeaders['X-User-Id'] = workspace.userId_RC
+    if (access.auth) {
+      authHeaders['X-Auth-Token'] = access.auth.authToken
+      authHeaders['X-User-Id'] = access.auth.userId_RC
     }
 
-    // Rocket.Chat отдаёт картинки по пути /emoji-custom/{_id}.{ext} или по имени (пробуем с auth)
+    // Rocket.Chat раздаёт картинки по ИМЕНИ: /emoji-custom/{name}.{ext} (не по _id).
+    // Сначала пробуем имя с заявленным расширением, затем прочие расширения, и только потом _id как запасной вариант.
     const pathsToTry: string[] = []
+    const push = (p: string) => { if (!pathsToTry.includes(p)) pathsToTry.push(p) }
     const extNorm = extension === 'jpeg' ? 'jpg' : extension
-    if (emojiId) {
-      pathsToTry.push(`emoji-custom/${emojiId}.${extension}`)
-      if (extension === 'jpeg') pathsToTry.push(`emoji-custom/${emojiId}.jpg`)
-      pathsToTry.push(`emoji-custom/${emojiId}.${extNorm}`)
-      pathsToTry.push(`emoji-custom/${emojiId}`)
-      if (extension !== 'gif') pathsToTry.push(`emoji-custom/${emojiId}.gif`)
-    }
+    const otherExts = ['png', 'gif', 'jpg', 'svg', 'webp'].filter((e) => e !== extNorm && e !== extension)
     if (name) {
       const enc = encodeURIComponent(name)
-      pathsToTry.push(`emoji-custom/${enc}.${extension}`)
-      pathsToTry.push(`emoji-custom/${name}.${extension}`)
-      if (extension === 'jpeg') {
-        pathsToTry.push(`emoji-custom/${enc}.jpg`)
-        pathsToTry.push(`emoji-custom/${name}.jpg`)
-      }
-      pathsToTry.push(`emoji-custom/${enc}`)
-      pathsToTry.push(`emoji-custom/${name}`)
-      if (extension !== 'gif') {
-        pathsToTry.push(`emoji-custom/${enc}.gif`)
-        pathsToTry.push(`emoji-custom/${name}.gif`)
-      }
+      push(`emoji-custom/${enc}.${extension}`)
+      if (extNorm !== extension) push(`emoji-custom/${enc}.${extNorm}`)
+      for (const e of otherExts) push(`emoji-custom/${enc}.${e}`)
+      push(`emoji-custom/${enc}`)
+    }
+    if (emojiId) {
+      const enc = encodeURIComponent(emojiId)
+      push(`emoji-custom/${enc}.${extension}`)
+      push(`emoji-custom/${enc}`)
     }
 
-    // Без кэша — иначе Next.js может отдать закэшированный 404/HTML и картинки не появятся
+    // Без кэша Next.js — иначе может отдать закэшированный 404/HTML. Кэшируем только ответ браузеру (Cache-Control).
+    // HTML-ответ (SPA-заглушка RC для неизвестного пути, статус 200) считаем «не найдено» и пробуем следующий путь.
     let imageRes: Response | null = null
     for (const path of pathsToTry) {
       const imageUrl = `${baseUrl}/${path}`
-      imageRes = await fetch(imageUrl, {
-        headers: { Accept: 'image/png, image/gif, image/jpeg, image/webp, image/*', ...authHeaders },
-        cache: 'no-store',
-      })
-      if (imageRes.ok) break
+      try {
+        const res = await fetchRc(
+          imageUrl,
+          origin,
+          { Accept: 'image/png, image/gif, image/jpeg, image/webp, image/svg+xml, image/*', ...authHeaders }
+        )
+        imageRes = res
+        if (!res) continue
+        const ct = res.headers.get('content-type') || ''
+        if (res.ok && !ct.toLowerCase().includes('text/html')) break
+        await res.body?.cancel().catch(() => {})
+        if (res.ok) imageRes = null
+      } catch (e) {
+        imageRes = null
+        console.warn('[emoji-image] fetch failed:', path, (e as Error).message)
+      }
     }
 
     if (!imageRes || !imageRes.ok) {
-      console.warn('[emoji-image] Not found:', { name, emojiId, baseUrl, tried: pathsToTry.length, status: imageRes?.status })
-      return new NextResponse(null, { status: 404 })
+      console.warn('[emoji-image] Not found:', { name, emojiId, tried: pathsToTry.length, status: imageRes?.status })
+      return notFound()
     }
 
-    const blob = await imageRes.arrayBuffer()
-    let bytes = new Uint8Array(blob)
+    let raw: Uint8Array
+    try {
+      raw = await readBodyLimited(imageRes, EMOJI_IMAGE_MAX_BYTES)
+    } catch {
+      console.warn('[emoji-image] Image too large:', { name, emojiId })
+      return errorResponse(502)
+    }
     const contentType = imageRes.headers.get('content-type') || ''
 
     // Убираем BOM и ведущие пробелы — RC иногда отдаёт с префиксом, тогда сигнатура не совпадает
-    let offset = 0
-    while (offset < Math.min(32, bytes.length) && (bytes[offset] === 0xef && bytes[offset + 1] === 0xbb && bytes[offset + 2] === 0xbf || bytes[offset] <= 0x20)) {
-      if (bytes[offset] === 0xef && bytes[offset + 1] === 0xbb && bytes[offset + 2] === 0xbf) offset += 3
-      else offset += 1
-    }
-    if (offset > 0) bytes = bytes.subarray(offset)
+    const bytes = raw.subarray(leadingJunkOffset(raw))
+    const kind = classifyEmojiImage(bytes, contentType)
 
-    const peek = new TextDecoder('utf-8', { fatal: false }).decode(bytes.slice(0, 256))
-    const looksLikeHtml = /^\s*<!DOCTYPE/i.test(peek) || /^\s*<html[\s>]/i.test(peek)
-    const looksLikeSvg = /^\s*(<\?xml|<\s*svg)/i.test(peek)
-    const pngSig = bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47
-    const gifSig = bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46
-    const jpegSig = bytes[0] === 0xff && bytes[1] === 0xd8
-
-    if (looksLikeHtml || contentType.toLowerCase().includes('text/html')) {
+    if (kind === 'html') {
       console.warn('[emoji-image] Response is HTML, not image:', { name, emojiId })
-      return new NextResponse(null, { status: 502 })
+      return errorResponse(502)
     }
 
-    // Растровые форматы — отдаём как есть (тело без префикса, если срезали)
-    if (pngSig || gifSig || jpegSig) {
-      const body = offset > 0 ? bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) : blob
-      return new NextResponse(body, {
-        headers: {
-          'Content-Type': pngSig ? 'image/png' : gifSig ? 'image/gif' : 'image/jpeg',
-          'Cache-Control': 'public, max-age=3600',
-        },
-      })
+    // Растровые форматы — отдаём как есть (тело без префикса, если срезали), тип — по сигнатуре
+    if (kind === 'png' || kind === 'gif' || kind === 'jpeg' || kind === 'webp') {
+      return new NextResponse(new Uint8Array(bytes), { headers: imageHeaders(RASTER_CONTENT_TYPE[kind]) })
     }
 
-    // SVG — конвертируем в PNG с фиксированным размером (иначе sharp может выдать 0×0 и пустой квадрат)
-    let bodyToSend: ArrayBuffer | Buffer = offset > 0 ? bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) : blob
-    let finalContentType = contentType.toLowerCase().includes('svg') ? 'image/svg+xml' : 'image/png'
-    if (looksLikeSvg && bytes.length > 0 && bytes.length < 500 * 1024) {
+    const sharp = (await import('sharp')).default
+
+    // SVG — конвертируем в PNG с фиксированным размером (иначе sharp может выдать 0×0 и пустой квадрат).
+    // Сам SVG клиенту не отдаём никогда: при открытии напрямую он исполнился бы как документ на нашем origin.
+    if (kind === 'svg') {
+      if (bytes.length > EMOJI_SVG_MAX_BYTES) return errorResponse(502)
       let svgText = new TextDecoder('utf-8', { fatal: false }).decode(bytes)
-      svgText = svgText
-        .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
-        .replace(/\s+on\w+\s*=\s*["'][^"']*["']/gi, '')
-        .replace(/\s+on\w+\s*=\s*[^\s>]*/gi, '')
       svgText = svgText
         .replace(/\bfill\s*=\s*["']currentColor["']/gi, 'fill="#333333"')
         .replace(/\bstroke\s*=\s*["']currentColor["']/gi, 'stroke="#333333"')
-      const svgBuffer = Buffer.from(svgText, 'utf-8')
       try {
-        const sharp = (await import('sharp')).default
-        const pngBuffer = await sharp(svgBuffer)
+        const pngBuffer = await sharp(Buffer.from(svgText, 'utf-8'), { limitInputPixels: SHARP_LIMIT_PIXELS })
           .resize(64, 64, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
           .png()
           .toBuffer()
-        bodyToSend = pngBuffer
-        finalContentType = 'image/png'
+        return new NextResponse(new Uint8Array(pngBuffer), { headers: imageHeaders('image/png') })
       } catch (sharpError) {
         console.warn('[emoji-image] SVG→PNG failed:', (sharpError as Error).message)
-        bodyToSend = Buffer.from(svgText, 'utf-8')
-        finalContentType = 'image/svg+xml; charset=utf-8'
+        return errorResponse(502)
       }
-    } else if (!looksLikeSvg) {
-      console.warn('[emoji-image] Unknown format:', { name, emojiId, first: Array.from(bytes.slice(0, 12)) })
     }
 
-    const body: BodyInit = Buffer.isBuffer(bodyToSend)
-      ? new Uint8Array(bodyToSend)
-      : bodyToSend
-    return new NextResponse(body, {
-      headers: {
-        'Content-Type': finalContentType,
-        'Cache-Control': 'public, max-age=3600',
-      },
-    })
+    // Неизвестная сигнатура (avif, bmp, tiff, …) — пробуем перекодировать в PNG; не картинка — не отдаём.
+    try {
+      const pngBuffer = await sharp(Buffer.from(bytes), { limitInputPixels: SHARP_LIMIT_PIXELS }).png().toBuffer()
+      return new NextResponse(new Uint8Array(pngBuffer), { headers: imageHeaders('image/png') })
+    } catch {
+      console.warn('[emoji-image] Unknown format:', { name, emojiId, first: Array.from(bytes.slice(0, 12)) })
+      return errorResponse(415)
+    }
   } catch (error) {
     console.error('Emoji image proxy error:', error);
-    return new NextResponse(null, { status: 500 });
+    return errorResponse(500);
   }
 }

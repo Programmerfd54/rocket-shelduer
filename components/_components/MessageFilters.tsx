@@ -1,7 +1,9 @@
 "use client"
 
-import { Search, Filter, X } from 'lucide-react'
+import { Search, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Field } from '@/components/ui/field'
 import {
   Select,
   SelectContent,
@@ -29,7 +31,11 @@ export default function MessageFilters({
   onWorkspaceChange,
   onSearchChange,
 }: MessageFiltersProps) {
-  const hasActiveFilters = statusFilter || workspaceFilter || searchQuery
+  const hasActiveFilters = Boolean(
+    (statusFilter && statusFilter !== 'all') ||
+    (workspaceFilter && workspaceFilter !== 'all') ||
+    searchQuery
+  )
 
   const clearAllFilters = () => {
     onStatusChange('all')
@@ -38,77 +44,59 @@ export default function MessageFilters({
   }
 
   return (
-    <div className="bg-card p-5 rounded-xl border border-border/80 shadow-sm">
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-2">
-          <Filter className="w-5 h-5 text-primary" />
-          <h3 className="font-semibold text-card-foreground">Фильтры</h3>
-        </div>
+    <div className="space-y-3 rounded-lg border bg-card p-4">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold">Фильтры</h3>
         {hasActiveFilters && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={clearAllFilters}
-            className="h-8 text-xs hover:bg-destructive/10 hover:text-destructive"
-          >
-            <X className="w-3 h-3 mr-1" />
-            Сбросить
+          <Button variant="ghost" size="sm" onClick={clearAllFilters} className="text-muted-foreground">
+            <X /> Сбросить
           </Button>
         )}
       </div>
-      
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {/* Поиск */}
-        <div className="space-y-2">
-          <label className="block text-sm font-medium text-muted-foreground">
-            Поиск
-          </label>
+
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+        <Field label="Поиск" htmlFor="message-filter-search">
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <input
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
+            <Input
+              id="message-filter-search"
               type="text"
               value={searchQuery}
               onChange={(e) => onSearchChange(e.target.value)}
-              placeholder="Искать в сообщениях..."
-              className="w-full pl-10 pr-3 py-2.5 border rounded-lg bg-background text-foreground placeholder:text-muted-foreground focus:ring-2 focus:ring-primary focus:border-primary transition-all cursor-text"
+              placeholder="Искать в сообщениях…"
+              className="pl-8 pr-8"
             />
             {searchQuery && (
               <button
+                type="button"
                 onClick={() => onSearchChange('')}
-                className="absolute right-3 top-1/2 transform -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                aria-label="Очистить поиск"
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40"
               >
-                <X className="w-4 h-4" />
+                <X className="size-4" />
               </button>
             )}
           </div>
-        </div>
+        </Field>
 
-        {/* Фильтр по статусу */}
-        <div className="space-y-2">
-          <label className="block text-sm font-medium text-muted-foreground">
-            Статус
-          </label>
+        <Field label="Статус">
           <Select value={statusFilter || 'all'} onValueChange={onStatusChange}>
-            <SelectTrigger>
+            <SelectTrigger className="w-full" aria-label="Статус">
               <SelectValue placeholder="Все статусы" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">Все статусы</SelectItem>
-              <SelectItem value="PENDING">⏳ Ожидает</SelectItem>
-              <SelectItem value="SENT">✓ Отправлено</SelectItem>
-              <SelectItem value="FAILED">✗ Ошибка</SelectItem>
-              <SelectItem value="CANCELLED">⊘ Отменено</SelectItem>
+              <SelectItem value="PENDING">Ожидает</SelectItem>
+              <SelectItem value="SENT">Отправлено</SelectItem>
+              <SelectItem value="FAILED">Ошибка</SelectItem>
+              <SelectItem value="CANCELLED">Отменено</SelectItem>
             </SelectContent>
           </Select>
-        </div>
+        </Field>
 
-        {/* Фильтр по пространству */}
-        <div className="space-y-2">
-          <label className="block text-sm font-medium text-muted-foreground">
-            Пространство
-          </label>
+        <Field label="Пространство">
           <Select value={workspaceFilter || 'all'} onValueChange={onWorkspaceChange}>
-            <SelectTrigger>
+            <SelectTrigger className="w-full" aria-label="Пространство">
               <SelectValue placeholder="Все пространства" />
             </SelectTrigger>
             <SelectContent>
@@ -120,7 +108,7 @@ export default function MessageFilters({
               ))}
             </SelectContent>
           </Select>
-        </div>
+        </Field>
       </div>
     </div>
   )

@@ -1,14 +1,14 @@
 "use client"
 
 import { useState, useEffect, useCallback } from 'react'
-import { useRouter, useParams } from 'next/navigation'
+import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { toast } from 'sonner'
+import { ArrowLeft, Eye, FileText, HelpCircle, Loader2, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
-import { Breadcrumbs } from '@/components/common/Breadcrumbs'
+import { Field } from '@/components/ui/field'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   Dialog,
   DialogContent,
@@ -16,21 +16,21 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { Breadcrumbs } from '@/components/common/Breadcrumbs'
+import { ConfirmDialog } from '@/components/common/ConfirmDialog'
+import { EmptyState } from '@/components/common/EmptyState'
+import { PageContainer, PageHeader } from '@/components/common/PageHeader'
+import { Section } from '@/components/common/Section'
+import { HelpRichEditor, normalizeHelpRoles } from '@/components/_components/HelpRichEditor'
+import { HelpHtmlContent } from '@/components/_components/HelpHtmlContent'
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
-import { Loader2, ArrowLeft, FileText, HelpCircle, Plus, Pencil, Trash2, Eye } from 'lucide-react'
-import { toast } from 'sonner'
-import { HelpRichEditor, HELP_ROLE_OPTIONS } from '@/components/_components/HelpRichEditor'
-import { Checkbox } from '@/components/ui/checkbox'
-import { sanitizeHelpHtml } from '@/lib/sanitize'
+  HelpFaqDialog,
+  HelpListRow,
+  HelpRolesField,
+  helpRolesLabel,
+  validateHelpOrder,
+  type HelpFaqValues,
+} from '@/components/_components/HelpAdminParts'
 
 type Instruction = { id: string; title: string; content: string; order: number; roles: string[] }
 type FAQ = { id: string; question: string; answer: string; order: number; roles: string[] }
@@ -43,70 +43,115 @@ type Catalog = {
   faqs: FAQ[]
 }
 
+const TITLE_MAX = 100
+
+function validateTitle(raw: string): string | undefined {
+  const v = raw.trim()
+  if (!v) return 'Введите название.'
+  if (v.length > TITLE_MAX) return `Не длиннее ${TITLE_MAX} символов.`
+  return undefined
+}
+
+/** Одинаковый ли набор ролей (порядок не важен), без мутации исходных массивов. */
+function sameRoles(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false
+  const sa = [...a].sort()
+  const sb = [...b].sort()
+  return sa.every((v, i) => v === sb[i])
+}
+
+function PageSkeleton() {
+  return (
+    <PageContainer className="px-4 sm:px-6">
+      <div role="status" aria-busy="true" aria-label="Загрузка каталога" className="space-y-6">
+        <div className="space-y-2">
+          <Skeleton className="h-6 w-56" />
+          <Skeleton className="h-4 w-80 max-w-full" />
+        </div>
+        <Skeleton className="h-40 w-full rounded-lg" />
+        <Skeleton className="h-32 w-full rounded-lg" />
+        <Skeleton className="h-32 w-full rounded-lg" />
+      </div>
+    </PageContainer>
+  )
+}
+
 export default function CatalogEditPage() {
   const router = useRouter()
   const params = useParams()
+  const searchParams = useSearchParams()
   const catalogId = params?.id as string
+  const chromeMinimal = searchParams.get('chrome') === '0'
+  /** Сохраняем режим встраивания в iframe (chrome=0) для внутренних ссылок */
+  const routeQ = chromeMinimal ? '?chrome=0' : ''
+  const containerClass = chromeMinimal ? 'max-w-none px-3 py-3 lg:py-3' : 'px-4 sm:px-6'
+
   const [loading, setLoading] = useState(true)
   const [catalog, setCatalog] = useState<Catalog | null>(null)
   const [titleEdit, setTitleEdit] = useState('')
   const [catalogRoles, setCatalogRoles] = useState<string[]>([])
   const [savingTitle, setSavingTitle] = useState(false)
+  const [titleSubmitted, setTitleSubmitted] = useState(false)
 
-  // Instruction dialog
+  // Диалог инструкции
   const [instDialogOpen, setInstDialogOpen] = useState(false)
   const [instDialogMode, setInstDialogMode] = useState<'create' | 'edit'>('create')
   const [instDialogId, setInstDialogId] = useState<string | null>(null)
   const [instTitle, setInstTitle] = useState('')
   const [instContent, setInstContent] = useState('')
   const [instRoles, setInstRoles] = useState<string[]>([])
-  const [instOrder, setInstOrder] = useState(0)
+  const [instOrder, setInstOrder] = useState('0')
+  const [instSubmitted, setInstSubmitted] = useState(false)
   const [instSaving, setInstSaving] = useState(false)
-  const [previewInstContent, setPreviewInstContent] = useState<string | null>(null)
+  const [showPreview, setShowPreview] = useState(false)
 
-  // FAQ dialog
-  const [faqDialogOpen, setFaqDialogOpen] = useState(false)
-  const [faqDialogMode, setFaqDialogMode] = useState<'create' | 'edit'>('create')
-  const [faqDialogId, setFaqDialogId] = useState<string | null>(null)
-  const [faqQuestion, setFaqQuestion] = useState('')
-  const [faqAnswer, setFaqAnswer] = useState('')
-  const [faqRoles, setFaqRoles] = useState<string[]>([])
-  const [faqOrder, setFaqOrder] = useState(0)
-  const [faqSaving, setFaqSaving] = useState(false)
+  // Диалог вопроса
+  const [faqDialog, setFaqDialog] = useState<{ mode: 'create' | 'edit'; faq: FAQ | null } | null>(null)
 
-  const [deleteInstId, setDeleteInstId] = useState<string | null>(null)
-  const [deleteFaqId, setDeleteFaqId] = useState<string | null>(null)
+  const [deleteInst, setDeleteInst] = useState<Instruction | null>(null)
+  const [deleteFaq, setDeleteFaq] = useState<FAQ | null>(null)
+  const [deleting, setDeleting] = useState(false)
+
+  const backHref = `/dashboard/admin/help/admin${routeQ}`
 
   const load = useCallback(async () => {
     if (!catalogId) return
     try {
       const res = await fetch(`/api/admin/help/catalogs/${catalogId}`)
       if (res.status === 404) {
-        router.replace('/dashboard/admin/help/admin')
+        toast.error('Каталог не найден', { description: 'Возможно, он был удалён.' })
+        router.replace(backHref)
         return
       }
       if (!res.ok) throw new Error('Failed to load')
       const data = await res.json()
       setCatalog(data)
       setTitleEdit(data.title ?? '')
-      setCatalogRoles(Array.isArray(data.roles) ? data.roles : [])
-    } catch (e) {
-      toast.error('Ошибка загрузки каталога')
-      router.replace('/dashboard/admin/help/admin')
+      setCatalogRoles(normalizeHelpRoles(data.roles))
+    } catch {
+      toast.error('Не удалось загрузить каталог', { description: 'Вы вернулись к управлению справкой.' })
+      router.replace(backHref)
     } finally {
       setLoading(false)
     }
-  }, [catalogId, router])
+  }, [catalogId, router, backHref])
 
   useEffect(() => {
     load()
   }, [load])
 
-  const saveTitle = async () => {
-    if (!catalogId) return
-    const titleChanged = titleEdit.trim() !== (catalog?.title ?? '')
-    const rolesChanged = JSON.stringify(catalogRoles.sort()) !== JSON.stringify((catalog?.roles ?? []).sort())
-    if (!titleChanged && !rolesChanged) return
+  /* ---------- название и роли каталога ---------- */
+
+  const titleError = validateTitle(titleEdit)
+  const titleChanged = titleEdit.trim() !== (catalog?.title ?? '')
+  const rolesChanged = !sameRoles(catalogRoles, normalizeHelpRoles(catalog?.roles))
+  const catalogDirty = titleChanged || rolesChanged
+
+  const saveTitle = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!catalogId || !catalogDirty) return
+    setTitleSubmitted(true)
+    if (titleError) return
     setSavingTitle(true)
     try {
       const res = await fetch(`/api/admin/help/catalogs/${catalogId}`, {
@@ -119,13 +164,15 @@ export default function CatalogEditPage() {
       })
       if (!res.ok) throw new Error('Failed')
       setCatalog((c) => (c ? { ...c, title: titleEdit.trim(), roles: [...catalogRoles] } : null))
-      toast.success('Сохранено')
+      toast.success('Каталог сохранён')
     } catch {
-      toast.error('Ошибка сохранения')
+      toast.error('Не удалось сохранить каталог', { description: 'Попробуйте ещё раз.' })
     } finally {
       setSavingTitle(false)
     }
   }
+
+  /* ---------- инструкции ---------- */
 
   const openAddInstruction = () => {
     setInstDialogMode('create')
@@ -133,8 +180,9 @@ export default function CatalogEditPage() {
     setInstTitle('')
     setInstContent('')
     setInstRoles([])
-    setInstOrder(catalog?.instructions?.length ?? 0)
-    setPreviewInstContent('')
+    setInstOrder(String(catalog?.instructions?.length ?? 0))
+    setInstSubmitted(false)
+    setShowPreview(false)
     setInstDialogOpen(true)
   }
 
@@ -143,27 +191,31 @@ export default function CatalogEditPage() {
     setInstDialogId(inst.id)
     setInstTitle(inst.title)
     setInstContent(inst.content)
-    setInstRoles(Array.isArray(inst.roles) ? [...inst.roles] : [])
-    setInstOrder(inst.order)
-    setPreviewInstContent(inst.content)
+    setInstRoles(normalizeHelpRoles(inst.roles))
+    setInstOrder(String(inst.order))
+    setInstSubmitted(false)
+    setShowPreview(false)
     setInstDialogOpen(true)
   }
 
-  const saveInstruction = async () => {
+  const instTitleError = validateTitle(instTitle)
+  const instOrderError = validateHelpOrder(instOrder)
+  const instHasErrors = Boolean(instTitleError || instOrderError)
+
+  const saveInstruction = async (e: React.FormEvent) => {
+    e.preventDefault()
     if (!catalogId) return
+    setInstSubmitted(true)
+    if (instHasErrors || instSaving) return
+    const title = instTitle.trim()
+    const order = Number(instOrder)
     setInstSaving(true)
     try {
       if (instDialogMode === 'create') {
         const res = await fetch('/api/admin/help/instructions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            catalogId,
-            title: instTitle.trim() || 'Инструкция',
-            content: instContent,
-            order: instOrder,
-            roles: instRoles,
-          }),
+          body: JSON.stringify({ catalogId, title, content: instContent, order, roles: instRoles }),
         })
         if (!res.ok) throw new Error('Failed')
         const data = await res.json()
@@ -183,23 +235,18 @@ export default function CatalogEditPage() {
         const res = await fetch(`/api/admin/help/instructions/${instDialogId}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            title: instTitle.trim() || 'Инструкция',
-            content: instContent,
-            order: instOrder,
-            roles: instRoles,
-          }),
+          body: JSON.stringify({ title, content: instContent, order, roles: instRoles }),
         })
         if (!res.ok) throw new Error('Failed')
         setCatalog((c) =>
           c
             ? {
                 ...c,
-                instructions: (c.instructions ?? []).map((i) =>
-                  i.id === instDialogId
-                    ? { ...i, title: instTitle.trim(), content: instContent, order: instOrder, roles: [...instRoles] }
-                    : i
-                ).sort((a, b) => a.order - b.order),
+                instructions: (c.instructions ?? [])
+                  .map((i) =>
+                    i.id === instDialogId ? { ...i, title, content: instContent, order, roles: [...instRoles] } : i
+                  )
+                  .sort((a, b) => a.order - b.order),
               }
             : null
         )
@@ -207,60 +254,72 @@ export default function CatalogEditPage() {
       }
       setInstDialogOpen(false)
     } catch {
-      toast.error('Ошибка сохранения инструкции')
+      toast.error('Не удалось сохранить инструкцию', { description: 'Данные остались в форме — попробуйте ещё раз.' })
     } finally {
       setInstSaving(false)
     }
   }
 
-  const deleteInstruction = async (id: string) => {
+  const confirmDeleteInstruction = async () => {
+    if (!deleteInst) return
+    setDeleting(true)
     try {
-      const res = await fetch(`/api/admin/help/instructions/${id}`, { method: 'DELETE' })
+      const res = await fetch(`/api/admin/help/instructions/${deleteInst.id}`, { method: 'DELETE' })
       if (!res.ok) throw new Error('Failed')
-      setCatalog((c) =>
-        c ? { ...c, instructions: (c.instructions ?? []).filter((i) => i.id !== id) } : null
-      )
-      setDeleteInstId(null)
+      setCatalog((c) => (c ? { ...c, instructions: (c.instructions ?? []).filter((i) => i.id !== deleteInst.id) } : null))
       toast.success('Инструкция удалена')
+      setDeleteInst(null)
     } catch {
-      toast.error('Ошибка удаления')
+      toast.error('Не удалось удалить инструкцию', { description: 'Попробуйте ещё раз.' })
+    } finally {
+      setDeleting(false)
     }
   }
 
-  const openAddFaq = () => {
-    setFaqDialogMode('create')
-    setFaqDialogId(null)
-    setFaqQuestion('')
-    setFaqAnswer('')
-    setFaqRoles([])
-    setFaqOrder(catalog?.faqs?.length ?? 0)
-    setFaqDialogOpen(true)
-  }
+  /* ---------- вопросы ---------- */
 
-  const openEditFaq = (faq: FAQ) => {
-    setFaqDialogMode('edit')
-    setFaqDialogId(faq.id)
-    setFaqQuestion(faq.question)
-    setFaqAnswer(faq.answer)
-    setFaqRoles(Array.isArray(faq.roles) ? [...faq.roles] : [])
-    setFaqOrder(faq.order)
-    setFaqDialogOpen(true)
-  }
+  const faqInitial: HelpFaqValues =
+    faqDialog?.mode === 'edit' && faqDialog.faq
+      ? {
+          question: faqDialog.faq.question,
+          answer: faqDialog.faq.answer,
+          roles: normalizeHelpRoles(faqDialog.faq.roles),
+          order: faqDialog.faq.order,
+        }
+      : { question: '', answer: '', roles: [], order: catalog?.faqs?.length ?? 0 }
 
-  const saveFaq = async () => {
-    if (!catalogId) return
-    setFaqSaving(true)
+  const submitFaq = async (v: HelpFaqValues): Promise<boolean> => {
+    if (!catalogId) return false
     try {
-      if (faqDialogMode === 'create') {
+      if (faqDialog?.mode === 'edit' && faqDialog.faq) {
+        const id = faqDialog.faq.id
+        const res = await fetch(`/api/admin/help/faq/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question: v.question, answer: v.answer, order: v.order, roles: v.roles }),
+        })
+        if (!res.ok) throw new Error('Failed')
+        setCatalog((c) =>
+          c
+            ? {
+                ...c,
+                faqs: (c.faqs ?? [])
+                  .map((f) => (f.id === id ? { ...f, ...v, roles: [...v.roles] } : f))
+                  .sort((a, b) => a.order - b.order),
+              }
+            : null
+        )
+        toast.success('Вопрос сохранён')
+      } else {
         const res = await fetch('/api/admin/help/faq', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             catalogId,
-            question: faqQuestion.trim() || 'Вопрос',
-            answer: faqAnswer.trim(),
-            order: faqOrder,
-            roles: faqRoles,
+            question: v.question,
+            answer: v.answer,
+            order: v.order,
+            roles: v.roles,
           }),
         })
         if (!res.ok) throw new Error('Failed')
@@ -268,413 +327,294 @@ export default function CatalogEditPage() {
         const faq = data.faq
         setCatalog((c) =>
           c
-            ? {
-                ...c,
-                faqs: [...(c.faqs ?? []), { ...faq, roles: faq.roles ?? [] }].sort((a, b) => a.order - b.order),
-              }
+            ? { ...c, faqs: [...(c.faqs ?? []), { ...faq, roles: faq.roles ?? [] }].sort((a, b) => a.order - b.order) }
             : null
         )
         toast.success('Вопрос добавлен')
-      } else if (faqDialogId) {
-        const res = await fetch(`/api/admin/help/faq/${faqDialogId}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            question: faqQuestion.trim() || 'Вопрос',
-            answer: faqAnswer.trim(),
-            order: faqOrder,
-            roles: faqRoles,
-          }),
-        })
-        if (!res.ok) throw new Error('Failed')
-        setCatalog((c) =>
-          c
-            ? {
-                ...c,
-                faqs: (c.faqs ?? []).map((f) =>
-                  f.id === faqDialogId
-                    ? {
-                        ...f,
-                        question: faqQuestion.trim(),
-                        answer: faqAnswer.trim(),
-                        order: faqOrder,
-                        roles: [...faqRoles],
-                      }
-                    : f
-                ).sort((a, b) => a.order - b.order),
-              }
-            : null
-        )
-        toast.success('Вопрос сохранён')
       }
-      setFaqDialogOpen(false)
+      setFaqDialog(null)
+      return true
     } catch {
-      toast.error('Ошибка сохранения')
-    } finally {
-      setFaqSaving(false)
+      toast.error('Не удалось сохранить вопрос', { description: 'Данные остались в форме — попробуйте ещё раз.' })
+      return false
     }
   }
 
-  const deleteFaq = async (id: string) => {
+  const confirmDeleteFaq = async () => {
+    if (!deleteFaq) return
+    setDeleting(true)
     try {
-      const res = await fetch(`/api/admin/help/faq/${id}`, { method: 'DELETE' })
+      const res = await fetch(`/api/admin/help/faq/${deleteFaq.id}`, { method: 'DELETE' })
       if (!res.ok) throw new Error('Failed')
-      setCatalog((c) => (c ? { ...c, faqs: (c.faqs ?? []).filter((f) => f.id !== id) } : null))
-      setDeleteFaqId(null)
+      setCatalog((c) => (c ? { ...c, faqs: (c.faqs ?? []).filter((f) => f.id !== deleteFaq.id) } : null))
       toast.success('Вопрос удалён')
+      setDeleteFaq(null)
     } catch {
-      toast.error('Ошибка удаления')
+      toast.error('Не удалось удалить вопрос', { description: 'Попробуйте ещё раз.' })
+    } finally {
+      setDeleting(false)
     }
   }
 
-  if (loading || !catalog) {
-    return (
-      <div className="flex items-center justify-center min-h-[50vh]">
-        <Loader2 className="w-8 h-8 animate-spin text-primary" />
-      </div>
-    )
-  }
+  if (loading || !catalog) return <PageSkeleton />
+
+  const instructions = catalog.instructions ?? []
+  const faqs = catalog.faqs ?? []
+
+  const breadcrumbs = chromeMinimal ? undefined : (
+    <Breadcrumbs
+      items={[
+        { label: 'Дашборд', href: '/dashboard' },
+        { label: 'Справка', href: '/dashboard/admin/help' },
+        { label: 'Управление справкой', href: backHref },
+        { label: catalog.title, current: true },
+      ]}
+    />
+  )
 
   return (
-    <div className="container max-w-4xl py-8 px-4 mx-auto">
-      <Breadcrumbs
-        items={[
-          { label: 'Дашборд', href: '/dashboard' },
-          { label: 'Справка', href: '/dashboard/admin/help' },
-          { label: 'Управление справкой', href: '/dashboard/admin/help/admin' },
-          { label: catalog.title, current: true },
-        ]}
-        className="mb-6"
-      />
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-bold tracking-tight">Редактирование каталога</h1>
-        <Link href="/dashboard/admin/help/admin">
-          <Button variant="outline" size="sm">
-            <ArrowLeft className="h-4 w-4 mr-1" />
-            К управлению справкой
+    <PageContainer size="narrow" className={containerClass}>
+      <PageHeader
+        title={catalog.title}
+        description="Редактирование каталога: название, видимость, инструкции и вопросы."
+        breadcrumbs={breadcrumbs}
+        actions={
+          <Button asChild variant="outline" size="sm">
+            <Link href={backHref}>
+              <ArrowLeft aria-hidden />
+              К управлению справкой
+            </Link>
           </Button>
-        </Link>
-      </div>
+        }
+      />
 
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle className="text-lg">Название и видимость каталога</CardTitle>
-          <CardDescription>Название — заголовок вкладки. Пустой список ролей = каталог виден всем.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <Input
-              value={titleEdit}
-              onChange={(e) => setTitleEdit(e.target.value)}
-              placeholder="Название каталога"
+      <div className="space-y-8">
+        <Section
+          title="Название и видимость"
+          description="Название — заголовок вкладки в справке. Пустой список ролей — каталог виден всем."
+        >
+          <form onSubmit={saveTitle} noValidate className="space-y-4">
+            <Field
+              label="Название каталога"
+              htmlFor="catalog-title"
+              required
+              error={titleSubmitted ? titleError : undefined}
               className="max-w-md"
-            />
-            <Button onClick={saveTitle} disabled={savingTitle}>
-              {savingTitle ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+            >
+              <Input
+                id="catalog-title"
+                value={titleEdit}
+                onChange={(e) => setTitleEdit(e.target.value)}
+                placeholder="Название каталога"
+                aria-invalid={titleSubmitted && !!titleError}
+                disabled={savingTitle}
+              />
+            </Field>
+            <HelpRolesField value={catalogRoles} onChange={setCatalogRoles} disabled={savingTitle} />
+            <Button type="submit" size="sm" disabled={savingTitle || !catalogDirty}>
+              {savingTitle && <Loader2 className="animate-spin" />}
               Сохранить
             </Button>
-          </div>
-          <div className="space-y-2">
-            <Label className="text-sm">Видимость для ролей (оставьте пустым = для всех)</Label>
-            <div className="flex flex-wrap gap-4">
-              {HELP_ROLE_OPTIONS.filter((o) => o.value).map((o) => (
-                <label key={o.value} className="flex items-center gap-2 cursor-pointer">
-                  <Checkbox
-                    checked={catalogRoles.includes(o.value)}
-                    onCheckedChange={(checked) =>
-                      setCatalogRoles((prev) =>
-                        checked ? [...prev, o.value] : prev.filter((r) => r !== o.value)
-                      )
-                    }
-                  />
-                  <span className="text-sm">{o.label}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+          </form>
+        </Section>
 
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle className="text-lg flex items-center gap-2">
-            <FileText className="h-5 w-5" />
-            Инструкции
-          </CardTitle>
-          <CardDescription>Текст инструкций поддерживает HTML (в т.ч. изображения по ссылке из загрузки)</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <Button variant="outline" size="sm" onClick={openAddInstruction} className="gap-2">
-            <Plus className="h-4 w-4" />
-            Добавить инструкцию
-          </Button>
-          {(catalog.instructions ?? []).length === 0 ? (
-            <p className="text-sm text-muted-foreground">Нет инструкций. Добавьте первую.</p>
+        <Section
+          bare
+          title="Инструкции"
+          description="Текст оформляется в редакторе: заголовки, списки, ссылки, изображения."
+          actions={
+            <Button variant="outline" size="sm" onClick={openAddInstruction}>
+              <Plus aria-hidden />
+              Добавить инструкцию
+            </Button>
+          }
+        >
+          {instructions.length === 0 ? (
+            <EmptyState
+              icon={<FileText />}
+              title="Инструкций пока нет"
+              description="Добавьте первую инструкцию для этого каталога."
+            />
           ) : (
-            <ul className="space-y-2">
-              {(catalog.instructions ?? []).map((inst) => (
-                <li
+            <ul className="divide-y rounded-lg border bg-card">
+              {instructions.map((inst) => (
+                <HelpListRow
                   key={inst.id}
-                  className="flex items-center justify-between gap-2 rounded-lg border p-3 bg-muted/20"
-                >
-                  <div className="min-w-0">
-                    <span className="font-medium truncate block">{inst.title}</span>
-                    <span className="text-xs text-muted-foreground">
-                      Порядок: {inst.order} · {inst.roles?.length ? inst.roles.join(', ') : 'Для всех'} · контент {inst.content.length} симв.
-                    </span>
-                  </div>
-                  <div className="flex gap-1 shrink-0">
-                    <Button variant="ghost" size="sm" onClick={() => openEditInstruction(inst)}>
-                      <Pencil className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-destructive"
-                      onClick={() => setDeleteInstId(inst.id)}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </li>
+                  title={inst.title}
+                  meta={`Порядок: ${inst.order} · ${helpRolesLabel(normalizeHelpRoles(inst.roles))}`}
+                  editLabel={`Изменить инструкцию «${inst.title}»`}
+                  deleteLabel={`Удалить инструкцию «${inst.title}»`}
+                  onEdit={() => openEditInstruction(inst)}
+                  onDelete={() => setDeleteInst(inst)}
+                />
               ))}
             </ul>
           )}
-        </CardContent>
-      </Card>
+        </Section>
 
-      <Card className="mb-6">
-        <CardHeader>
-          <CardTitle className="text-lg flex items-center gap-2">
-            <HelpCircle className="h-5 w-5" />
-            FAQ раздела
-          </CardTitle>
-          <CardDescription>Вопросы и ответы внутри этого каталога</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <Button variant="outline" size="sm" onClick={openAddFaq} className="gap-2">
-            <Plus className="h-4 w-4" />
-            Добавить вопрос
-          </Button>
-          {(catalog.faqs ?? []).length === 0 ? (
-            <p className="text-sm text-muted-foreground">Нет вопросов в этом разделе.</p>
+        <Section
+          bare
+          title="Вопросы раздела"
+          description="Вопросы и ответы внутри этого каталога."
+          actions={
+            <Button variant="outline" size="sm" onClick={() => setFaqDialog({ mode: 'create', faq: null })}>
+              <Plus aria-hidden />
+              Добавить вопрос
+            </Button>
+          }
+        >
+          {faqs.length === 0 ? (
+            <EmptyState
+              icon={<HelpCircle />}
+              title="Вопросов пока нет"
+              description="Добавьте вопрос и ответ для этого каталога."
+            />
           ) : (
-            <ul className="space-y-2">
-              {(catalog.faqs ?? []).map((faq) => (
-                <li
+            <ul className="divide-y rounded-lg border bg-card">
+              {faqs.map((faq) => (
+                <HelpListRow
                   key={faq.id}
-                  className="flex items-center justify-between gap-2 rounded-lg border p-3 bg-muted/20"
-                >
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium truncate">{faq.question}</p>
-                    {faq.roles?.length ? (
-                      <span className="text-xs text-muted-foreground">{faq.roles.join(', ')}</span>
-                    ) : null}
-                  </div>
-                  <div className="flex gap-1 shrink-0">
-                    <Button variant="ghost" size="sm" onClick={() => openEditFaq(faq)}>
-                      <Pencil className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-destructive"
-                      onClick={() => setDeleteFaqId(faq.id)}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </li>
+                  title={faq.question}
+                  meta={`Порядок: ${faq.order} · ${helpRolesLabel(normalizeHelpRoles(faq.roles))}`}
+                  editLabel="Изменить вопрос"
+                  deleteLabel="Удалить вопрос"
+                  onEdit={() => setFaqDialog({ mode: 'edit', faq })}
+                  onDelete={() => setDeleteFaq(faq)}
+                />
               ))}
             </ul>
           )}
-        </CardContent>
-      </Card>
+        </Section>
+      </div>
 
-      {/* Диалог инструкции */}
-      <Dialog open={instDialogOpen} onOpenChange={setInstDialogOpen}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      {/* Инструкция */}
+      <Dialog open={instDialogOpen} onOpenChange={(o) => !instSaving && setInstDialogOpen(o)}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl" aria-describedby={undefined}>
           <DialogHeader>
-            <DialogTitle>
-              {instDialogMode === 'create' ? 'Добавить инструкцию' : 'Редактировать инструкцию'}
-            </DialogTitle>
+            <DialogTitle>{instDialogMode === 'create' ? 'Новая инструкция' : 'Редактировать инструкцию'}</DialogTitle>
           </DialogHeader>
-          <div className="grid gap-4 py-4">
-            <div className="space-y-2">
-              <Label>Название</Label>
+          <form onSubmit={saveInstruction} noValidate className="space-y-4">
+            <Field
+              label="Название"
+              htmlFor="inst-title"
+              required
+              error={instSubmitted ? instTitleError : undefined}
+            >
               <Input
+                id="inst-title"
                 value={instTitle}
                 onChange={(e) => setInstTitle(e.target.value)}
                 placeholder="Заголовок инструкции"
+                aria-invalid={instSubmitted && !!instTitleError}
+                disabled={instSaving}
+                autoFocus
               />
-            </div>
-            <div className="space-y-2">
-              <Label>Видимость для ролей (ничего не выбрано = для всех)</Label>
-              <div className="flex flex-wrap gap-4">
-                {HELP_ROLE_OPTIONS.filter((o) => o.value).map((o) => (
-                  <label key={o.value} className="flex items-center gap-2 cursor-pointer">
-                    <Checkbox
-                      checked={instRoles.includes(o.value)}
-                      onCheckedChange={(checked) =>
-                        setInstRoles((prev) =>
-                          checked ? [...prev, o.value] : prev.filter((r) => r !== o.value)
-                        )
-                      }
-                    />
-                    <span className="text-sm">{o.label}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label>Содержимое</Label>
+            </Field>
+            <HelpRolesField value={instRoles} onChange={setInstRoles} disabled={instSaving} />
+            <Field label="Содержимое">
               <HelpRichEditor
                 value={instContent}
-                onChange={(html) => {
-                  setInstContent(html)
-                  setPreviewInstContent(html)
-                }}
+                onChange={setInstContent}
                 minHeight="200px"
-                placeholder="Текст инструкции. Используйте панель для форматирования и вставки изображений."
+                placeholder="Текст инструкции. Для форматирования и изображений используйте панель сверху."
               />
-            </div>
-            <div className="space-y-2">
-              <Label>Порядок (число)</Label>
+            </Field>
+            <Field
+              label="Порядок"
+              htmlFor="inst-order"
+              hint="Чем меньше число, тем выше в списке."
+              error={instSubmitted ? instOrderError : undefined}
+              className="max-w-40"
+            >
               <Input
+                id="inst-order"
                 type="number"
+                inputMode="numeric"
+                min={0}
+                step={1}
                 value={instOrder}
-                onChange={(e) => setInstOrder(Number(e.target.value) || 0)}
+                onChange={(e) => setInstOrder(e.target.value)}
+                aria-invalid={instSubmitted && !!instOrderError}
+                disabled={instSaving}
               />
-            </div>
+            </Field>
             <div className="space-y-2">
-              <Label className="flex items-center gap-2">
-                <Eye className="h-4 w-4" />
-                Как будет отображаться инструкция
-              </Label>
-              <div className="rounded-lg border bg-muted/30 p-4 min-h-[80px]">
-                {previewInstContent ? (
-                  <div
-                    className="prose prose-sm dark:prose-invert max-w-none"
-                    dangerouslySetInnerHTML={{ __html: sanitizeHelpHtml(previewInstContent) }}
-                  />
-                ) : (
-                  <p className="text-sm text-muted-foreground">Введите контент выше — здесь появится предпросмотр.</p>
-                )}
-              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="-ml-2.5"
+                aria-expanded={showPreview}
+                onClick={() => setShowPreview((v) => !v)}
+              >
+                <Eye aria-hidden />
+                {showPreview ? 'Скрыть предпросмотр' : 'Показать, как будет выглядеть'}
+              </Button>
+              {showPreview && (
+                <div className="min-h-20 rounded-md border bg-muted/30 p-4">
+                  {instContent.replace(/<[^>]*>/g, '').trim() || instContent.includes('<img') ? (
+                    <HelpHtmlContent html={instContent} className="text-[15px] leading-relaxed" />
+                  ) : (
+                    <p className="text-sm text-muted-foreground">Введите текст выше — здесь появится предпросмотр.</p>
+                  )}
+                </div>
+              )}
             </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setInstDialogOpen(false)}>
-              Отмена
-            </Button>
-            <Button onClick={saveInstruction} disabled={instSaving}>
-              {instSaving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-              {instDialogMode === 'create' ? 'Добавить' : 'Сохранить'}
-            </Button>
-          </DialogFooter>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setInstDialogOpen(false)} disabled={instSaving}>
+                Отмена
+              </Button>
+              <Button type="submit" disabled={instSaving || (instSubmitted && instHasErrors)}>
+                {instSaving && <Loader2 className="animate-spin" />}
+                {instDialogMode === 'create' ? 'Добавить' : 'Сохранить'}
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
 
-      {/* Диалог FAQ */}
-      <Dialog open={faqDialogOpen} onOpenChange={setFaqDialogOpen}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>
-              {faqDialogMode === 'create' ? 'Добавить вопрос' : 'Редактировать вопрос'}
-            </DialogTitle>
-          </DialogHeader>
-          <div className="grid gap-4 py-4">
-            <div className="space-y-2">
-              <Label>Видимость для ролей (ничего не выбрано = для всех)</Label>
-              <div className="flex flex-wrap gap-4">
-                {HELP_ROLE_OPTIONS.filter((o) => o.value).map((o) => (
-                  <label key={o.value} className="flex items-center gap-2 cursor-pointer">
-                    <Checkbox
-                      checked={faqRoles.includes(o.value)}
-                      onCheckedChange={(checked) =>
-                        setFaqRoles((prev) =>
-                          checked ? [...prev, o.value] : prev.filter((r) => r !== o.value)
-                        )
-                      }
-                    />
-                    <span className="text-sm">{o.label}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label>Вопрос</Label>
-              <Input
-                value={faqQuestion}
-                onChange={(e) => setFaqQuestion(e.target.value)}
-                placeholder="Текст вопроса"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>Ответ</Label>
-              <Textarea
-                value={faqAnswer}
-                onChange={(e) => setFaqAnswer(e.target.value)}
-                className="min-h-[100px]"
-                placeholder="Текст ответа"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>Порядок (число)</Label>
-              <Input
-                type="number"
-                value={faqOrder}
-                onChange={(e) => setFaqOrder(Number(e.target.value) || 0)}
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setFaqDialogOpen(false)}>
-              Отмена
-            </Button>
-            <Button onClick={saveFaq} disabled={faqSaving}>
-              {faqSaving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-              {faqDialogMode === 'create' ? 'Добавить' : 'Сохранить'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <HelpFaqDialog
+        open={faqDialog !== null}
+        onOpenChange={(o) => !o && setFaqDialog(null)}
+        title={faqDialog?.mode === 'edit' ? 'Редактировать вопрос' : 'Новый вопрос'}
+        submitLabel={faqDialog?.mode === 'edit' ? 'Сохранить' : 'Добавить'}
+        initial={faqInitial}
+        onSubmit={submitFaq}
+      />
 
-      <AlertDialog open={!!deleteInstId} onOpenChange={() => setDeleteInstId(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Удалить инструкцию?</AlertDialogTitle>
-            <AlertDialogDescription>Действие нельзя отменить.</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Отмена</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground"
-              onClick={() => deleteInstId && deleteInstruction(deleteInstId)}
-            >
-              Удалить
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        open={!!deleteInst}
+        onOpenChange={(o) => !o && setDeleteInst(null)}
+        title="Удалить инструкцию?"
+        description={
+          deleteInst && (
+            <>
+              Инструкция «<strong>{deleteInst.title}</strong>» будет удалена. Действие нельзя отменить.
+            </>
+          )
+        }
+        confirmLabel="Удалить"
+        destructive
+        loading={deleting}
+        onConfirm={confirmDeleteInstruction}
+      />
 
-      <AlertDialog open={!!deleteFaqId} onOpenChange={() => setDeleteFaqId(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Удалить вопрос?</AlertDialogTitle>
-            <AlertDialogDescription>Действие нельзя отменить.</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Отмена</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground"
-              onClick={() => deleteFaqId && deleteFaq(deleteFaqId)}
-            >
-              Удалить
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </div>
+      <ConfirmDialog
+        open={!!deleteFaq}
+        onOpenChange={(o) => !o && setDeleteFaq(null)}
+        title="Удалить вопрос?"
+        description={
+          deleteFaq && (
+            <>
+              Вопрос «<strong>{deleteFaq.question}</strong>» будет удалён. Действие нельзя отменить.
+            </>
+          )
+        }
+        confirmLabel="Удалить"
+        destructive
+        loading={deleting}
+        onConfirm={confirmDeleteFaq}
+      />
+    </PageContainer>
   )
 }

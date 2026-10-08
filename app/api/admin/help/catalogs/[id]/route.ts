@@ -1,16 +1,24 @@
 import { NextResponse } from 'next/server';
+import { isUnsafeId } from '@/lib/security';
 import prisma from '@/lib/prisma';
-import { requireAdmin, isForbiddenError } from '@/lib/auth';
+import { requireAuth } from '@/lib/api-auth';
+import { requireAction } from '@/lib/permissions';
+import { GLOBAL_SCOPE } from '@/lib/legacy-scope';
+import { assertGlobalHelpCatalog, helpAdminErrorResponse } from '@/lib/help-admin';
+
+const ALLOWED_ROLES = ['SUP', 'ADM', 'VOL', 'MEMBER'];
 
 export async function GET(
   _request: Request,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    await requireAdmin();
+    const user = await requireAuth();
+    requireAction(user, 'admin:help');
     const { id } = await params;
-    const catalog = await prisma.helpCatalog.findUnique({
-      where: { id },
+    if (isUnsafeId(id)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
+    const catalog = await prisma.helpCatalog.findFirst({
+      where: { id, ...GLOBAL_SCOPE },
       include: {
         instructions: { orderBy: { order: 'asc' } },
         faqs: { orderBy: { order: 'asc' } },
@@ -21,50 +29,49 @@ export async function GET(
     }
     return NextResponse.json(catalog);
   } catch (e) {
-    if (isForbiddenError(e)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    console.error('Admin help catalog GET error:', e);
-    return NextResponse.json({ error: 'Failed to load' }, { status: 500 });
+    return helpAdminErrorResponse(e, 'Admin help catalog GET error:');
   }
 }
 
 export async function PATCH(
   request: Request,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    await requireAdmin();
+    const user = await requireAuth();
+    requireAction(user, 'admin:help');
     const { id } = await params;
+    if (isUnsafeId(id)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
+    await assertGlobalHelpCatalog(id);
     const body = await request.json();
     const data: { title?: string; order?: number; roles?: string[] } = {};
     if (typeof body.title === 'string') data.title = body.title.trim();
     if (typeof body.order === 'number') data.order = body.order;
     if (body.roles !== undefined) {
-      const allowed = ['SUPPORT', 'ADM', 'VOL'];
       data.roles = Array.isArray(body.roles)
-        ? (body.roles as string[]).filter((r) => allowed.includes(String(r)))
+        ? (body.roles as string[]).filter((r) => ALLOWED_ROLES.includes(String(r)))
         : [];
     }
     await prisma.helpCatalog.update({ where: { id }, data });
     return NextResponse.json({ success: true });
   } catch (e) {
-    if (isForbiddenError(e)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    console.error('Admin help catalog PATCH error:', e);
-    return NextResponse.json({ error: 'Failed to update' }, { status: 500 });
+    return helpAdminErrorResponse(e, 'Admin help catalog PATCH error:');
   }
 }
 
 export async function DELETE(
   _request: Request,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    await requireAdmin();
+    const user = await requireAuth();
+    requireAction(user, 'admin:help');
     const { id } = await params;
+    if (isUnsafeId(id)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
+    await assertGlobalHelpCatalog(id);
     await prisma.helpCatalog.delete({ where: { id } });
     return NextResponse.json({ success: true });
   } catch (e) {
-    if (isForbiddenError(e)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    console.error('Admin help catalog DELETE error:', e);
-    return NextResponse.json({ error: 'Failed to delete' }, { status: 500 });
+    return helpAdminErrorResponse(e, 'Admin help catalog DELETE error:');
   }
 }

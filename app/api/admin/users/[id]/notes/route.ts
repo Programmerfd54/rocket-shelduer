@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
+import { isUnsafeId } from '@/lib/security';
 import prisma from '@/lib/prisma';
-import { requireAuth } from '@/lib/auth';
+import { requireAuth } from '@/lib/api-auth';
+import { canPerformAction } from '@/lib/permissions';
 
 export async function GET(
   _request: Request,
@@ -9,8 +11,9 @@ export async function GET(
   try {
     const currentUser = await requireAuth();
     const { id } = await params;
+    if (isUnsafeId(id)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
 
-    if (currentUser.role !== 'SUPPORT' && currentUser.role !== 'ADMIN') {
+    if (!canPerformAction(currentUser, 'admin:users:notes')) {
       return NextResponse.json(
         { error: 'Insufficient permissions' },
         { status: 403 }
@@ -21,7 +24,7 @@ export async function GET(
       where: { id },
       select: { role: true },
     });
-    if (targetUser?.role === 'ADMIN' && currentUser.role !== 'ADMIN') {
+    if (targetUser?.role === 'LEAD_SUP' && currentUser.role !== 'LEAD_SUP') {
       return NextResponse.json(
         { error: 'Only superuser can view notes for ADMIN users' },
         { status: 403 }
@@ -59,8 +62,9 @@ export async function POST(
   try {
     const currentUser = await requireAuth();
     const { id } = await params;
+    if (isUnsafeId(id)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
 
-    if (currentUser.role !== 'SUPPORT' && currentUser.role !== 'ADMIN') {
+    if (!canPerformAction(currentUser, 'admin:users:notes')) {
       return NextResponse.json(
         { error: 'Insufficient permissions' },
         { status: 403 }
@@ -69,6 +73,7 @@ export async function POST(
 
     const targetUser = await prisma.user.findUnique({
       where: { id },
+      select: { id: true, role: true },
     });
     if (!targetUser) {
       return NextResponse.json(
@@ -76,16 +81,19 @@ export async function POST(
         { status: 404 }
       );
     }
-    if (targetUser.role === 'ADMIN' && currentUser.role !== 'ADMIN') {
+    if (targetUser.role === 'LEAD_SUP' && currentUser.role !== 'LEAD_SUP') {
       return NextResponse.json(
         { error: 'Only superuser can add notes to ADMIN users' },
         { status: 403 }
       );
     }
 
-    const body = await request.json();
-    const { text, important } = body;
+    const body = await request.json().catch(() => ({}));
+    const { text, important } = body ?? {};
 
+    if (typeof text === 'string' && text.length > 10_000) {
+      return NextResponse.json({ error: 'Text is too long' }, { status: 400 });
+    }
     if (!text || typeof text !== 'string' || !text.trim()) {
       return NextResponse.json(
         { error: 'Text is required' },

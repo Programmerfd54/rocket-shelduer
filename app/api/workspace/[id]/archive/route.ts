@@ -1,8 +1,29 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { requireAuth, isUserEffectivelyBlocked } from '@/lib/auth';
+import { isUserEffectivelyBlocked } from '@/lib/auth';
+import { requireAuth } from '@/lib/api-auth';
 import { requireAction } from '@/lib/permissions';
 import { isUnsafeId } from '@/lib/security';
+
+/** Поля пространства для ответа (без authToken / encryptedPassword / userId_RC). */
+const WORKSPACE_PUBLIC_SELECT = {
+  id: true,
+  workspaceName: true,
+  workspaceUrl: true,
+  username: true,
+  rcAuthMethod: true,
+  has2FA: true,
+  isActive: true,
+  lastConnected: true,
+  color: true,
+  startDate: true,
+  endDate: true,
+  isArchived: true,
+  archivedAt: true,
+  archiveDeleteAt: true,
+  createdAt: true,
+  updatedAt: true,
+} as const;
 
 export async function POST(
   request: Request,
@@ -21,6 +42,7 @@ export async function POST(
         id,
         userId: user.id,
       },
+      select: { id: true, workspaceName: true, isArchived: true },
     });
 
     if (!workspace) {
@@ -49,6 +71,7 @@ export async function POST(
         archivedAt,
         archiveDeleteAt,
       },
+      select: WORKSPACE_PUBLIC_SELECT,
     });
 
     // Отменяем все pending сообщения
@@ -117,6 +140,7 @@ export async function DELETE(
         id,
         userId: user.id,
       },
+      select: { id: true, workspaceName: true, isArchived: true },
     });
 
     if (!workspace) {
@@ -141,6 +165,7 @@ export async function DELETE(
         archivedAt: null,
         archiveDeleteAt: null,
       },
+      select: WORKSPACE_PUBLIC_SELECT,
     });
 
     // Логируем

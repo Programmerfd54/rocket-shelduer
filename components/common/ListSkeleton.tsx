@@ -17,16 +17,16 @@ export function ListSkeletonCard({
       {Array.from({ length: lines }).map((_, i) => (
         <Card
           key={i}
-          className="rounded-2xl border border-border/80 bg-card shadow-[0_1px_3px_rgba(0,0,0,0.06)] overflow-hidden"
+          className="overflow-hidden py-0"
         >
           <CardContent className="p-4 flex items-start gap-3">
-            <Skeleton className="h-10 w-10 rounded-lg shrink-0" />
+            <Skeleton className="h-9 w-9 rounded-md shrink-0" />
             <div className="flex-1 min-w-0 space-y-2">
               <Skeleton className="h-5 w-3/4 max-w-[200px]" />
               <Skeleton className="h-4 w-full max-w-[280px]" />
               <div className="flex gap-2">
-                <Skeleton className="h-6 w-16 rounded-full" />
-                <Skeleton className="h-6 w-20 rounded-full" />
+                <Skeleton className="h-6 w-16 rounded-md" />
+                <Skeleton className="h-6 w-20 rounded-md" />
               </div>
             </div>
             <Skeleton className="h-9 w-9 rounded-lg shrink-0" />
@@ -45,7 +45,7 @@ export function ListSkeletonRow({ rows = 5, className }: { rows?: number; classN
         <div key={i} className="flex items-center gap-3 py-2">
           <Skeleton className="h-8 w-8 rounded-lg shrink-0" />
           <Skeleton className="h-4 flex-1 max-w-[180px]" />
-          <Skeleton className="h-6 w-14 rounded-full" />
+          <Skeleton className="h-6 w-14 rounded-md" />
           <Skeleton className="h-8 w-8 rounded-lg shrink-0" />
         </div>
       ))}
@@ -78,7 +78,7 @@ export function TableSkeleton({
                 key={j}
                 className={cn(
                   'h-4',
-                  j === 0 ? 'w-8 rounded-full shrink-0' : 'flex-1 min-w-0 max-w-[160px]'
+                  j === 0 ? 'w-8 rounded-md shrink-0' : 'flex-1 min-w-0 max-w-[160px]'
                 )}
               />
             ))}

@@ -1,34 +1,97 @@
 "use client"
 
-import { useState, useEffect } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useRouter } from 'next/navigation'
-import Link from 'next/link'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { 
-  Server, 
-  MessageSquare, 
-  Calendar, 
-  TrendingUp, 
-  Clock,
-  CheckCircle2,
-  XCircle,
-  AlertCircle,
-  ArrowRight,
-  Plus,
-  Archive,
-  Users,
-  Filter
-} from 'lucide-react'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Skeleton } from '@/components/ui/skeleton'
+import { AlertTriangle, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
-import { formatLocalDate, formatRelativeTime } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet'
+import { Skeleton } from '@/components/ui/skeleton'
+import { PageContainer, PageHeader } from '@/components/common/PageHeader'
+import { ConfirmDialog } from '@/components/common/ConfirmDialog'
+import MessageDialog from '@/components/_components/message-dialog'
+import { MessageQueue, type QueueFilters } from '@/components/dashboard/MessageQueue'
+import { MessageDetailPanel } from '@/components/dashboard/MessageDetailPanel'
+import { QueueHeartbeat } from '@/components/dashboard/QueueHeartbeat'
+import { ScheduleMessageAction } from '@/components/dashboard/ScheduleMessageAction'
+import { DashboardSecondary, type DashStats, type DashWorkspace } from '@/components/dashboard/DashboardSecondary'
+import { channelLabel, type QueueMessage, type QueueUser } from '@/components/dashboard/types'
+import { formatLocalDate, cn } from '@/lib/utils'
+import {
+  isIntensiveArchiveToastDismissed,
+  setIntensiveArchiveToastDismissed,
+} from '@/lib/intensive-archive-toast'
+import {
+  DEFAULT_QUEUE_VIEW,
+  QUEUE_VIEW_STORAGE_KEY,
+  formatClock,
+  formatUntil,
+  formatWeekdayDate,
+  parseStoredView,
+  pluralRu,
+  summarizeQueue,
+  type QueueView,
+} from '@/lib/message-queue'
+import { getTimeZoneLabel } from '@/lib/schedule-datetime'
+
+interface DashUser extends QueueUser {
+  role?: string
+  volunteerExpiresAt?: string | null
+}
+
+/** Сколько не отправленных сообщений запрашиваем (PENDING запрашиваем без лимита — список полный). */
+const FAILED_LIMIT = 100
+const SAVED_NOTE_MS = 8000
+/** Ширина, с которой панель деталей встаёт справа от списка; уже — полноэкранная шторка. */
+const WIDE_QUERY = '(min-width: 1280px)'
+
+function useMediaQuery(query: string): boolean {
+  return useSyncExternalStore(
+    (onChange) => {
+      const mql = window.matchMedia(query)
+      mql.addEventListener('change', onChange)
+      return () => mql.removeEventListener('change', onChange)
+    },
+    () => window.matchMedia(query).matches,
+    () => false,
+  )
+}
+
+function readStoredView(): QueueView {
+  try {
+    return parseStoredView(window.localStorage.getItem(QUEUE_VIEW_STORAGE_KEY))
+  } catch {
+    return DEFAULT_QUEUE_VIEW
+  }
+}
+
+function writeStoredView(view: QueueView) {
+  try {
+    window.localStorage.setItem(QUEUE_VIEW_STORAGE_KEY, view)
+  } catch {
+    /* localStorage может быть недоступен — просто не запоминаем */
+  }
+}
+
+async function fetchMessages(url: string): Promise<QueueMessage[] | null> {
+  try {
+    const res = await fetch(url)
+    if (!res.ok) return null
+    const data = await res.json()
+    return Array.isArray(data?.messages) ? (data.messages as QueueMessage[]) : null
+  } catch {
+    return null
+  }
+}
 
 export default function DashboardPage() {
   const router = useRouter()
-  const [stats, setStats] = useState({
+  const isWide = useMediaQuery(WIDE_QUERY)
+
+  // Данные
+  const [currentUser, setCurrentUser] = useState<DashUser | null>(null)
+  const [allUsers, setAllUsers] = useState<DashUser[]>([])
+  const [stats, setStats] = useState<DashStats>({
     workspaces: 0,
     activeWorkspaces: 0,
     archivedWorkspaces: 0,
@@ -38,32 +101,86 @@ export default function DashboardPage() {
     failedMessages: 0,
     todayMessages: 0,
   })
-  const [recentMessages, setRecentMessages] = useState([])
-  const [messagesDisplayLimit, setMessagesDisplayLimit] = useState(10)
-  const [soonToSend, setSoonToSend] = useState<any[]>([])
-  const [recentWorkspaces, setRecentWorkspaces] = useState([])
-  const [expiringWorkspaces, setExpiringWorkspaces] = useState([])
-  const [allUsers, setAllUsers] = useState<any[]>([])
-  const [selectedUserId, setSelectedUserId] = useState<string | null>(null)
-  const [currentUser, setCurrentUser] = useState<any>(null)
-  const [loading, setLoading] = useState(true)
-  const [externalStatuses, setExternalStatuses] = useState<Record<string, 'SYNCHRONIZED' | 'EDITED_IN_RC' | 'DELETED_IN_RC' | 'UNKNOWN'>>({})
+  const [statsLoaded, setStatsLoaded] = useState(false)
+  const [workspaces, setWorkspaces] = useState<DashWorkspace[]>([])
+  const [expiringWorkspaces, setExpiringWorkspaces] = useState<DashWorkspace[]>([])
+  const [pending, setPending] = useState<QueueMessage[]>([])
+  const [failed, setFailed] = useState<QueueMessage[]>([])
+  const [pendingError, setPendingError] = useState(false)
+  const [failedError, setFailedError] = useState(false)
+  const [now, setNow] = useState(() => new Date())
 
-  useEffect(() => {
-    loadDashboardData()
-  }, [selectedUserId])
+  // Загрузка
+  const [staticLoading, setStaticLoading] = useState(true)
+  const [queueLoading, setQueueLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [loadError, setLoadError] = useState(false)
 
-  const loadDashboardData = async () => {
+  // Интерфейс
+  const [view, setView] = useState<QueueView>(DEFAULT_QUEUE_VIEW)
+  const [filters, setFilters] = useState<QueueFilters>({ workspaceId: 'all', userId: null })
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [lastKnown, setLastKnown] = useState<QueueMessage | null>(null)
+  const [editing, setEditing] = useState<QueueMessage | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<QueueMessage | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [savedId, setSavedId] = useState<string | null>(null)
+
+  const viewTouchedRef = useRef(false)
+  const queueReqRef = useRef(0)
+  const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const viewer = useMemo(
+    () => (currentUser?.id ? { id: currentUser.id, role: currentUser.role ?? null } : null),
+    [currentUser],
+  )
+  const isVolunteer = currentUser?.role === 'MEMBER' && !!currentUser?.volunteerExpiresAt
+  const isStaff =
+    currentUser?.role === 'SUP' || currentUser?.role === 'ADM' || currentUser?.role === 'LEAD_SUP'
+
+  /* ───────────── Загрузка данных ───────────── */
+
+  /** Очередь: PENDING целиком (без limit) + FAILED (до FAILED_LIMIT). Фильтр по пользователю — существующий параметр userId. */
+  const loadQueue = useCallback(async (userId: string | null) => {
+    const req = ++queueReqRef.current
+    const userParam = userId ? `&userId=${encodeURIComponent(userId)}` : ''
+    const [p, f] = await Promise.all([
+      fetchMessages(`/api/messages?status=PENDING&sort=asc${userParam}`),
+      fetchMessages(`/api/messages?status=FAILED&sort=desc&limit=${FAILED_LIMIT}${userParam}`),
+    ])
+    if (req !== queueReqRef.current) return // пришёл устаревший ответ (фильтр уже сменили)
+    setPending(p ?? [])
+    setPendingError(p === null)
+    setFailed(f ?? [])
+    setFailedError(f === null)
+    setNow(new Date())
+    setQueueLoading(false)
+  }, [])
+
+  const loadStats = useCallback(async () => {
     try {
-      // Load current user first
+      const res = await fetch('/api/dashboard/stats')
+      if (!res.ok) return
+      setStats(await res.json())
+      setStatsLoaded(true)
+    } catch {
+      /* показатели второстепенны: останутся прежние */
+    }
+  }, [])
+
+  const loadStatic = useCallback(async () => {
+    try {
+      setLoadError(false)
       const userResponse = await fetch('/api/auth/me')
       if (userResponse.ok) {
         const userData = await userResponse.json()
         setCurrentUser(userData.user)
-        
-        // Load all users for filter (if admin)
-        if (userData.user && (userData.user.role === 'SUPPORT' || userData.user.role === 'ADM' || userData.user.role === 'ADMIN')) {
-          const usersResponse = await fetch('/api/admin/users')
+        if (
+          userData.user &&
+          (userData.user.role === 'SUP' || userData.user.role === 'ADM' || userData.user.role === 'LEAD_SUP')
+        ) {
+          const usersResponse = await fetch('/api/admin/users?scope=message-authors')
           if (usersResponse.ok) {
             const usersData = await usersResponse.json()
             setAllUsers(usersData.users || [])
@@ -71,75 +188,51 @@ export default function DashboardPage() {
         }
       }
 
-      // Load stats
-      const statsResponse = await fetch('/api/dashboard/stats')
-      if (statsResponse.ok) {
-        const statsData = await statsResponse.json()
-        setStats(statsData)
-      }
+      await loadStats()
 
-      // Сообщения, запланированные в ближайшие 30 минут (напоминание)
-      const soonRes = await fetch('/api/dashboard/soon-to-send')
-      if (soonRes.ok) {
-        const soonData = await soonRes.json()
-        setSoonToSend(soonData.messages ?? [])
-      }
-
-      // Load recent messages with optional user filter
-      const messagesUrl = selectedUserId 
-        ? `/api/messages?userId=${selectedUserId}&limit=50&sort=recent`
-        : '/api/messages?limit=50&sort=recent'
-      const messagesResponse = await fetch(messagesUrl)
-      if (messagesResponse.ok) {
-        const messagesData = await messagesResponse.json()
-        const msgs = messagesData.messages.slice(0, 50)
-        setRecentMessages(msgs)
-        setMessagesDisplayLimit(10)
-
-        // После загрузки сообщений — проверяем их статус в Rocket.Chat (только SENT с messageId_RC)
-        checkExternalMessageStatuses(msgs)
-      }
-
-      // Load workspaces
       const workspacesResponse = await fetch(`/api/workspace?today=${formatLocalDate(new Date())}`)
       if (workspacesResponse.ok) {
         const workspacesData = await workspacesResponse.json()
-        setRecentWorkspaces(workspacesData.workspaces.slice(0, 3))
-        
-        // Find expiring workspaces (ending in 7 days or already ended)
+        const list: DashWorkspace[] = workspacesData.workspaces ?? []
+        setWorkspaces(list)
+
+        // Интенсивы, заканчивающиеся в ближайшие 7 дней
         const now = new Date()
         const sevenDaysLater = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000)
-        const expiring = workspacesData.workspaces.filter((ws: any) => 
-          ws.endDate && 
-          new Date(ws.endDate) <= sevenDaysLater && 
-          new Date(ws.endDate) >= now &&
-          !ws.isArchived
+        setExpiringWorkspaces(
+          list.filter(
+            (ws) =>
+              ws.endDate && new Date(ws.endDate) <= sevenDaysLater && new Date(ws.endDate) >= now && !ws.isArchived,
+          ),
         )
-        setExpiringWorkspaces(expiring)
-        
-        // Check for ended intensives and show notification
-        const ended = workspacesData.workspaces.filter((ws: any) => 
-          ws.endDate && 
-          new Date(ws.endDate) < now &&
-          !ws.isArchived
-        )
-        if (ended.length > 0) {
-          toast.warning('Интенсивы завершены', {
+
+        // Завершённые интенсивы — напоминание об архиве
+        const ended = list.filter((ws) => ws.endDate && new Date(ws.endDate) < now && !ws.isArchived)
+        if (ended.length > 0 && !isIntensiveArchiveToastDismissed()) {
+          const id = toast.warning('Интенсивы завершены', {
             description: `${ended.length} ${ended.length === 1 ? 'интенсив завершен' : 'интенсива завершены'}. Рекомендуется заархивировать их.`,
             duration: 12000,
             action: {
               label: 'Перейти в архивы',
-              onClick: () => router.push('/dashboard/workspaces/archived')
-            }
+              onClick: () => router.push('/dashboard/workspaces/archived'),
+            },
+            cancel: {
+              label: 'Больше не уведомлять',
+              onClick: () => {
+                setIntensiveArchiveToastDismissed()
+                toast.dismiss(id)
+              },
+            },
           })
         }
-        
-        // Check for intensives ending soon (within 3 days)
-        const endingSoon = workspacesData.workspaces.filter((ws: any) => 
-          ws.endDate && 
-          new Date(ws.endDate) >= now &&
-          new Date(ws.endDate) <= new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000) &&
-          !ws.isArchived
+
+        // Интенсивы, заканчивающиеся в течение 3 дней
+        const endingSoon = list.filter(
+          (ws) =>
+            ws.endDate &&
+            new Date(ws.endDate) >= now &&
+            new Date(ws.endDate) <= new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000) &&
+            !ws.isArchived,
         )
         if (endingSoon.length > 0 && ended.length === 0) {
           toast.info('Интенсивы скоро завершатся', {
@@ -150,546 +243,445 @@ export default function DashboardPage() {
       }
     } catch (error) {
       console.error('Failed to load dashboard data:', error)
-      toast.error('Ошибка загрузки данных', {
-        description: 'Проверьте подключение к интернету'
+      setLoadError(true)
+      toast.error('Не удалось загрузить данные', {
+        description: 'Проверьте подключение к интернету и нажмите «Повторить».',
       })
     } finally {
-      setLoading(false)
+      // Запомненное представление применяем один раз, когда данные уже готовы (без расхождения с SSR)
+      if (!viewTouchedRef.current) {
+        viewTouchedRef.current = true
+        setView(readStoredView())
+      }
+      setStaticLoading(false)
     }
-  }
+  }, [loadStats, router])
 
-  const checkExternalMessageStatuses = async (messages: any[]) => {
-    // Берём только отправленные сообщения, у которых есть messageId_RC
-    const toCheck = messages.filter(
-      (m) => m.status === 'SENT' && m.messageId_RC
-    ) as { id: string; status: string; messageId_RC?: string | null }[]
+  useEffect(() => {
+    void loadStatic()
+  }, [loadStatic])
 
-    if (toCheck.length === 0) return
+  useEffect(() => {
+    void loadQueue(filters.userId)
+  }, [loadQueue, filters.userId])
 
-    const newStatuses: Record<string, 'SYNCHRONIZED' | 'EDITED_IN_RC' | 'DELETED_IN_RC' | 'UNKNOWN'> = {}
+  /** Обновить всё без «мигания»: список остаётся на месте, пока приходят новые данные */
+  const reloadAll = useCallback(async () => {
+    setRefreshing(true)
+    try {
+      await Promise.all([loadStatic(), loadQueue(filters.userId)])
+    } finally {
+      setRefreshing(false)
+    }
+  }, [loadStatic, loadQueue, filters.userId])
 
-    await Promise.all(
-      toCheck.map(async (msg) => {
-        try {
-          const res = await fetch(`/api/messages/${msg.id}`)
-          if (!res.ok) {
-            newStatuses[msg.id] = 'UNKNOWN'
-            return
-          }
-          const data = await res.json()
-          newStatuses[msg.id] = data.externalStatus || 'UNKNOWN'
-        } catch {
-          newStatuses[msg.id] = 'UNKNOWN'
-        }
+  /** Перезагрузка после изменения сообщения — тем же загрузчиком, что и страница */
+  const refreshAfterChange = useCallback(async () => {
+    await Promise.all([loadQueue(filters.userId), loadStats()])
+  }, [loadQueue, loadStats, filters.userId])
+
+  // «Сейчас» обновляем при возврате на вкладку (без таймеров/поллинга): статусы «время прошло» остаются точными
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') setNow(new Date())
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onVisible)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onVisible)
+    }
+  }, [])
+
+  useEffect(
+    () => () => {
+      if (savedTimerRef.current) clearTimeout(savedTimerRef.current)
+    },
+    [],
+  )
+
+  /* ───────────── Выбор и панель ───────────── */
+
+  const messages = useMemo(() => [...pending, ...failed], [pending, failed])
+  const byId = useMemo(() => new Map(messages.map((m) => [m.id, m])), [messages])
+  const selectedMessage: QueueMessage | null = selectedId
+    ? (byId.get(selectedId) ?? (lastKnown?.id === selectedId ? lastKnown : null))
+    : null
+  const selectedInList = selectedId ? byId.has(selectedId) : false
+
+  const focusRow = useCallback((id: string | null) => {
+    if (!id) return
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLElement>(`[data-row-button="${CSS.escape(id)}"]`)?.focus()
+    })
+  }, [])
+
+  const selectMessage = useCallback((m: QueueMessage) => {
+    setSelectedId(m.id)
+    setLastKnown(m)
+    setSavedId(null)
+  }, [])
+
+  const closePanel = useCallback(() => {
+    focusRow(selectedId)
+    setSelectedId(null)
+  }, [focusRow, selectedId])
+
+  // Escape закрывает панель справа (шторка закрывается сама). Не мешаем открытым диалогам/меню/спискам.
+  useEffect(() => {
+    if (!selectedId || !isWide || editing || deleteTarget) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return
+      if (document.querySelector('[role="dialog"],[role="alertdialog"],[role="menu"],[role="listbox"]')) return
+      closePanel()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [selectedId, isWide, editing, deleteTarget, closePanel])
+
+  const handleViewChange = useCallback((v: QueueView) => {
+    viewTouchedRef.current = true
+    setView(v)
+    writeStoredView(v)
+  }, [])
+
+  const handleFiltersChange = useCallback(
+    (next: QueueFilters) => {
+      if (next.userId !== filters.userId) {
+        // Другой пользователь — другой набор данных: не показываем прежний, панель закрываем
+        setQueueLoading(true)
+        setPending([])
+        setFailed([])
+        setSelectedId(null)
+      }
+      setFilters(next)
+    },
+    [filters.userId],
+  )
+
+  /* ───────────── Действия (существующие эндпоинты и диалог) ───────────── */
+
+  const startEdit = useCallback((m: QueueMessage) => {
+    if (!(m.workspaceId ?? m.workspace?.id) || !m.channelId) {
+      toast.error('Не удалось открыть редактирование', {
+        description: 'У сообщения нет данных о канале или пространстве. Откройте его на странице пространства.',
       })
-    )
+      return
+    }
+    setEditing(m)
+  }, [])
 
-    setExternalStatuses((prev) => ({ ...prev, ...newStatuses }))
+  const handleSaved = useCallback(
+    (id: string) => {
+      setSavedId(id)
+      if (savedTimerRef.current) clearTimeout(savedTimerRef.current)
+      savedTimerRef.current = setTimeout(() => setSavedId(null), SAVED_NOTE_MS)
+      void refreshAfterChange()
+    },
+    [refreshAfterChange],
+  )
+
+  const retryMessage = useCallback(
+    async (m: QueueMessage) => {
+      const toastId = `message-retry-${m.id}`
+      setBusyId(m.id)
+      toast.loading('Ставим сообщение в очередь…', { id: toastId })
+      try {
+        const res = await fetch(`/api/messages/${m.id}/retry`, { method: 'POST' })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(data.error || 'Не удалось повторить отправку')
+        await refreshAfterChange()
+        toast.success('Сообщение в очереди — отправка через минуту', { id: toastId })
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Не удалось повторить отправку', {
+          id: toastId,
+          description: 'Проверьте подключение к Rocket.Chat и права в канале.',
+          action: { label: 'Повторить', onClick: () => void retryMessage(m) },
+        })
+      } finally {
+        setBusyId(null)
+      }
+    },
+    [refreshAfterChange],
+  )
+
+  const handleRetry = useCallback((m: QueueMessage) => void retryMessage(m), [retryMessage])
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return
+    const target = deleteTarget
+    setDeleting(true)
+    const toastId = 'message-delete'
+    toast.loading('Удаляем сообщение…', { id: toastId })
+    try {
+      const res = await fetch(`/api/messages/${target.id}`, { method: 'DELETE' })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || 'Не удалось удалить сообщение')
+      }
+      setDeleteTarget(null)
+      if (selectedId === target.id) setSelectedId(null)
+      await refreshAfterChange()
+      toast.success('Сообщение удалено', { id: toastId })
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Не удалось удалить сообщение', {
+        id: toastId,
+        description: 'Повторите попытку.',
+      })
+    } finally {
+      setDeleting(false)
+    }
   }
 
-  const statCards = [
-    {
-      title: 'Активных',
-      value: stats.activeWorkspaces,
-      total: stats.workspaces,
-      description: `из ${stats.workspaces} пространств`,
-      icon: Server,
-      color: 'text-blue-600',
-      bgColor: 'bg-blue-50 dark:bg-blue-950',
-      trend: '+2 за неделю'
-    },
-    {
-      title: 'Ожидают',
-      value: stats.pendingMessages,
-      total: stats.todayMessages,
-      description: `${stats.todayMessages} на сегодня`,
-      icon: Clock,
-      color: 'text-yellow-600',
-      bgColor: 'bg-yellow-50 dark:bg-yellow-950',
-      trend: stats.todayMessages > 0 ? 'Есть на сегодня' : 'Нет на сегодня'
-    },
-    {
-      title: 'Отправлено',
-      value: stats.sentMessages,
-      total: stats.totalMessages,
-      description: 'Всего сообщений',
-      icon: CheckCircle2,
-      color: 'text-green-600',
-      bgColor: 'bg-green-50 dark:bg-green-950',
-      trend: `${Math.round((stats.sentMessages / (stats.totalMessages || 1)) * 100)}% успешно`
-    },
-    {
-      title: 'Ошибки',
-      value: stats.failedMessages,
-      total: stats.totalMessages,
-      description: stats.failedMessages > 0 ? 'Требуют внимания' : 'Всё в порядке',
-      icon: XCircle,
-      color: 'text-red-600',
-      bgColor: 'bg-red-50 dark:bg-red-950',
-      trend: stats.failedMessages === 0 ? 'Отлично!' : 'Проверьте'
-    },
-  ]
+  /* ───────────── Сводка ───────────── */
 
-  const getStatusBadge = (status: string) => {
-    const badges = {
-      PENDING: <Badge className="bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200"><Clock className="w-3 h-3 mr-1" />Ожидает</Badge>,
-      SENT: <Badge className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"><CheckCircle2 className="w-3 h-3 mr-1" />Отправлено</Badge>,
-      FAILED: <Badge variant="destructive"><XCircle className="w-3 h-3 mr-1" />Ошибка</Badge>,
-      CANCELLED: <Badge variant="outline">Отменено</Badge>
-    }
-    return badges[status as keyof typeof badges] || <Badge>{status}</Badge>
-  }
+  const summary = useMemo(() => summarizeQueue(messages, now), [messages, now])
+  const tz = useMemo(() => getTimeZoneLabel(now).label, [now])
+  const dateLine = `${formatWeekdayDate(now).replace(/^./, (c) => c.toUpperCase())} · часовой пояс: ${tz}`
+  const attentionCount = summary.overdueCount + summary.failedCount
+  const nextMsg = summary.next as QueueMessage | null
+  const num = (n: number) => (pendingError ? '—' : String(n))
+  const initialLoading = queueLoading || staticLoading
 
-  const getExternalStatusBadge = (messageId: string) => {
-    const status = externalStatuses[messageId]
-    if (!status) return null
+  const inlinePanel = !!selectedMessage && isWide
+  const sheetPanel = !!selectedMessage && !isWide
 
-    if (status === 'DELETED_IN_RC') {
-      return (
-        <Badge variant="destructive" className="text-xs">
-          Удалено в Rocket.Chat
-        </Badge>
-      )
-    }
-
-    if (status === 'EDITED_IN_RC') {
-      return (
-        <Badge variant="outline" className="text-xs border-blue-400 text-blue-700 dark:text-blue-200 dark:border-blue-500">
-          Изменено в Rocket.Chat
-        </Badge>
-      )
-    }
-
-    // Для SYNCHRONIZED / UNKNOWN ничего не показываем, чтобы не перегружать UI
-    return null
-  }
+  const panelProps = selectedMessage
+    ? {
+        message: selectedMessage,
+        inList: selectedInList,
+        viewer,
+        now,
+        busy: busyId === selectedMessage.id,
+        justSaved: savedId === selectedMessage.id,
+        onClose: closePanel,
+        onEdit: startEdit,
+        onRetry: handleRetry,
+        onDelete: setDeleteTarget,
+      }
+    : null
 
   return (
-    <div className="p-6 space-y-6 max-w-7xl mx-auto">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-4xl font-bold bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent">
-            Добро пожаловать! 👋
-          </h1>
-          <p className="text-muted-foreground mt-2 text-lg">
-            Обзор вашей активности и запланированных сообщений
-          </p>
-        </div>
-       
-      </div>
-
-      {/* Expiring Workspaces Alert */}
-      {expiringWorkspaces.length > 0 && (
-        <Card className="border-yellow-200 bg-yellow-50 dark:border-yellow-800 dark:bg-yellow-950/20">
-          <CardContent className="pt-6">
-            <div className="flex items-start gap-3">
-              <AlertCircle className="w-6 h-6 text-yellow-600 dark:text-yellow-400 flex-shrink-0 mt-0.5" />
-              <div className="flex-1">
-                <h3 className="font-semibold text-yellow-900 dark:text-yellow-200 mb-1">
-                  Интенсивы скоро закончатся
-                </h3>
-                <p className="text-sm text-yellow-800 dark:text-yellow-300 mb-3">
-                  {expiringWorkspaces.length} {expiringWorkspaces.length === 1 ? 'интенсив заканчивается' : 'интенсива заканчиваются'} в ближайшие 7 дней
-                </p>
-                <div className="space-y-2">
-                  {expiringWorkspaces.map((ws: any) => (
-                    <div key={ws.id} className="flex items-center justify-between bg-white/50 dark:bg-black/20 rounded-lg p-3">
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ backgroundColor: ws.color || '#ef4444' }}>
-                          <Server className="w-4 h-4 text-white" />
-                        </div>
-                        <div>
-                          <p className="font-medium text-sm">{ws.workspaceName}</p>
-                          <p className="text-xs text-muted-foreground">
-                            Завершится {new Date(ws.endDate).toLocaleDateString('ru-RU')}
-                          </p>
-                        </div>
-                      </div>
-                      <Button variant="outline" size="sm" asChild>
-                        <Link href={`/dashboard/workspaces/${ws.id}`}>
-                          Открыть
-                        </Link>
-                      </Button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Скоро к отправке — напоминание */}
-      {soonToSend.length > 0 && (
-        <Card className="border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30">
-          <CardContent className="pt-6">
-            <div className="flex items-start gap-3">
-              <Clock className="w-6 h-6 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
-              <div className="flex-1">
-                <h3 className="font-semibold text-amber-900 dark:text-amber-200 mb-1">
-                  Скоро к отправке
-                </h3>
-                <p className="text-sm text-amber-800 dark:text-amber-300 mb-3">
-                  {soonToSend.length} {soonToSend.length === 1 ? 'сообщение' : 'сообщения'} запланированы в ближайшие 30 минут
-                </p>
-                <div className="space-y-2">
-                  {soonToSend.map((msg: any) => {
-                    const at = new Date(msg.scheduledFor)
-                    const mins = Math.round((at.getTime() - Date.now()) / 60000)
-                    const workspaceId = msg.workspace?.id
-                    return (
-                      <div key={msg.id} className="flex items-center justify-between bg-white/60 dark:bg-black/20 rounded-lg p-3">
-                        <div className="min-w-0 flex-1">
-                          <p className="font-medium text-sm truncate">{msg.channelName ?? '—'} · {(msg.user?.name || msg.user?.email) ?? '—'}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {at.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
-                            {mins > 0 && ` · через ${mins} мин`}
-                          </p>
-                        </div>
-                        {workspaceId && (
-                          <Button variant="outline" size="sm" asChild>
-                            <Link href={`/dashboard/workspaces/${workspaceId}`}>
-                              Открыть
-                            </Link>
-                          </Button>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Stats Grid */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        {statCards.map((stat) => {
-          const Icon = stat.icon
-          return (
-            <Card key={stat.title} className="border-muted hover:shadow-lg transition-shadow">
-              <CardContent className="pt-6">
-                <div className="flex items-center justify-between mb-4">
-                  <div className={`${stat.bgColor} p-3 rounded-xl`}>
-                    <Icon className={`w-6 h-6 ${stat.color}`} />
-                  </div>
-                  <Badge variant="outline" className="text-xs">
-                    {stat.trend}
-                  </Badge>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-sm font-medium text-muted-foreground">
-                    {stat.title}
-                  </p>
-                  <div className="flex items-baseline gap-2">
-                    <p className="text-3xl font-bold">{stat.value}</p>
-                    {stat.total > 0 && (
-                      <p className="text-sm text-muted-foreground">/ {stat.total}</p>
-                    )}
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    {stat.description}
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
+    <PageContainer size="wide">
+      <PageHeader
+        title="Расписание"
+        description={
+          initialLoading ? (
+            <span className="inline-block h-4 w-64 max-w-full animate-pulse rounded-md bg-muted align-middle" />
+          ) : (
+            <>
+              {dateLine}
+              <QueueHeartbeat
+                enabled={currentUser?.role === 'LEAD_SUP' || currentUser?.role === 'SUP'}
+                className="mt-1 flex"
+              />
+            </>
           )
-        })}
-      </div>
+        }
+        actions={
+          <>
+            <Button variant="outline" size="sm" onClick={() => void reloadAll()} disabled={refreshing || initialLoading}>
+              <RefreshCw className={refreshing ? 'animate-spin' : ''} aria-hidden />
+              Обновить
+            </Button>
+            <ScheduleMessageAction workspaces={workspaces} loading={staticLoading} canConnect={!isVolunteer} />
+          </>
+        }
+      />
 
-      <div className="grid gap-6 md:grid-cols-2">
-        {/* Recent Workspaces */}
-        <Card className="border-muted">
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div>
-                <CardTitle className="flex items-center gap-2">
-                  <Server className="w-5 h-5 text-primary" />
-                  Активные пространства
-                </CardTitle>
-                <CardDescription className="mt-1.5">
-                  Недавно используемые
-                </CardDescription>
-              </div>
-              <Button variant="ghost" size="sm" asChild>
-                <Link href="/dashboard/workspaces" className="text-primary">
-                  Все
-                  <ArrowRight className="w-4 h-4 ml-1" />
-                </Link>
-              </Button>
+      {loadError && !staticLoading && (
+        <div
+          role="alert"
+          className="mb-4 flex flex-col gap-2 rounded-lg border border-destructive/30 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+        >
+          <div className="flex items-start gap-2.5 text-sm">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-destructive" aria-hidden />
+            <div>
+              <p className="font-medium">Не удалось загрузить часть данных</p>
+              <p className="text-[13px] text-muted-foreground">Проверьте подключение к интернету и повторите попытку.</p>
             </div>
-          </CardHeader>
-          <CardContent>
-            {recentWorkspaces.length === 0 ? (
-              <div className="text-center py-12">
-                <div className="w-16 h-16 bg-muted rounded-2xl flex items-center justify-center mx-auto mb-4">
-                  <Server className="w-8 h-8 text-muted-foreground" />
-                </div>
-                <p className="text-sm text-muted-foreground mb-3">
-                  Нет подключенных пространств
-                </p>
-                <Button variant="outline" size="sm" asChild>
-                  <Link href="/dashboard/workspaces">
-                    <Plus className="w-4 h-4 mr-2" />
-                    Добавить первое
-                  </Link>
-                </Button>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {recentWorkspaces.map((workspace: any) => (
-                  <Link
-                    key={workspace.id}
-                    href={`/dashboard/workspaces/${workspace.id}`}
-                    className="block group"
-                  >
-                    <div className="flex items-center gap-3 p-4 rounded-xl border hover:bg-muted/50 transition-all group-hover:shadow-md">
-                      <div
-                        className="w-12 h-12 rounded-xl flex items-center justify-center shadow-sm"
-                        style={{ backgroundColor: workspace.color || '#ef4444' }}
-                      >
-                        <Server className="w-6 h-6 text-white" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="font-semibold text-sm group-hover:text-primary transition-colors truncate">
-                          {workspace.workspaceName}
-                        </p>
-                        <p className="text-xs text-muted-foreground truncate">
-                          {workspace.workspaceUrl.replace(/^https?:\/\//, '')}
-                        </p>
-                        {workspace.lastConnected && (
-                          <p className="text-xs text-muted-foreground mt-1">
-                            {formatRelativeTime(workspace.lastConnected)}
-                          </p>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {workspace.isArchived && (
-                          <Badge variant="outline" className="text-xs">
-                            <Archive className="w-3 h-3 mr-1" />
-                            Архив
-                          </Badge>
-                        )}
-                        <Badge variant={workspace.isActive ? 'default' : 'secondary'} className="text-xs">
-                          {workspace.isActive ? 'Активно' : 'Неактивно'}
-                        </Badge>
-                      </div>
-                    </div>
-                  </Link>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Recent Messages */}
-        <Card className="border-muted">
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div>
-                <CardTitle className="flex items-center gap-2">
-                  <MessageSquare className="w-5 h-5 text-primary" />
-                  Последние сообщения
-                </CardTitle>
-                <CardDescription className="mt-1.5">
-                  {currentUser?.role === 'SUPPORT' || currentUser?.role === 'ADM' || currentUser?.role === 'ADMIN'
-                    ? 'Недавно запланированные (можно фильтровать по пользователю)'
-                    : 'Все сообщения, где вы указаны как отправитель (в т.ч. запланированные от вашего имени)'}
-                </CardDescription>
-              </div>
-              <Button variant="ghost" size="sm" asChild>
-                <Link href="/dashboard/calendar" className="text-primary">
-                  Календарь
-                  <ArrowRight className="w-4 h-4 ml-1" />
-                </Link>
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent>
-            {/* User Filter */}
-            {allUsers.length > 0 && (
-              <div className="mb-4 flex items-center gap-2">
-                <Filter className="w-4 h-4 text-muted-foreground" />
-                <Select value={selectedUserId || 'all'} onValueChange={(value) => {
-                  setSelectedUserId(value === 'all' ? null : value)
-                }}>
-                  <SelectTrigger className="w-[200px]">
-                    <SelectValue placeholder="Все пользователи" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">Все пользователи</SelectItem>
-                    {allUsers.map((user: any) => (
-                      <SelectItem key={user.id} value={user.id}>
-                        {user.name || user.username || user.email}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {selectedUserId && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setSelectedUserId(null)}
-                  >
-                    Сбросить
-                  </Button>
-                )}
-              </div>
-            )}
-
-            {loading ? (
-              <div className="space-y-3">
-                {[1, 2, 3].map((i) => (
-                  <div key={i} className="p-4 rounded-xl border space-y-2">
-                    <Skeleton className="h-4 w-3/4" />
-                    <Skeleton className="h-3 w-1/2" />
-                    <Skeleton className="h-3 w-full" />
-                  </div>
-                ))}
-              </div>
-            ) : recentMessages.length === 0 ? (
-              <div className="text-center py-12">
-                <div className="w-16 h-16 bg-muted rounded-2xl flex items-center justify-center mx-auto mb-4">
-                  <MessageSquare className="w-8 h-8 text-muted-foreground" />
-                </div>
-                <p className="text-sm text-muted-foreground mb-3">
-                  Нет запланированных сообщений
-                </p>
-                <Button variant="outline" size="sm" asChild>
-                  <Link href="/dashboard/workspaces">
-                    <Plus className="w-4 h-4 mr-2" />
-                    Создать первое
-                  </Link>
-                </Button>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {recentMessages.slice(0, messagesDisplayLimit).map((message: any) => (
-                  <div
-                    key={message.id}
-                    className="p-4 rounded-xl border hover:bg-muted/50 transition-colors"
-                  >
-                    <div className="flex items-start justify-between gap-3 mb-2">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1 flex-wrap">
-                          <p className="text-sm font-semibold truncate">
-                            #{message.channelName}
-                          </p>
-                          {getStatusBadge(message.status)}
-                          {getExternalStatusBadge(message.id)}
-                          {message.workspace?.username && (
-                            <Badge variant="outline" className="text-xs">
-                              <Users className="w-3 h-3 mr-1" />
-                              {message.workspace.username}
-                            </Badge>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <span className="truncate">
-                            {message.workspace?.workspaceName || 'Unknown workspace'}
-                          </span>
-                          {message.user && message.user.id !== currentUser?.id && (
-                            <>
-                              <span>•</span>
-                              <span>{message.user.name || message.user.username || message.user.email}</span>
-                            </>
-                          )}
-                          {currentUser?.role === 'ADMIN' && message.scheduledBy && (
-                            <>
-                              <span>•</span>
-                              <span className="text-amber-600 dark:text-amber-500">
-                                Запланировано: {message.scheduledBy.name || message.scheduledBy.email}
-                              </span>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                    <p className="text-sm text-foreground/80 line-clamp-2 mb-2">
-                      {message.message}
-                    </p>
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      <Clock className="w-3 h-3" />
-                      <span>{new Date(message.scheduledFor).toLocaleString('ru-RU')}</span>
-                      {message.sentAt && (
-                        <>
-                          <span>•</span>
-                          <span>Отправлено: {new Date(message.sentAt).toLocaleString('ru-RU')}</span>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                ))}
-                {recentMessages.length > messagesDisplayLimit && (
-                  <div className="pt-2">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="w-full text-muted-foreground"
-                      onClick={() => setMessagesDisplayLimit((prev) => Math.min(prev + 20, recentMessages.length))}
-                    >
-                      Показать ещё ({recentMessages.length - messagesDisplayLimit} из {recentMessages.length})
-                    </Button>
-                  </div>
-                )}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Quick Actions */}
-      <Card className="border-muted bg-gradient-to-br from-muted/30 to-muted/10">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <TrendingUp className="w-5 h-5 text-primary" />
-            Быстрые действия
-          </CardTitle>
-          <CardDescription>
-            Часто используемые функции
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {currentUser?.role !== 'VOL' && (
-              <Button variant="outline" className="h-auto py-6 flex-col gap-3 hover:bg-primary/5 hover:border-primary" asChild>
-                <Link href="/dashboard/workspaces">
-                  <div className="w-12 h-12 bg-primary/10 rounded-xl flex items-center justify-center">
-                    <Plus className="w-6 h-6 text-primary" />
-                  </div>
-                  <span className="font-semibold">Новое пространство</span>
-                </Link>
-              </Button>
-            )}
-            <Button variant="outline" className="h-auto py-6 flex-col gap-3 hover:bg-primary/5 hover:border-primary" asChild>
-              <Link href="/dashboard/calendar">
-                <div className="w-12 h-12 bg-primary/10 rounded-xl flex items-center justify-center">
-                  <Calendar className="w-6 h-6 text-primary" />
-                </div>
-                <span className="font-semibold">Календарь</span>
-              </Link>
-            </Button>
-            <Button variant="outline" className="h-auto py-6 flex-col gap-3 hover:bg-primary/5 hover:border-primary" asChild>
-              <Link href="/dashboard/activity">
-                <div className="w-12 h-12 bg-primary/10 rounded-xl flex items-center justify-center">
-                  <Clock className="w-6 h-6 text-primary" />
-                </div>
-                <span className="font-semibold">История</span>
-              </Link>
-            </Button>
-            <Button variant="outline" className="h-auto py-6 flex-col gap-3 hover:bg-primary/5 hover:border-primary" asChild>
-              <Link href="/dashboard/settings">
-                <div className="w-12 h-12 bg-primary/10 rounded-xl flex items-center justify-center">
-                  <Server className="w-6 h-6 text-primary" />
-                </div>
-                <span className="font-semibold">Настройки</span>
-              </Link>
-            </Button>
           </div>
-        </CardContent>
-      </Card>
-    </div>
+          <Button variant="outline" size="sm" onClick={() => void reloadAll()} className="shrink-0">
+            Повторить
+          </Button>
+        </div>
+      )}
+
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_26rem]">
+        <div className="min-w-0 space-y-4">
+          {/* Компактная сводка: считается по полному списку PENDING, поэтому цифры честные */}
+          <section aria-label="Сводка">
+            <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border bg-border sm:grid-cols-3">
+              <div className="min-w-0 bg-card px-3 py-2">
+                <dt className="truncate text-xs text-muted-foreground">В очереди</dt>
+                <dd className="text-base font-semibold tabular-nums">
+                  {queueLoading ? <Skeleton className="mt-1 h-5 w-8" /> : num(summary.pendingTotal)}
+                </dd>
+              </div>
+              <div className="min-w-0 bg-card px-3 py-2">
+                <dt className="truncate text-xs text-muted-foreground">Запланировано на сегодня</dt>
+                <dd className="text-base font-semibold tabular-nums">
+                  {queueLoading ? <Skeleton className="mt-1 h-5 w-8" /> : num(summary.todayCount)}
+                </dd>
+              </div>
+              <div className="col-span-2 min-w-0 bg-card px-3 py-2 sm:col-span-1">
+                <dt className="truncate text-xs text-muted-foreground">Следующая отправка</dt>
+                <dd className="min-w-0">
+                  {queueLoading ? (
+                    <Skeleton className="mt-1 h-5 w-32" />
+                  ) : pendingError ? (
+                    <span className="text-base font-semibold">—</span>
+                  ) : nextMsg ? (
+                    <>
+                      <span className="text-base font-semibold tabular-nums">{formatClock(nextMsg.scheduledFor)}</span>
+                      <span className="ml-2 truncate text-xs text-muted-foreground">
+                        {channelLabel(nextMsg)} · {formatUntil(nextMsg.scheduledFor, now)}
+                      </span>
+                    </>
+                  ) : (
+                    <span className="text-[13px] text-muted-foreground">Нет запланированных</span>
+                  )}
+                </dd>
+              </div>
+            </dl>
+          </section>
+
+          {/* Требуют внимания: короткая полоса со ссылкой на представление (список — в очереди) */}
+          {!queueLoading && attentionCount > 0 && view !== 'attention' && (
+            <div className="flex flex-col gap-2 rounded-lg border border-amber-500/40 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex min-w-0 items-start gap-2 text-sm">
+                <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden />
+                <p className="min-w-0">
+                  <span className="font-medium">Требуют внимания: </span>
+                  {[
+                    summary.failedCount > 0 &&
+                      `${summary.failedCount}${failed.length >= FAILED_LIMIT ? '+' : ''} не отправлено`,
+                    summary.overdueCount > 0 &&
+                      `${summary.overdueCount} ${pluralRu(summary.overdueCount, ['ожидает', 'ожидают', 'ожидают'])} отправки с прошедшим временем`,
+                  ]
+                    .filter(Boolean)
+                    .join(', ')}
+                </p>
+              </div>
+              <Button variant="outline" size="sm" className="shrink-0 self-start sm:self-auto" onClick={() => handleViewChange('attention')}>
+                Показать
+              </Button>
+            </div>
+          )}
+
+          <MessageQueue
+            messages={messages}
+            loading={queueLoading}
+            pendingError={pendingError}
+            failedError={failedError}
+            failedLimit={FAILED_LIMIT}
+            failedLimited={failed.length >= FAILED_LIMIT}
+            now={now}
+            viewer={viewer}
+            view={view}
+            onViewChange={handleViewChange}
+            filters={filters}
+            onFiltersChange={handleFiltersChange}
+            users={isStaff ? allUsers.filter((u) => u.id && u.id !== currentUser?.id) : []}
+            selectedId={selectedId}
+            busyId={busyId}
+            onSelect={selectMessage}
+            onEdit={startEdit}
+            onRetryMessage={handleRetry}
+            onDelete={setDeleteTarget}
+            onReload={() => void reloadAll()}
+          />
+        </div>
+
+        <div className={cn('min-w-0', inlinePanel && 'xl:sticky xl:top-4 xl:self-start')}>
+          {inlinePanel && panelProps ? (
+            <aside
+              aria-label="Детали сообщения"
+              className="flex max-h-[calc(100dvh-2rem)] min-h-0 flex-col overflow-hidden rounded-lg border bg-card"
+            >
+              <MessageDetailPanel key={panelProps.message.id} layout="inline" {...panelProps} />
+            </aside>
+          ) : (
+            <DashboardSecondary
+              stats={stats}
+              statsLoaded={statsLoaded}
+              loading={staticLoading}
+              expiringWorkspaces={expiringWorkspaces}
+              recentWorkspaces={workspaces.slice(0, 3)}
+              isVolunteer={isVolunteer}
+              now={now}
+            />
+          )}
+        </div>
+      </div>
+
+      {/* Узкие экраны: полноэкранная шторка */}
+      {sheetPanel && panelProps && (
+        <Sheet
+          open
+          onOpenChange={(open) => {
+            if (!open) closePanel()
+          }}
+        >
+          <SheetContent
+            side="right"
+            className="w-full gap-0 p-0 sm:max-w-md"
+            onCloseAutoFocus={(e) => e.preventDefault()}
+          >
+            <SheetTitle className="sr-only">Детали сообщения</SheetTitle>
+            <SheetDescription className="sr-only">Время, статус, текст и действия с сообщением.</SheetDescription>
+            <MessageDetailPanel key={panelProps.message.id} layout="sheet" {...panelProps} />
+          </SheetContent>
+        </Sheet>
+      )}
+
+      {/* Изменение времени — существующий диалог редактирования */}
+      {editing && (
+        <MessageDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) {
+              focusRow(editing.id)
+              setEditing(null)
+            }
+          }}
+          workspaceId={(editing.workspaceId ?? editing.workspace?.id) as string}
+          channelId={editing.channelId as string}
+          channelName={editing.channelName ?? ''}
+          editingMessage={editing}
+          onSuccess={() => handleSaved(editing.id)}
+          currentUserRole={currentUser?.role}
+        />
+      )}
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null)
+        }}
+        title="Удалить сообщение?"
+        description={
+          deleteTarget && (
+            <div className="space-y-2 text-sm">
+              <p className="font-medium text-foreground">
+                {channelLabel(deleteTarget)} · {formatClock(deleteTarget.scheduledFor)}
+              </p>
+              <p className="line-clamp-3 break-words text-muted-foreground">
+                {(deleteTarget.message ?? '').trim() || 'Без текста'}
+              </p>
+              <p className="text-muted-foreground">
+                {deleteTarget.status === 'SENT'
+                  ? 'Это действие нельзя отменить.'
+                  : 'Сообщение не будет отправлено. Это действие нельзя отменить.'}
+              </p>
+            </div>
+          )
+        }
+        confirmLabel="Удалить"
+        destructive
+        loading={deleting}
+        onConfirm={confirmDelete}
+      />
+    </PageContainer>
   )
 }

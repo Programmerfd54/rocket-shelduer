@@ -3,11 +3,9 @@
 import { useState, useRef, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from '@/components/ui/popover'
+import * as PopoverPrimitive from '@radix-ui/react-popover'
+import { Popover, PopoverTrigger } from '@/components/ui/popover'
+import EmojiPicker from './EmojiPicker'
 import { 
   Bold, 
   Italic, 
@@ -17,7 +15,6 @@ import {
   Smile,
   Type
 } from 'lucide-react'
-import { cn } from '@/lib/utils'
 
 interface MessageEditorProps {
   value: string
@@ -32,7 +29,14 @@ interface MessageEditorProps {
   }>
   workspaceId?: string
   workspaceUrl?: string
+  /** Вызывается с вставленным текстом вида `:shortcode:` */
   onEmojiSelect?: (emoji: string) => void
+  /** Идёт загрузка эмодзи воркспейса (показывается скелетон в пикере) */
+  emojisLoading?: boolean
+  /** Ошибка загрузки эмодзи воркспейса (строка — текст ошибки) */
+  emojisError?: string | boolean | null
+  /** Повторить загрузку эмодзи воркспейса */
+  onRetryEmojis?: () => void
 }
 
 export default function MessageEditor({
@@ -44,6 +48,9 @@ export default function MessageEditor({
   workspaceId,
   workspaceUrl,
   onEmojiSelect,
+  emojisLoading = false,
+  emojisError = null,
+  onRetryEmojis,
 }: MessageEditorProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
@@ -127,49 +134,22 @@ export default function MessageEditor({
     }
   }
 
-  // URL изображения эмодзи через наш API-прокси (избегаем CORS). v=2 — сброс кэша после фикса SVG→PNG
-  const getEmojiImageUrl = (emojiName: string, extension: string = 'png', emojiId?: string) => {
-    if (!workspaceId) return null
-    const params = new URLSearchParams()
-    params.set('name', emojiName)
-    params.set('ext', extension)
-    if (emojiId) params.set('id', emojiId)
-    params.set('v', '2')
-    return `/api/workspace/${workspaceId}/emoji-image?${params.toString()}`
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return
+    const key = e.key.toLowerCase()
+    if (key === 'b') {
+      e.preventDefault()
+      formatBold()
+    } else if (key === 'i') {
+      e.preventDefault()
+      formatItalic()
+    }
   }
-
-  // Стандартные популярные эмодзи (всегда доступны для выбора по alias)
-  // Здесь только небольшой набор самых частых, чтобы список был компактным и понятным
-  const standardEmojiNames = [
-    'smile',
-    'slightly_smiling_face',
-    'wink',
-    'heart',
-    'thumbsup',
-    'thumbsdown',
-    'fire',
-    'rocket',
-    'tada',
-    'cat_typing',
-    'gandalf',
-    'heart_eyes',
-    'laughing',
-    'thinking',
-    'clap',
-    'ok_hand',
-    'wave',
-    'raised_hands',
-    'pray',
-  ]
-
-  // Разделяем на часто используемые (первые 20 загруженных кастомных) и остальные
-  const frequentlyUsed = emojis.slice(0, 20)
-  const otherEmojis = emojis.slice(20)
 
   return (
     <div className="space-y-3 min-w-0">
       {/* Toolbar */}
-      <div className="flex items-center gap-1 p-2 rounded-xl border border-border/80 bg-muted/30">
+      <div role="toolbar" aria-label="Форматирование текста" className="flex flex-wrap items-center gap-0.5 p-1 rounded-md border bg-muted/40">
         {/* Emoji Picker */}
         <Popover open={showEmojiPicker} onOpenChange={setShowEmojiPicker}>
           <PopoverTrigger asChild>
@@ -178,154 +158,37 @@ export default function MessageEditor({
               variant="ghost"
               size="sm"
               className="h-8 w-8 p-0"
+              title="Эмодзи"
+              aria-label="Вставить эмодзи"
             >
               <Smile className="h-4 w-4" />
             </Button>
           </PopoverTrigger>
-          <PopoverContent className="w-96 p-3" align="start">
-            <div className="space-y-3 max-h-80 overflow-y-auto">
-              {/* Часто используемые */}
-              {frequentlyUsed.length > 0 && (
-                <div>
-                  <p className="text-xs font-semibold text-muted-foreground mb-2 px-1">Часто используемые</p>
-                  <div className="grid grid-cols-10 gap-1">
-                    {frequentlyUsed.map((emoji: any, index: number) => {
-                      const imageUrl = getEmojiImageUrl(emoji.name, emoji.extension || 'png', emoji._id)
-                      const shortcode = `:${emoji.name}:`
-                      return (
-                        <button
-                          key={`${emoji._id || emoji.name}-${index}`}
-                          type="button"
-                          onClick={() => insertEmoji(emoji.name)}
-                          className="aspect-square p-1.5 hover:bg-muted rounded transition-colors flex flex-col items-center justify-center gap-0.5 group relative bg-muted/50"
-                          title={shortcode}
-                        >
-                          {imageUrl ? (
-                            <>
-                              <img
-                                src={imageUrl}
-                                alt={shortcode}
-                                className="w-6 h-6 object-contain shrink-0 rounded-sm bg-background/80"
-                                loading="lazy"
-                                decoding="async"
-                                referrerPolicy="no-referrer"
-                                onError={(e) => {
-                                  const target = e.target as HTMLImageElement
-                                  const parent = target.parentElement
-                                  if (parent) {
-                                    target.style.display = 'none'
-                                    let fallback = parent.querySelector('.emoji-shortcode-fallback')
-                                    if (!fallback) {
-                                      fallback = document.createElement('span')
-                                      fallback.className = 'emoji-shortcode-fallback text-[10px] text-muted-foreground group-hover:text-foreground break-all text-center leading-tight px-0.5'
-                                      fallback.textContent = shortcode
-                                      parent.appendChild(fallback)
-                                    }
-                                  }
-                                }}
-                              />
-                              <span className="emoji-shortcode-fallback text-[9px] text-muted-foreground truncate w-full text-center opacity-70" title={shortcode}>
-                                :{emoji.name}:
-                              </span>
-                            </>
-                          ) : (
-                            <span className="text-[10px] text-muted-foreground group-hover:text-foreground break-all text-center leading-tight px-0.5">
-                              {shortcode}
-                            </span>
-                          )}
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* Остальные эмодзи */}
-              {otherEmojis.length > 0 && (
-                <div>
-                  <p className="text-xs font-semibold text-muted-foreground mb-2 px-1 mt-3">
-                    Все эмодзи
-                  </p>
-                  <div className="grid grid-cols-10 gap-1">
-                    {otherEmojis.map((emoji: any, index: number) => {
-                      const imageUrl = getEmojiImageUrl(emoji.name, emoji.extension || 'png', emoji._id)
-                      const shortcode = `:${emoji.name}:`
-                      return (
-                        <button
-                          key={`${emoji._id || emoji.name}-${index}`}
-                          type="button"
-                          onClick={() => insertEmoji(emoji.name)}
-                          className="aspect-square p-1.5 hover:bg-muted rounded transition-colors flex flex-col items-center justify-center gap-0.5 group relative bg-muted/50"
-                          title={shortcode}
-                        >
-                          {imageUrl ? (
-                            <>
-                              <img
-                                src={imageUrl}
-                                alt={shortcode}
-                                className="w-6 h-6 object-contain shrink-0 rounded-sm bg-background/80"
-                                loading="lazy"
-                                decoding="async"
-                                referrerPolicy="no-referrer"
-                                onError={(e) => {
-                                  const target = e.target as HTMLImageElement
-                                  const parent = target.parentElement
-                                  if (parent) {
-                                    target.style.display = 'none'
-                                    let fallback = parent.querySelector('.emoji-shortcode-fallback')
-                                    if (!fallback) {
-                                      fallback = document.createElement('span')
-                                      fallback.className = 'emoji-shortcode-fallback text-[10px] text-muted-foreground group-hover:text-foreground break-all text-center leading-tight px-0.5'
-                                      fallback.textContent = shortcode
-                                      parent.appendChild(fallback)
-                                    }
-                                  }
-                                }}
-                              />
-                              <span className="emoji-shortcode-fallback text-[9px] text-muted-foreground truncate w-full text-center opacity-70" title={shortcode}>
-                                :{emoji.name}:
-                              </span>
-                            </>
-                          ) : (
-                            <span className="text-[10px] text-muted-foreground group-hover:text-foreground break-all text-center leading-tight px-0.5">
-                              {shortcode}
-                            </span>
-                          )}
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* Если с сервера не пришли кастомные эмодзи, показываем компактный список стандартных alias'ов текстом */}
-              {emojis.length === 0 && (
-                <div>
-                  <p className="text-xs font-semibold text-muted-foreground mb-2 px-1 mt-3">
-                    Стандартные эмодзи
-                  </p>
-                  <div className="grid grid-cols-10 gap-1">
-                    {standardEmojiNames.map((name, index) => (
-                      <button
-                        key={`${name}-${index}`}
-                        type="button"
-                        onClick={() => insertEmoji(name)}
-                        className="aspect-square p-1.5 hover:bg-muted rounded transition-colors flex items-center justify-center"
-                        title={name}
-                      >
-                        <span className="text-[10px] text-muted-foreground break-all text-center leading-tight px-0.5">
-                          :{name}:
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </PopoverContent>
+          {/* Примитив напрямую: PopoverContent из ui не пробрасывает className (ширина w-72 и p-4 зашиты) */}
+          <PopoverPrimitive.Portal>
+            <PopoverPrimitive.Content
+              align="start"
+              sideOffset={4}
+              collisionPadding={8}
+              onCloseAutoFocus={(e) => {
+                e.preventDefault()
+                textareaRef.current?.focus()
+              }}
+              className="z-50 w-[340px] max-w-[calc(100vw-16px)] rounded-md border bg-popover text-popover-foreground shadow-md outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95"
+            >
+              <EmojiPicker
+                customEmojis={emojis}
+                workspaceId={workspaceId}
+                loading={emojisLoading}
+                error={emojisError}
+                onRetry={onRetryEmojis}
+                onSelect={insertEmoji}
+              />
+            </PopoverPrimitive.Content>
+          </PopoverPrimitive.Portal>
         </Popover>
 
-        <div className="h-6 w-px bg-border mx-1" />
+        <div className="h-5 w-px bg-border mx-1" aria-hidden />
 
         {/* Formatting Buttons */}
         <Button
@@ -335,6 +198,7 @@ export default function MessageEditor({
           className="h-8 w-8 p-0"
           onClick={formatBold}
           title="Жирный (Ctrl+B)"
+          aria-label="Жирный"
         >
           <Bold className="h-4 w-4" />
         </Button>
@@ -345,6 +209,7 @@ export default function MessageEditor({
           className="h-8 w-8 p-0"
           onClick={formatItalic}
           title="Курсив (Ctrl+I)"
+          aria-label="Курсив"
         >
           <Italic className="h-4 w-4" />
         </Button>
@@ -355,11 +220,12 @@ export default function MessageEditor({
           className="h-8 w-8 p-0"
           onClick={formatStrikethrough}
           title="Зачеркнутый"
+          aria-label="Зачёркнутый"
         >
           <Strikethrough className="h-4 w-4" />
         </Button>
 
-        <div className="h-6 w-px bg-border mx-1" />
+        <div className="h-5 w-px bg-border mx-1" aria-hidden />
 
         <Button
           type="button"
@@ -368,6 +234,7 @@ export default function MessageEditor({
           className="h-8 w-8 p-0"
           onClick={formatInlineCode}
           title="Инлайн код"
+          aria-label="Код в строке"
         >
           <Code className="h-4 w-4" />
         </Button>
@@ -378,11 +245,12 @@ export default function MessageEditor({
           className="h-8 w-8 p-0"
           onClick={formatCodeBlock}
           title="Блок кода"
+          aria-label="Блок кода"
         >
           <Type className="h-4 w-4" />
         </Button>
 
-        <div className="h-6 w-px bg-border mx-1" />
+        <div className="h-5 w-px bg-border mx-1" aria-hidden />
 
         <Button
           type="button"
@@ -391,6 +259,7 @@ export default function MessageEditor({
           className="h-8 w-8 p-0"
           onClick={formatLink}
           title="Вставить ссылку"
+          aria-label="Вставить ссылку"
         >
           <LinkIcon className="h-4 w-4" />
         </Button>
@@ -407,7 +276,8 @@ export default function MessageEditor({
         }}
         placeholder={placeholder}
         rows={8}
-        className="resize-none font-mono text-sm rounded-xl border-border/80 bg-background focus-visible:ring-2 focus-visible:ring-primary/20 min-w-0 w-full break-words"
+        onKeyDown={handleKeyDown}
+        className="resize-none font-mono text-sm rounded-md bg-background min-w-0 w-full break-words"
         onSelect={(e) => {
           const target = e.target as HTMLTextAreaElement
           setSelectedRange({

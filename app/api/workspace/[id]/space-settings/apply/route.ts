@@ -1,12 +1,16 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { getSafeErrorMessage } from '@/lib/security';
-import { requireAuth } from '@/lib/auth';
+import { requireAuth } from '@/lib/api-auth';
+import { canPerformAction } from '@/lib/permissions';
+import { requireWorkspaceTabAccess } from '@/lib/workspace-tab-access';
 import { getEffectiveConnectionForRc } from '@/lib/workspace-rc';
 import { rcNotConnectedResponse } from '@/lib/rc-http';
 import {
   type SettingKey,
   applyHideSystemMessages,
+  clearHideSystemMessages,
+  isRcSettingsPermissionError,
   applyThreadDefault,
   applyOfflineEmail,
   applyMessageEditDelete,
@@ -36,13 +40,25 @@ export async function POST(
 ) {
   try {
     const user = await requireAuth();
+    if (!canPerformAction(user, 'workspace:space-settings')) {
+      return NextResponse.json({ error: 'Недостаточно прав' }, { status: 403 });
+    }
     const { id: workspaceId } = await params;
+    const tabAccess = await requireWorkspaceTabAccess(user, workspaceId, 'spaceSettings');
+    if (!tabAccess.ok) return tabAccess.response;
     const body = await request.json().catch(() => ({}));
     const key = body?.key as SettingKey;
+    const clear = body?.clear === true;
 
-    if (!key || !APPLIERS[key]) {
+    if (!key || (!clear && !APPLIERS[key])) {
       return NextResponse.json(
         { error: 'Неизвестный ключ настройки' },
+        { status: 400 }
+      );
+    }
+    if (clear && key !== 'hideSystemMessages') {
+      return NextResponse.json(
+        { error: 'Сброс доступен только для hideSystemMessages' },
         { status: 400 }
       );
     }
@@ -53,16 +69,25 @@ export async function POST(
     }
 
     const baseUrl = effective.workspaceUrl.replace(/\/$/, '');
-    const result = await APPLIERS[key](
-      baseUrl,
-      effective.authToken,
-      effective.userId_RC
-    );
+    const result = clear
+      ? await clearHideSystemMessages(baseUrl, effective.authToken, effective.userId_RC)
+      : await APPLIERS[key](baseUrl, effective.authToken, effective.userId_RC);
 
     if (!result.ok) {
+      const permissionDenied =
+        'permissionDenied' in result && result.permissionDenied === true;
+      const status =
+        permissionDenied || isRcSettingsPermissionError(result.error) ? 403 : 400;
       return NextResponse.json(
-        { error: result.error || 'Не удалось применить' },
-        { status: 400 }
+        {
+          error:
+            result.error ||
+            (permissionDenied
+              ? 'Недостаточно прав в Rocket.Chat. Для изменения настроек сервера нужна учётная запись администратора RC (личный токен без роли admin не подойдёт).'
+              : 'Не удалось применить'),
+          code: permissionDenied ? 'RC_SETTINGS_FORBIDDEN' : undefined,
+        },
+        { status }
       );
     }
 

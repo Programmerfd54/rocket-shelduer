@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getSafeErrorMessage } from '@/lib/security';
 import prisma from '@/lib/prisma';
-import { requireAuth } from '@/lib/auth';
+import { requireAuth } from '@/lib/api-auth';
 import { isUnsafeId } from '@/lib/security';
 import { RocketChatClient } from '@/lib/rocketchat';
 import { getEffectiveConnectionForRc } from '@/lib/workspace-rc';
@@ -14,7 +14,7 @@ async function canAccessWorkspaceAdmin(userId: string, userRole: string, workspa
   });
   if (!workspace) return { ok: false as const, error: 'Workspace not found' };
   if (workspace.userId === userId) return { ok: true as const };
-  if (userRole !== 'SUPPORT' && userRole !== 'ADMIN' && userRole !== 'ADM') return { ok: false as const, error: 'Forbidden' };
+  if (userRole !== 'SUP' && userRole !== 'LEAD_SUP' && userRole !== 'ADM') return { ok: false as const, error: 'Forbidden' };
   const assigned = await prisma.workspaceAdminAssignment.findFirst({
     where: { userId, workspaceId },
     select: { id: true },
@@ -52,12 +52,15 @@ export async function POST(
     }
 
     const body = await request.json().catch(() => ({}));
-    const adminUsername = (body.adminUsername ?? '').trim();
-    const adminPassword = typeof body.adminPassword === 'string' ? body.adminPassword : '';
+    const adminUsername = typeof body?.adminUsername === 'string' ? body.adminUsername.trim() : '';
+    const adminPassword = typeof body?.adminPassword === 'string' ? body.adminPassword : '';
     /** Порядок и написание как в запросе — для проверки по списку не полагаемся на users.list (у RC бывает неверный total / лимит страницы). */
-    const requestedUsernames = Array.isArray(body.usernames)
-      ? (body.usernames as string[]).map((u) => String(u).trim()).filter(Boolean)
+    const requestedUsernames = Array.isArray(body?.usernames)
+      ? (body.usernames as unknown[]).filter((u): u is string => typeof u === 'string').map((u) => u.trim().slice(0, 200)).filter(Boolean)
       : [];
+    if (requestedUsernames.length > 100) {
+      return NextResponse.json({ error: 'Максимум 100 пользователей за запрос.' }, { status: 400 });
+    }
 
     const baseUrl = workspace.workspaceUrl.replace(/\/$/, '');
     const rc = new RocketChatClient(baseUrl);

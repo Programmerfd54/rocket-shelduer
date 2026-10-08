@@ -6,11 +6,18 @@ on:
   pull_request:
     branches: [main]
 
+# Минимальные права GITHUB_TOKEN (только чтение кода)
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # токен не остаётся в .git/config для последующих шагов
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -39,6 +46,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # токен не остаётся в .git/config для последующих шагов
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -59,3 +69,8 @@ jobs:
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/test
           JWT_SECRET: ci-secret-key-for-tests
+
+      # Отчёт об уязвимостях production-зависимостей (не блокирует сборку; см. README → Безопасность)
+      - name: npm audit (production deps)
+        run: npm audit --omit=dev --audit-level=high
+        continue-on-error: true

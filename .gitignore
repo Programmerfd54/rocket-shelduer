@@ -45,3 +45,10 @@ next-env.d.ts
 
 # help uploads (admin-managed)
 /public/help-uploads
+
+# user uploads (avatars) — персональные данные, не хранить в git
+/public/uploads
+
+# Служебные файлы деплоя (бэкапы БД, состояние update.sh)
+/backups/
+/.deploy/

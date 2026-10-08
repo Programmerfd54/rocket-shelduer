@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { requireAdmin, isForbiddenError } from '@/lib/auth';
+import { isForbiddenError } from '@/lib/auth';
+import { requireAdmin } from '@/lib/api-auth';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { requireAdmin, isForbiddenError } from '@/lib/auth';
+import { isForbiddenError } from '@/lib/auth';
+import { requireAdmin } from '@/lib/api-auth';
 import prisma from '@/lib/prisma';
 
 /**
@@ -14,8 +15,8 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     
     // Пагинация
-    const page = Math.max(1, parseInt(searchParams.get('page') ?? '1'));
-    const limit = Math.min(100, Math.max(1, parseInt(searchParams.get('limit') ?? '50')));
+    const page = Math.max(1, parseInt(searchParams.get('page') ?? '1', 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(searchParams.get('limit') ?? '50', 10) || 50));
     const skip = (page - 1) * limit;
 
     // Фильтры
@@ -55,10 +56,10 @@ export async function GET(request: Request) {
     // Фильтр по датам
     if (dateFrom || dateTo) {
       where.createdAt = {};
-      if (dateFrom) {
+      if (dateFrom && !Number.isNaN(new Date(dateFrom).getTime())) {
         where.createdAt.gte = new Date(dateFrom);
       }
-      if (dateTo) {
+      if (dateTo && !Number.isNaN(new Date(dateTo).getTime())) {
         where.createdAt.lte = new Date(dateTo);
       }
     }

@@ -81,6 +81,7 @@ export async function GET() {
 
     return NextResponse.json(exportData, {
       headers: {
+        'Cache-Control': 'no-store',
         'Content-Disposition': `attachment; filename="rc-scheduler-backup-${user.id.slice(0, 8)}-${new Date().toISOString().slice(0, 10)}.json"`,
       },
     });

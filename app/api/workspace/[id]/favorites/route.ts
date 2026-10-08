@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { requireAuth } from '@/lib/auth';
+import { requireAuth } from '@/lib/api-auth';
+import { isUnsafeId } from '@/lib/security';
 
 // GET - получить избранные каналы
 export async function GET(
@@ -35,6 +36,22 @@ export async function GET(
   }
 }
 
+/** Владелец пространства или назначенный на него пользователь. */
+async function hasWorkspaceAccess(userId: string, workspaceId: string): Promise<boolean> {
+  if (isUnsafeId(workspaceId)) return false;
+  const ws = await prisma.workspaceConnection.findUnique({
+    where: { id: workspaceId },
+    select: { userId: true },
+  });
+  if (!ws) return false;
+  if (ws.userId === userId) return true;
+  const assignment = await prisma.workspaceAdminAssignment.findFirst({
+    where: { workspaceId, userId },
+    select: { id: true },
+  });
+  return !!assignment;
+}
+
 // POST - добавить в избранное
 export async function POST(
   request: Request,
@@ -43,7 +60,21 @@ export async function POST(
   try {
     const user = await requireAuth();
     const { id } = await params;
-    const { channelId, channelName } = await request.json();
+    const body = await request.json().catch(() => ({}));
+    const channelId = body?.channelId;
+    const channelName = body?.channelName;
+    if (
+      typeof channelId !== 'string' ||
+      isUnsafeId(channelId) ||
+      typeof channelName !== 'string' ||
+      !channelName.trim() ||
+      channelName.length > 200
+    ) {
+      return NextResponse.json({ error: 'channelId and channelName are required' }, { status: 400 });
+    }
+    if (!(await hasWorkspaceAccess(user.id, id))) {
+      return NextResponse.json({ error: 'Workspace not found' }, { status: 404 });
+    }
 
     const favorite = await prisma.favoriteChannel.create({
       data: {
@@ -52,6 +83,7 @@ export async function POST(
         channelId,
         channelName,
       },
+      select: { id: true, channelId: true, channelName: true, createdAt: true },
     });
 
     return NextResponse.json({ success: true, favorite });

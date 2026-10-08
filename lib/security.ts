@@ -1,4 +1,10 @@
+import crypto from 'crypto';
 import prisma from './prisma';
+import {
+  checkBearerSecret,
+  createFixedWindowLimiter,
+  getClientIpFromHeaders,
+} from './http-security';
 
 /** Типы событий безопасности для логов */
 export const SecurityEventType = {
@@ -34,11 +40,11 @@ export async function logSecurityEvent(params: LogSecurityEventParams): Promise<
     await prisma.securityEvent.create({
       data: {
         type: params.type,
-        path: params.path ?? null,
-        method: params.method ?? null,
-        ipAddress: params.ipAddress ?? null,
+        path: params.path?.slice(0, 500) ?? null,
+        method: params.method?.slice(0, 16) ?? null,
+        ipAddress: params.ipAddress?.slice(0, 64) ?? null,
         userAgent: params.userAgent?.slice(0, 500) ?? null,
-        details: params.details ?? null,
+        details: params.details?.slice(0, 2000) ?? null,
         blocked: params.blocked ?? true,
         userId: params.userId ?? null,
       },
@@ -138,72 +144,149 @@ export function getSafeErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-/** Получить IP из запроса (учёт X-Forwarded-For за прокси). */
+/**
+ * IP клиента из запроса с учётом доверенных прокси (TRUSTED_PROXY_HOPS, по умолчанию 1):
+ * берётся запись X-Forwarded-For, дописанная ближайшим доверенным прокси, а не первая (её подделывает клиент).
+ */
 export function getClientIp(request: Request): string | null {
-  const forwarded = request.headers.get('x-forwarded-for');
-  if (forwarded) {
-    const first = forwarded.split(',')[0]?.trim();
-    if (first) return first;
-  }
-  return request.headers.get('x-real-ip') ?? null;
+  return getClientIpFromHeaders(request.headers);
 }
 
-/** In-memory rate limit для /api/auth/*: 60 запросов в минуту с одного IP. */
-const AUTH_RATE_WINDOW_MS = 60 * 1000;
-const AUTH_RATE_MAX = 60;
-const authRateMap = new Map<string, { count: number; resetAt: number }>();
+/**
+ * In-memory rate limit для /api/auth/*: 60 запросов в минуту с одного IP (на процесс).
+ * Это грубый фильтр от флуда; перебор паролей ограничивают счётчики в БД (isLoginRateLimited,
+ * isAccountLoginLocked), общий для реплик лимит запросов — nginx limit_req (deploy/nginx-example.conf).
+ */
+const authLimiter = createFixedWindowLimiter({ windowMs: 60 * 1000, max: 60 });
 
 export function isAuthEndpointRateLimited(ip: string | null): boolean {
-  if (!ip?.trim()) return false;
-  const key = ip.trim();
-  const now = Date.now();
-  const entry = authRateMap.get(key);
-  if (!entry) {
-    authRateMap.set(key, { count: 1, resetAt: now + AUTH_RATE_WINDOW_MS });
-    return false;
-  }
-  if (now >= entry.resetAt) {
-    authRateMap.set(key, { count: 1, resetAt: now + AUTH_RATE_WINDOW_MS });
-    return false;
-  }
-  entry.count++;
-  return entry.count > AUTH_RATE_MAX;
+  return authLimiter.hit(ip);
 }
 
+/** @deprecated Учёт уже выполняет isAuthEndpointRateLimited; оставлено для совместимости вызовов. */
 export function recordAuthEndpointHit(ip: string | null): void {
-  if (!ip?.trim()) return;
-  const key = ip.trim();
-  const now = Date.now();
-  const entry = authRateMap.get(key);
-  if (!entry) {
-    authRateMap.set(key, { count: 1, resetAt: now + AUTH_RATE_WINDOW_MS });
-    return;
-  }
-  if (now >= entry.resetAt) {
-    authRateMap.set(key, { count: 1, resetAt: now + AUTH_RATE_WINDOW_MS });
-    return;
-  }
-  entry.count++;
+  void ip;
 }
 
 /** Rate limit для invite token: 30 проверок в минуту с одного IP. */
-const INVITE_RATE_WINDOW_MS = 60 * 1000;
-const INVITE_RATE_MAX = 30;
-const inviteRateMap = new Map<string, { count: number; resetAt: number }>();
+const inviteLimiter = createFixedWindowLimiter({ windowMs: 60 * 1000, max: 30 });
 
 export function isInviteTokenRateLimited(ip: string | null): boolean {
-  if (!ip?.trim()) return false;
-  const key = `invite:${ip.trim()}`;
-  const now = Date.now();
-  const entry = inviteRateMap.get(key);
-  if (!entry) {
-    inviteRateMap.set(key, { count: 1, resetAt: now + INVITE_RATE_WINDOW_MS });
-    return false;
+  return inviteLimiter.hit(ip ? `invite:${ip}` : null);
+}
+
+/**
+ * Лимит неудачных входов на учётную запись (по введённому логину, независимо от того,
+ * существует ли пользователь — чтобы лимит не раскрывал наличие аккаунта).
+ * 10 неудач за 15 минут → вход по этому логину временно отклоняется (429).
+ * Защищает от перебора пароля с множества IP (ротация X-Forwarded-For, ботнет).
+ *
+ * Счётчик — в БД (события LOGIN_FAILED с меткой учётной записи в details), поэтому общий для всех
+ * реплик и переживает перезапуск. In-memory счётчик — только запасной вариант при ошибке БД.
+ * Сам логин не хранится: метка — HMAC (логин мог быть введён вместо пароля).
+ */
+export const ACCOUNT_LOGIN_WINDOW_MS = 15 * 60 * 1000;
+export const ACCOUNT_LOGIN_MAX_FAILURES = 10;
+const accountLoginLimiter = createFixedWindowLimiter({
+  windowMs: ACCOUNT_LOGIN_WINDOW_MS,
+  max: ACCOUNT_LOGIN_MAX_FAILURES,
+  maxKeys: 50_000,
+});
+
+function accountKey(login: string): string {
+  return `acct:${login.trim().toLowerCase()}`;
+}
+
+/** Метка учётной записи для details события LOGIN_FAILED (HMAC от логина, без самого логина). */
+export function accountLoginMarker(login: string, secret: string | undefined = process.env.JWT_SECRET): string {
+  const digest = crypto
+    .createHmac('sha256', secret || 'rocketchat-scheduler-account-lock')
+    .update(login.trim().toLowerCase())
+    .digest('hex')
+    .slice(0, 24);
+  return `[acct:${digest}]`;
+}
+
+/** Начало окна подсчёта: последние 15 минут, но не раньше последнего успешного входа (сброс счётчика). */
+export function accountLockWindowStart(now: number, lastSuccessAt?: Date | null): Date {
+  const windowStart = new Date(now - ACCOUNT_LOGIN_WINDOW_MS);
+  if (lastSuccessAt && new Date(lastSuccessAt).getTime() > windowStart.getTime()) return new Date(lastSuccessAt);
+  return windowStart;
+}
+
+/**
+ * true — по этому логину слишком много неудач (429).
+ * lastSuccessAt — время последнего успешного входа найденного пользователя (null для несуществующего).
+ */
+export async function isAccountLoginLocked(login: string, lastSuccessAt?: Date | null): Promise<boolean> {
+  try {
+    const count = await prisma.securityEvent.count({
+      where: {
+        type: SecurityEventType.LOGIN_FAILED,
+        path: '/api/auth/login',
+        createdAt: { gte: accountLockWindowStart(Date.now(), lastSuccessAt) },
+        details: { contains: accountLoginMarker(login) },
+      },
+    });
+    return count >= ACCOUNT_LOGIN_MAX_FAILURES;
+  } catch {
+    return accountLoginLimiter.isLimited(accountKey(login));
   }
-  if (now >= entry.resetAt) {
-    inviteRateMap.set(key, { count: 1, resetAt: now + INVITE_RATE_WINDOW_MS });
-    return false;
+}
+
+/** Запасной in-memory учёт (основной — событие LOGIN_FAILED с accountLoginMarker в details). */
+export function recordAccountLoginFailure(login: string): void {
+  accountLoginLimiter.hit(accountKey(login));
+}
+
+export function resetAccountLoginFailures(login: string): void {
+  accountLoginLimiter.reset(accountKey(login));
+}
+
+/**
+ * Перебор текущего пароля в «Настройках» украденной сессией: 5 ошибок за 15 минут на пользователя.
+ * Считается по событиям LOGIN_FAILED (path /api/user/password) в БД — общий для всех реплик;
+ * in-memory — запасной вариант при ошибке БД.
+ */
+const CURRENT_PASSWORD_WINDOW_MS = 15 * 60 * 1000;
+const CURRENT_PASSWORD_MAX_FAILURES = 5;
+const currentPasswordLimiter = createFixedWindowLimiter({
+  windowMs: CURRENT_PASSWORD_WINDOW_MS,
+  max: CURRENT_PASSWORD_MAX_FAILURES,
+});
+
+export async function isCurrentPasswordCheckLocked(userId: string): Promise<boolean> {
+  try {
+    const count = await prisma.securityEvent.count({
+      where: {
+        type: SecurityEventType.LOGIN_FAILED,
+        path: '/api/user/password',
+        userId,
+        createdAt: { gte: new Date(Date.now() - CURRENT_PASSWORD_WINDOW_MS) },
+      },
+    });
+    return count >= CURRENT_PASSWORD_MAX_FAILURES;
+  } catch {
+    return currentPasswordLimiter.isLimited(`pwd:${userId}`);
   }
-  entry.count++;
-  return entry.count > INVITE_RATE_MAX;
+}
+
+export function recordCurrentPasswordFailure(userId: string): void {
+  currentPasswordLimiter.hit(`pwd:${userId}`);
+}
+
+/**
+ * Авторизация служебных cron-эндпоинтов: Authorization: Bearer <CRON_SECRET>.
+ * Сравнение за постоянное время; в production CRON_SECRET обязателен и не может быть заглушкой.
+ * Возвращает null, если доступ разрешён, иначе { status, error } для ответа.
+ */
+export function verifyCronRequest(request: Request): { status: number; error: string } | null {
+  const result = checkBearerSecret(
+    request.headers.get('authorization'),
+    process.env.CRON_SECRET,
+    process.env.NODE_ENV === 'production'
+  );
+  if (result === 'ok') return null;
+  if (result === 'misconfigured') return { status: 503, error: 'Cron is not configured' };
+  return { status: 401, error: 'Unauthorized' };
 }

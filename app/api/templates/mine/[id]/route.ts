@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getCurrentUser } from '@/lib/auth';
+import { getCurrentUser } from '@/lib/api-auth';
 import prisma from '@/lib/prisma';
 import { isUnsafeId } from '@/lib/security';
 
@@ -13,12 +13,6 @@ export async function PATCH(request: Request, { params }: Params) {
     const user = await getCurrentUser();
     if (!user) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
-    }
-    if (user.role === 'VOL' || user.role === 'USER') {
-      return NextResponse.json(
-        { error: 'My templates are available only for ADM and SUPPORT' },
-        { status: 403 }
-      );
     }
     const { id } = await params;
     if (isUnsafeId(id)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
@@ -101,12 +95,6 @@ export async function DELETE(_request: Request, { params }: Params) {
     const user = await getCurrentUser();
     if (!user) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
-    }
-    if (user.role === 'VOL' || user.role === 'USER') {
-      return NextResponse.json(
-        { error: 'My templates are available only for ADM and SUPPORT' },
-        { status: 403 }
-      );
     }
     const { id } = await params;
     const existing = await prisma.userTemplate.findFirst({

@@ -1,7 +1,12 @@
 import { NextResponse } from 'next/server';
+import { z } from 'zod';
+import { rcAdminCredentialsSchema } from '@/lib/rc-admin-credentials';
+import { authenticateRcAdmin, rcAdminErrorResponse } from '@/lib/rc-admin-auth';
 import prisma from '@/lib/prisma';
-import { requireAuth } from '@/lib/auth';
+import { getSafeErrorMessage } from '@/lib/security';
+import { requireAuth } from '@/lib/api-auth';
 import { RocketChatClient } from '@/lib/rocketchat';
+import { assertWorkspaceBulkUsersAccess } from '@/lib/workspace-bulk-users-access';
 
 export async function POST(
   request: Request,
@@ -11,50 +16,21 @@ export async function POST(
     const user = await requireAuth();
     const { id: workspaceId } = await params;
 
-    const workspace = await prisma.workspaceConnection.findFirst({
-      where: {
-        id: workspaceId,
-        userId: user.id,
-      },
-    });
-
-    if (!workspace) {
-      return NextResponse.json(
-        { error: 'Workspace not found' },
-        { status: 404 }
-      );
+    const access = await assertWorkspaceBulkUsersAccess(user.id, workspaceId);
+    if (!access.ok) {
+      return NextResponse.json({ error: access.error }, { status: access.status });
     }
+    const { workspace } = access;
 
-    const body = await request.json().catch(() => ({}));
-    const adminUsername = (body.adminUsername as string)?.trim();
-    const adminPassword = typeof body.adminPassword === 'string' ? body.adminPassword : '';
-
-    if (!adminUsername || !adminPassword) {
-      return NextResponse.json(
-        { error: 'Укажите логин и пароль администратора Rocket.Chat.' },
-        { status: 400 }
-      );
-    }
-
-    const baseUrl = workspace.workspaceUrl.replace(/\/$/, '');
-    const rcClient = new RocketChatClient(baseUrl);
-
-    let authToken: string;
-    let rcUserId: string;
+    const body = rcAdminCredentialsSchema.parse(await request.json());
+    const rcClient = new RocketChatClient(workspace.workspaceUrl);
+    let credentials;
     try {
-      const loginResult = await rcClient.login(adminUsername, adminPassword);
-      authToken = loginResult.authToken;
-      rcUserId = loginResult.userId;
-    } catch (loginError: any) {
-      return NextResponse.json(
-        {
-          code: 'RC_LOGIN_FAILED',
-          error: 'Не удалось войти. Проверьте учётные данные администратора.',
-          details: loginError?.message,
-        },
-        { status: 403 }
-      );
+      credentials = await authenticateRcAdmin(rcClient, body);
+    } catch (error) {
+      return rcAdminErrorResponse(error, workspace.workspaceUrl, 'login');
     }
+    const { authToken, userId: rcUserId } = credentials;
 
     const added = await prisma.workspaceAddedUser.findMany({
       where: { workspaceId, status: 'ADDED', rcUserId: { not: null } },
@@ -88,9 +64,13 @@ export async function POST(
       })),
     });
   } catch (error: any) {
+    if (error?.message === 'Unauthorized') return NextResponse.json({ error: 'Требуется авторизация' }, { status: 401 });
+    if (error instanceof z.ZodError || error instanceof SyntaxError) {
+      return NextResponse.json({ error: error instanceof z.ZodError ? error.issues[0]?.message : 'Некорректный JSON.' }, { status: 400 });
+    }
     console.error('Refresh login error:', error);
     return NextResponse.json(
-      { error: error?.message || 'Failed to refresh' },
+      { error: getSafeErrorMessage(error, 'Failed to refresh') },
       { status: 500 }
     );
   }

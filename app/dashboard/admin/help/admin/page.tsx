@@ -1,14 +1,16 @@
 "use client"
 
-import { useState, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
+import { useState, useEffect, useRef } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
+import { toast } from 'sonner'
+import { ExternalLink, FolderPlus, ImagePlus, Loader2, Plus, FileText, HelpCircle, BookOpen } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Breadcrumbs } from '@/components/common/Breadcrumbs'
+import { Field } from '@/components/ui/field'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   Dialog,
   DialogContent,
@@ -16,19 +18,20 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { Breadcrumbs } from '@/components/common/Breadcrumbs'
+import { ConfirmDialog } from '@/components/common/ConfirmDialog'
+import { CopyButton } from '@/components/common/CopyButton'
+import { EmptyState } from '@/components/common/EmptyState'
+import { PageContainer, PageHeader } from '@/components/common/PageHeader'
+import { Section } from '@/components/common/Section'
+import { HelpRichEditor, normalizeHelpRoles } from '@/components/_components/HelpRichEditor'
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
-import { HelpRichEditor, HELP_ROLE_OPTIONS } from '@/components/_components/HelpRichEditor'
-import { Loader2, ArrowLeft, BookOpen, Users, FolderPlus, FileText, HelpCircle, ImagePlus, Plus, Pencil, Trash2 } from 'lucide-react'
-import { toast } from 'sonner'
+  HelpFaqDialog,
+  HelpListRow,
+  helpRolesLabel,
+  type HelpFaqValues,
+} from '@/components/_components/HelpAdminParts'
+import { useCopyToClipboard } from '@/lib/useCopyToClipboard'
 
 type Catalog = {
   id: string
@@ -38,98 +41,183 @@ type Catalog = {
   instructions: Array<{ id: string; title: string; content: string; order: number }>
   faqs: Array<{ id: string; question: string; answer: string; order: number }>
 }
+type MainSection = { id: string; title: string; order: number; content: string }
+type GlobalFaq = { id: string; question: string; answer: string; order: number; roles?: string[] }
+type Visibility = { templatesTabVisible: boolean; helpMainVisible: boolean; helpAdminVisible: boolean }
+
+const TITLE_MAX = 100
+const UPLOAD_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
+const UPLOAD_MAX_BYTES = 5 * 1024 * 1024
+
+/** Ошибка названия (каталог / раздел) или undefined. */
+function validateTitle(raw: string): string | undefined {
+  const v = raw.trim()
+  if (!v) return 'Введите название.'
+  if (v.length > TITLE_MAX) return `Не длиннее ${TITLE_MAX} символов.`
+  return undefined
+}
+
+const NAV_SECTIONS = [
+  { id: 'visibility', label: 'Видимость вкладок' },
+  { id: 'main', label: 'Основные моменты' },
+  { id: 'main-sections', label: 'Разделы основных моментов' },
+  { id: 'catalogs', label: 'Каталоги' },
+  { id: 'faq', label: 'Глобальный FAQ' },
+  { id: 'uploads', label: 'Загрузка изображений' },
+] as const
+
+function PageSkeleton() {
+  return (
+    <PageContainer className="px-4 sm:px-6">
+      <div role="status" aria-busy="true" aria-label="Загрузка" className="space-y-6">
+        <div className="space-y-2">
+          <Skeleton className="h-6 w-56" />
+          <Skeleton className="h-4 w-80 max-w-full" />
+        </div>
+        {Array.from({ length: 3 }).map((_, i) => (
+          <div key={i} className="space-y-3">
+            <Skeleton className="h-4 w-40" />
+            <Skeleton className="h-24 w-full rounded-lg" />
+          </div>
+        ))}
+      </div>
+    </PageContainer>
+  )
+}
 
 export default function HelpAdminPage() {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const copy = useCopyToClipboard()
+  const chromeMinimal = searchParams.get('chrome') === '0'
+  /** Для ссылок внутри приложения при встраивании в iframe (chrome=0) */
+  const helpAdminRouteSuffix = chromeMinimal ? '?chrome=0' : ''
+  const containerClass = chromeMinimal ? 'max-w-none px-3 py-3 lg:py-3' : 'px-4 sm:px-6'
+
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
   const [isAdmin, setIsAdmin] = useState(false)
-  const [visibility, setVisibility] = useState({
+
+  // Видимость вкладок
+  const [visibility, setVisibility] = useState<Visibility>({
     templatesTabVisible: true,
     helpMainVisible: true,
     helpAdminVisible: true,
   })
+  const [savedVisibility, setSavedVisibility] = useState<Visibility | null>(null)
+  const [savingVisibility, setSavingVisibility] = useState(false)
+
+  // Основные моменты
   const [mainContent, setMainContent] = useState('')
-  const [mainSections, setMainSections] = useState<Array<{ id: string; title: string; order: number; content: string }>>([])
+  const [savedMainContent, setSavedMainContent] = useState('')
+  const [savingMain, setSavingMain] = useState(false)
+
+  const [mainSections, setMainSections] = useState<MainSection[]>([])
   const [catalogs, setCatalogs] = useState<Catalog[]>([])
-  const [globalFaqs, setGlobalFaqs] = useState<Array<{ id: string; question: string; answer: string; order: number; roles?: string[] }>>([])
-  const [uploading, setUploading] = useState(false)
-  const [faqDialogOpen, setFaqDialogOpen] = useState(false)
-  const [faqDialogMode, setFaqDialogMode] = useState<'create' | 'edit'>('create')
-  const [faqDialogId, setFaqDialogId] = useState<string | null>(null)
-  const [faqQuestion, setFaqQuestion] = useState('')
-  const [faqAnswer, setFaqAnswer] = useState('')
-  const [faqRoles, setFaqRoles] = useState<string[]>([])
-  const [faqOrder, setFaqOrder] = useState(0)
-  const [faqSaving, setFaqSaving] = useState(false)
-  const [deleteFaqId, setDeleteFaqId] = useState<string | null>(null)
+  const [globalFaqs, setGlobalFaqs] = useState<GlobalFaq[]>([])
+
+  // Диалог раздела «Основных моментов»
+  const [sectionDialogOpen, setSectionDialogOpen] = useState(false)
+  const [sectionMode, setSectionMode] = useState<'create' | 'edit'>('create')
+  const [sectionId, setSectionId] = useState<string | null>(null)
+  const [sectionTitle, setSectionTitle] = useState('')
+  const [sectionContent, setSectionContent] = useState('')
+  const [sectionSubmitted, setSectionSubmitted] = useState(false)
+  const [sectionSaving, setSectionSaving] = useState(false)
+  const [deleteSection, setDeleteSection] = useState<MainSection | null>(null)
+
+  // Диалог нового каталога
+  const [catalogDialogOpen, setCatalogDialogOpen] = useState(false)
+  const [catalogTitle, setCatalogTitle] = useState('')
+  const [catalogSubmitted, setCatalogSubmitted] = useState(false)
+  const [catalogSaving, setCatalogSaving] = useState(false)
   const [deleteCatalogTarget, setDeleteCatalogTarget] = useState<Catalog | null>(null)
-  const [mainSectionDialogOpen, setMainSectionDialogOpen] = useState(false)
-  const [mainSectionDialogMode, setMainSectionDialogMode] = useState<'create' | 'edit'>('create')
-  const [mainSectionDialogId, setMainSectionDialogId] = useState<string | null>(null)
-  const [mainSectionTitle, setMainSectionTitle] = useState('')
-  const [mainSectionContent, setMainSectionContent] = useState('')
-  const [mainSectionSaving, setMainSectionSaving] = useState(false)
-  const [deleteMainSectionId, setDeleteMainSectionId] = useState<string | null>(null)
+
+  // Глобальный FAQ
+  const [faqDialog, setFaqDialog] = useState<{ mode: 'create' | 'edit'; faq: GlobalFaq | null } | null>(null)
+  const [deleteFaq, setDeleteFaq] = useState<GlobalFaq | null>(null)
+
+  const [deleting, setDeleting] = useState(false)
+
+  // Загрузка изображений
+  const [uploading, setUploading] = useState(false)
+  const [uploadedUrl, setUploadedUrl] = useState<string | null>(null)
+  const uploadInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    load()
-  }, [])
+    const load = async () => {
+      try {
+        const meRes = await fetch('/api/auth/me')
+        if (!meRes.ok) {
+          router.push('/login')
+          return
+        }
+        const meData = await meRes.json()
+        const role = meData.user?.role
+        if (role !== 'LEAD_SUP') {
+          router.push('/dashboard/admin/help')
+          return
+        }
+        setIsAdmin(true)
 
-  const load = async () => {
-    try {
-      const [meRes, visRes, helpRes, sectionsRes, catalogsRes] = await Promise.all([
-        fetch('/api/auth/me'),
-        fetch('/api/help/visibility'),
-        fetch('/api/admin/help/main'),
-        fetch('/api/admin/help/main-sections'),
-        fetch('/api/admin/help/catalogs'),
-      ])
-      if (!meRes.ok) {
-        router.push('/login')
-        return
+        const sRes = await fetch('/api/admin/settings')
+        if (sRes.ok) {
+          const d = await sRes.json()
+          const st = d.settings || {}
+          const v: Visibility = {
+            templatesTabVisible: st.templatesTabVisible !== 'false',
+            helpMainVisible: st.helpMainVisible !== 'false',
+            helpAdminVisible: st.helpAdminVisible !== 'false',
+          }
+          setVisibility(v)
+          setSavedVisibility(v)
+        }
+
+        const [helpRes, sectionsRes, catalogsRes] = await Promise.all([
+          fetch('/api/admin/help/main'),
+          fetch('/api/admin/help/main-sections'),
+          fetch('/api/admin/help/catalogs'),
+        ])
+        if (helpRes.ok) {
+          const h = await helpRes.json()
+          setMainContent(h.content ?? '')
+          setSavedMainContent(h.content ?? '')
+        }
+        if (sectionsRes.ok) {
+          const s = await sectionsRes.json()
+          setMainSections(s.sections ?? [])
+        }
+        if (catalogsRes.ok) {
+          const c = await catalogsRes.json()
+          setCatalogs(c.catalogs ?? [])
+        }
+        const faqRes = await fetch('/api/help')
+        if (faqRes.ok) {
+          const f = await faqRes.json()
+          setGlobalFaqs(f.globalFaqs ?? [])
+        }
+        if (!helpRes.ok || !sectionsRes.ok || !catalogsRes.ok) {
+          toast.error('Часть данных справки не загрузилась', { description: 'Обновите страницу и попробуйте ещё раз.' })
+        }
+      } catch (e) {
+        console.error(e)
+        toast.error('Не удалось загрузить справку', { description: 'Проверьте соединение и обновите страницу.' })
+      } finally {
+        setLoading(false)
       }
-      const meData = await meRes.json()
-      if (meData.user?.role !== 'ADMIN') {
-        router.push('/dashboard/admin/help')
-        return
-      }
-      setIsAdmin(true)
-      if (visRes.ok) {
-        const v = await visRes.json()
-        setVisibility({
-          templatesTabVisible: v.templatesTabVisible !== false,
-          helpMainVisible: v.helpMainVisible !== false,
-          helpAdminVisible: v.helpAdminVisible !== false,
-        })
-      }
-      if (helpRes.ok) {
-        const h = await helpRes.json()
-        setMainContent(h.content ?? '')
-      }
-      if (sectionsRes.ok) {
-        const s = await sectionsRes.json()
-        setMainSections(s.sections ?? [])
-      }
-      if (catalogsRes.ok) {
-        const c = await catalogsRes.json()
-        setCatalogs(c.catalogs ?? [])
-      }
-      const faqRes = await fetch('/api/help')
-      if (faqRes.ok) {
-        const f = await faqRes.json()
-        setGlobalFaqs(f.globalFaqs ?? [])
-      }
-    } catch (e) {
-      console.error(e)
-      toast.error('Ошибка загрузки')
-    } finally {
-      setLoading(false)
     }
-  }
+    load()
+  }, [router])
+
+  /* ---------- видимость ---------- */
+
+  const visibilityDirty =
+    !!savedVisibility &&
+    (visibility.templatesTabVisible !== savedVisibility.templatesTabVisible ||
+      visibility.helpMainVisible !== savedVisibility.helpMainVisible ||
+      visibility.helpAdminVisible !== savedVisibility.helpAdminVisible)
 
   const saveVisibility = async () => {
-    setSaving(true)
+    setSavingVisibility(true)
     try {
       const res = await fetch('/api/admin/help/visibility', {
         method: 'PATCH',
@@ -137,16 +225,21 @@ export default function HelpAdminPage() {
         body: JSON.stringify(visibility),
       })
       if (!res.ok) throw new Error('Failed')
-      toast.success('Видимость сохранена')
+      setSavedVisibility(visibility)
+      toast.success('Видимость вкладок сохранена')
     } catch {
-      toast.error('Ошибка сохранения видимости')
+      toast.error('Не удалось сохранить видимость', { description: 'Попробуйте ещё раз.' })
     } finally {
-      setSaving(false)
+      setSavingVisibility(false)
     }
   }
 
+  /* ---------- основные моменты ---------- */
+
+  const mainDirty = mainContent !== savedMainContent
+
   const saveMain = async () => {
-    setSaving(true)
+    setSavingMain(true)
     try {
       const res = await fetch('/api/admin/help/main', {
         method: 'PATCH',
@@ -154,143 +247,180 @@ export default function HelpAdminPage() {
         body: JSON.stringify({ content: mainContent }),
       })
       if (!res.ok) throw new Error('Failed')
+      setSavedMainContent(mainContent)
       toast.success('Основные моменты сохранены')
     } catch {
-      toast.error('Ошибка сохранения')
+      toast.error('Не удалось сохранить текст', { description: 'Изменения остались в редакторе — попробуйте ещё раз.' })
     } finally {
-      setSaving(false)
+      setSavingMain(false)
     }
   }
 
-  const addMainSection = async () => {
-    setMainSectionDialogMode('create')
-    setMainSectionDialogId(null)
-    setMainSectionTitle('Новый раздел')
-    setMainSectionContent('')
-    setMainSectionDialogOpen(true)
+  /* ---------- разделы основных моментов ---------- */
+
+  const openAddSection = () => {
+    setSectionMode('create')
+    setSectionId(null)
+    setSectionTitle('')
+    setSectionContent('')
+    setSectionSubmitted(false)
+    setSectionDialogOpen(true)
   }
 
-  const editMainSection = (sec: { id: string; title: string; order: number; content: string }) => {
-    setMainSectionDialogMode('edit')
-    setMainSectionDialogId(sec.id)
-    setMainSectionTitle(sec.title)
-    setMainSectionContent(sec.content)
-    setMainSectionDialogOpen(true)
+  const openEditSection = (sec: MainSection) => {
+    setSectionMode('edit')
+    setSectionId(sec.id)
+    setSectionTitle(sec.title)
+    setSectionContent(sec.content)
+    setSectionSubmitted(false)
+    setSectionDialogOpen(true)
   }
 
-  const saveMainSection = async () => {
-    setMainSectionSaving(true)
+  const sectionTitleError = validateTitle(sectionTitle)
+
+  const saveSection = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSectionSubmitted(true)
+    if (sectionTitleError || sectionSaving) return
+    const title = sectionTitle.trim()
+    setSectionSaving(true)
     try {
-      if (mainSectionDialogMode === 'create') {
+      if (sectionMode === 'create') {
         const res = await fetch('/api/admin/help/main-sections', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            title: mainSectionTitle.trim() || 'Новый раздел',
-            order: mainSections.length,
-            content: mainSectionContent,
-          }),
+          body: JSON.stringify({ title, order: mainSections.length, content: sectionContent }),
         })
         if (!res.ok) throw new Error('Failed')
         const data = await res.json()
-        setMainSections((prev) => [...prev, { id: data.section.id, title: data.section.title, order: data.section.order, content: data.section.content ?? '' }])
+        setMainSections((prev) => [
+          ...prev,
+          { id: data.section.id, title: data.section.title, order: data.section.order, content: data.section.content ?? '' },
+        ])
         toast.success('Раздел добавлен')
-      } else if (mainSectionDialogId) {
-        const res = await fetch(`/api/admin/help/main-sections/${mainSectionDialogId}`, {
+      } else if (sectionId) {
+        const res = await fetch(`/api/admin/help/main-sections/${sectionId}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title: mainSectionTitle.trim(), content: mainSectionContent }),
+          body: JSON.stringify({ title, content: sectionContent }),
         })
         if (!res.ok) throw new Error('Failed')
-        setMainSections((prev) =>
-          prev.map((s) =>
-            s.id === mainSectionDialogId ? { ...s, title: mainSectionTitle.trim(), content: mainSectionContent } : s
-          )
-        )
+        setMainSections((prev) => prev.map((s) => (s.id === sectionId ? { ...s, title, content: sectionContent } : s)))
         toast.success('Раздел сохранён')
       }
-      setMainSectionDialogOpen(false)
+      setSectionDialogOpen(false)
     } catch {
-      toast.error('Ошибка сохранения раздела')
+      toast.error('Не удалось сохранить раздел', { description: 'Проверьте данные и попробуйте ещё раз.' })
     } finally {
-      setMainSectionSaving(false)
+      setSectionSaving(false)
     }
   }
 
-  const deleteMainSection = async (id: string) => {
+  const confirmDeleteSection = async () => {
+    if (!deleteSection) return
+    setDeleting(true)
     try {
-      const res = await fetch(`/api/admin/help/main-sections/${id}`, { method: 'DELETE' })
+      const res = await fetch(`/api/admin/help/main-sections/${deleteSection.id}`, { method: 'DELETE' })
       if (!res.ok) throw new Error('Failed')
-      setMainSections((prev) => prev.filter((s) => s.id !== id))
-      setDeleteMainSectionId(null)
+      setMainSections((prev) => prev.filter((s) => s.id !== deleteSection.id))
       toast.success('Раздел удалён')
+      setDeleteSection(null)
     } catch {
-      toast.error('Ошибка удаления')
+      toast.error('Не удалось удалить раздел', { description: 'Попробуйте ещё раз.' })
+    } finally {
+      setDeleting(false)
     }
   }
 
-  const addCatalog = async () => {
+  /* ---------- каталоги ---------- */
+
+  const openAddCatalog = () => {
+    setCatalogTitle('')
+    setCatalogSubmitted(false)
+    setCatalogDialogOpen(true)
+  }
+
+  const catalogTitleError = validateTitle(catalogTitle)
+
+  const addCatalog = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setCatalogSubmitted(true)
+    if (catalogTitleError || catalogSaving) return
+    setCatalogSaving(true)
     try {
       const res = await fetch('/api/admin/help/catalogs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: 'Новый каталог', order: catalogs.length }),
+        body: JSON.stringify({ title: catalogTitle.trim(), order: catalogs.length }),
       })
       if (!res.ok) throw new Error('Failed')
       const data = await res.json()
       const cat = data.catalog
-      setCatalogs((prev) => [...prev, { id: cat.id, title: cat.title, order: cat.order, roles: cat.roles ?? [], instructions: [], faqs: [] }])
-      toast.success('Каталог добавлен')
+      setCatalogs((prev) => [
+        ...prev,
+        { id: cat.id, title: cat.title, order: cat.order, roles: cat.roles ?? [], instructions: [], faqs: [] },
+      ])
+      toast.success('Каталог добавлен', { description: 'Откройте его, чтобы добавить инструкции и вопросы.' })
+      setCatalogDialogOpen(false)
     } catch {
-      toast.error('Ошибка добавления каталога')
+      toast.error('Не удалось добавить каталог', { description: 'Попробуйте ещё раз.' })
+    } finally {
+      setCatalogSaving(false)
     }
   }
 
-  const deleteCatalog = async (id: string) => {
+  const confirmDeleteCatalog = async () => {
+    if (!deleteCatalogTarget) return
+    setDeleting(true)
     try {
-      const res = await fetch(`/api/admin/help/catalogs/${id}`, { method: 'DELETE' })
+      const res = await fetch(`/api/admin/help/catalogs/${deleteCatalogTarget.id}`, { method: 'DELETE' })
       if (!res.ok) throw new Error('Failed')
-      setCatalogs((prev) => prev.filter((c) => c.id !== id))
-      setDeleteCatalogTarget(null)
+      setCatalogs((prev) => prev.filter((c) => c.id !== deleteCatalogTarget.id))
       toast.success('Каталог удалён')
+      setDeleteCatalogTarget(null)
     } catch {
-      toast.error('Ошибка удаления')
+      toast.error('Не удалось удалить каталог', { description: 'Попробуйте ещё раз.' })
+    } finally {
+      setDeleting(false)
     }
   }
 
-  const openAddGlobalFaq = () => {
-    setFaqDialogMode('create')
-    setFaqDialogId(null)
-    setFaqQuestion('')
-    setFaqAnswer('')
-    setFaqRoles([])
-    setFaqOrder(globalFaqs.length)
-    setFaqDialogOpen(true)
-  }
+  /* ---------- глобальный FAQ ---------- */
 
-  const openEditGlobalFaq = (faq: { id: string; question: string; answer: string; order: number; roles?: string[] }) => {
-    setFaqDialogMode('edit')
-    setFaqDialogId(faq.id)
-    setFaqQuestion(faq.question)
-    setFaqAnswer(faq.answer)
-    setFaqRoles(Array.isArray(faq.roles) ? [...faq.roles] : [])
-    setFaqOrder(faq.order)
-    setFaqDialogOpen(true)
-  }
+  const faqInitial: HelpFaqValues =
+    faqDialog?.mode === 'edit' && faqDialog.faq
+      ? {
+          question: faqDialog.faq.question,
+          answer: faqDialog.faq.answer,
+          roles: normalizeHelpRoles(faqDialog.faq.roles),
+          order: faqDialog.faq.order,
+        }
+      : { question: '', answer: '', roles: [], order: globalFaqs.length }
 
-  const saveGlobalFaq = async () => {
-    setFaqSaving(true)
+  const submitGlobalFaq = async (v: HelpFaqValues): Promise<boolean> => {
     try {
-      if (faqDialogMode === 'create') {
+      if (faqDialog?.mode === 'edit' && faqDialog.faq) {
+        const id = faqDialog.faq.id
+        const res = await fetch(`/api/admin/help/faq/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question: v.question, answer: v.answer, order: v.order, roles: v.roles }),
+        })
+        if (!res.ok) throw new Error('Failed')
+        setGlobalFaqs((prev) =>
+          prev.map((f) => (f.id === id ? { ...f, ...v, roles: [...v.roles] } : f)).sort((a, b) => a.order - b.order)
+        )
+        toast.success('Вопрос сохранён')
+      } else {
         const res = await fetch('/api/admin/help/faq', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             catalogId: null,
-            question: faqQuestion.trim() || 'Вопрос',
-            answer: faqAnswer.trim(),
-            order: faqOrder,
-            roles: faqRoles,
+            question: v.question,
+            answer: v.answer,
+            order: v.order,
+            roles: v.roles,
           }),
         })
         if (!res.ok) throw new Error('Failed')
@@ -298,51 +428,47 @@ export default function HelpAdminPage() {
         const faq = data.faq
         setGlobalFaqs((prev) => [...prev, { ...faq, roles: faq.roles ?? [] }].sort((a, b) => a.order - b.order))
         toast.success('Вопрос добавлен')
-      } else if (faqDialogId) {
-        const res = await fetch(`/api/admin/help/faq/${faqDialogId}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            question: faqQuestion.trim() || 'Вопрос',
-            answer: faqAnswer.trim(),
-            order: faqOrder,
-            roles: faqRoles,
-          }),
-        })
-        if (!res.ok) throw new Error('Failed')
-        setGlobalFaqs((prev) =>
-          prev.map((f) =>
-            f.id === faqDialogId
-              ? { ...f, question: faqQuestion.trim(), answer: faqAnswer.trim(), order: faqOrder, roles: [...faqRoles] }
-              : f
-          ).sort((a, b) => a.order - b.order)
-        )
-        toast.success('Вопрос сохранён')
       }
-      setFaqDialogOpen(false)
+      setFaqDialog(null)
+      return true
     } catch {
-      toast.error('Ошибка сохранения')
-    } finally {
-      setFaqSaving(false)
+      toast.error('Не удалось сохранить вопрос', { description: 'Данные остались в форме — попробуйте ещё раз.' })
+      return false
     }
   }
 
-  const deleteGlobalFaq = async (id: string) => {
+  const confirmDeleteFaq = async () => {
+    if (!deleteFaq) return
+    setDeleting(true)
     try {
-      const res = await fetch(`/api/admin/help/faq/${id}`, { method: 'DELETE' })
+      const res = await fetch(`/api/admin/help/faq/${deleteFaq.id}`, { method: 'DELETE' })
       if (!res.ok) throw new Error('Failed')
-      setGlobalFaqs((prev) => prev.filter((f) => f.id !== id))
-      setDeleteFaqId(null)
+      setGlobalFaqs((prev) => prev.filter((f) => f.id !== deleteFaq.id))
       toast.success('Вопрос удалён')
+      setDeleteFaq(null)
     } catch {
-      toast.error('Ошибка удаления')
+      toast.error('Не удалось удалить вопрос', { description: 'Попробуйте ещё раз.' })
+    } finally {
+      setDeleting(false)
     }
   }
+
+  /* ---------- загрузка изображения ---------- */
 
   const uploadImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
+    e.target.value = ''
     if (!file) return
+    if (!UPLOAD_TYPES.includes(file.type)) {
+      toast.error('Неподходящий формат', { description: 'Допустимы JPEG, PNG, GIF и WebP.' })
+      return
+    }
+    if (file.size > UPLOAD_MAX_BYTES) {
+      toast.error('Файл слишком большой', { description: 'Максимальный размер изображения — 5 МБ.' })
+      return
+    }
     setUploading(true)
+    const toastId = toast.loading('Загружаем изображение…')
     try {
       const form = new FormData()
       form.append('file', file)
@@ -352,426 +478,402 @@ export default function HelpAdminPage() {
         throw new Error(d.error || 'Upload failed')
       }
       const data = await res.json()
-      navigator.clipboard.writeText(data.url)
-      toast.success('Ссылка на изображение скопирована в буфер. Вставьте в текст инструкции.')
-    } catch (err: any) {
-      toast.error(err.message || 'Ошибка загрузки')
+      setUploadedUrl(data.url)
+      toast.dismiss(toastId)
+      const copied = await copy(data.url, 'Изображение загружено, ссылка скопирована')
+      if (!copied) toast.success('Изображение загружено', { description: 'Скопируйте ссылку из поля ниже.' })
+    } catch (err) {
+      toast.error('Не удалось загрузить изображение', {
+        id: toastId,
+        description: err instanceof Error && err.message !== 'Upload failed' ? err.message : 'Попробуйте ещё раз.',
+      })
     } finally {
       setUploading(false)
-      e.target.value = ''
     }
   }
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-[50vh]">
-        <Loader2 className="w-8 h-8 animate-spin text-primary" />
-      </div>
-    )
-  }
+  if (loading || !isAdmin) return <PageSkeleton />
 
-  if (!isAdmin) {
-    return null
-  }
-
-  const sections = [
-    { id: 'visibility', label: 'Видимость вкладок', icon: Users },
-    { id: 'main', label: 'Основные моменты', icon: BookOpen },
-    { id: 'main-sections', label: 'Разделы (вкладки) в «Основные моменты»', icon: FileText },
-    { id: 'catalogs', label: 'Каталоги', icon: FolderPlus },
-    { id: 'faq', label: 'Глобальный FAQ', icon: HelpCircle },
-    { id: 'uploads', label: 'Загрузки', icon: ImagePlus },
-  ] as const
+  const breadcrumbs = chromeMinimal ? undefined : (
+    <Breadcrumbs
+      items={[
+        { label: 'Дашборд', href: '/dashboard' },
+        { label: 'Справка', href: '/dashboard/admin/help' },
+        { label: 'Управление справкой', current: true },
+      ]}
+    />
+  )
 
   return (
-    <div className="min-h-screen bg-background">
-      {/* Notion-style: тонкая верхняя панель */}
-      <header className="sticky top-0 z-10 border-b border-border/60 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-4">
-          <div className="flex items-center gap-4">
-            <Link href="/dashboard/admin/help" className="text-muted-foreground hover:text-foreground transition-colors">
-              <ArrowLeft className="h-5 w-5" />
+    <PageContainer className={containerClass}>
+      <PageHeader
+        title="Управление справкой"
+        description="Настройки и содержимое раздела «Справка». Изменения видны пользователям сразу после сохранения."
+        breadcrumbs={breadcrumbs}
+        actions={
+          <Button asChild variant="outline" size="sm">
+            <Link href="/dashboard/admin/help">
+              <ExternalLink aria-hidden />
+              Открыть справку
             </Link>
-            <div>
-              <h1 className="text-lg font-semibold tracking-tight">Управление справкой</h1>
-              <p className="text-xs text-muted-foreground">Настройки и контент для раздела «Справка»</p>
-            </div>
-          </div>
-          <Link href="/dashboard/admin/help">
-            <Button variant="ghost" size="sm">Открыть справку</Button>
-          </Link>
-        </div>
-      </header>
+          </Button>
+        }
+      />
 
-      <div className="mx-auto max-w-5xl flex gap-8 px-4 py-8">
-        {/* Боковая навигация в стиле Notion */}
-        <aside className="hidden lg:block w-52 shrink-0">
-          <nav className="sticky top-24 space-y-0.5">
-            {sections.map((s) => (
+      <div className="flex gap-8">
+        <aside className="hidden w-48 shrink-0 lg:block">
+          <nav aria-label="Разделы страницы" className="sticky top-6 space-y-0.5">
+            {NAV_SECTIONS.map((s) => (
               <a
                 key={s.id}
                 href={`#${s.id}`}
-                className="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors"
+                className="block rounded-md px-2.5 py-1.5 text-[13px] text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/40"
               >
-                <s.icon className="h-4 w-4 shrink-0" />
                 {s.label}
               </a>
             ))}
           </nav>
         </aside>
 
-        {/* Основной контент — блоки как в Notion */}
-        <main className="min-w-0 flex-1 space-y-10">
-          {/* Блок: Видимость */}
-          <section id="visibility" className="scroll-mt-24">
-            <div className="rounded-xl border border-border/60 bg-card p-6 shadow-sm">
-              <h2 className="text-base font-semibold mb-1">Видимость вкладок</h2>
-              <p className="text-sm text-muted-foreground mb-4">Скрытые вкладки показывают пользователям сообщение «Администратор обновляет информацию, скоро откроет эту вкладку».</p>
-              <div className="space-y-4">
-                <div className="flex items-center space-x-2">
+        <div className="min-w-0 flex-1 space-y-8">
+          <Section
+            id="visibility"
+            className="scroll-mt-6"
+            title="Видимость вкладок"
+            description="Скрытая вкладка показывает пользователям сообщение «Администратор обновляет информацию, скоро откроет эту вкладку»."
+          >
+            <div className="space-y-3">
+              {(
+                [
+                  ['templatesTabVisible', 'Показывать вкладку «Шаблоны» пользователям'],
+                  ['helpMainVisible', 'Показывать вкладку «Основные моменты» в справке'],
+                  ['helpAdminVisible', 'Показывать вкладку «От Администратора» в справке'],
+                ] as const
+              ).map(([key, label]) => (
+                <div key={key} className="flex items-center gap-2">
                   <Checkbox
-                    id="templatesTabVisible"
-                    checked={visibility.templatesTabVisible}
-                    onCheckedChange={(c) => setVisibility((v) => ({ ...v, templatesTabVisible: !!c }))}
+                    id={key}
+                    checked={visibility[key]}
+                    onCheckedChange={(c) => setVisibility((v) => ({ ...v, [key]: !!c }))}
                   />
-                  <Label htmlFor="templatesTabVisible">Показывать вкладку «Шаблоны» пользователям</Label>
+                  <Label htmlFor={key} className="text-sm font-normal">
+                    {label}
+                  </Label>
                 </div>
-                <div className="flex items-center space-x-2">
-                  <Checkbox
-                    id="helpMainVisible"
-                    checked={visibility.helpMainVisible}
-                    onCheckedChange={(c) => setVisibility((v) => ({ ...v, helpMainVisible: !!c }))}
-                  />
-                  <Label htmlFor="helpMainVisible">Показывать вкладку «Основные моменты» в справке</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Checkbox
-                    id="helpAdminVisible"
-                    checked={visibility.helpAdminVisible}
-                    onCheckedChange={(c) => setVisibility((v) => ({ ...v, helpAdminVisible: !!c }))}
-                  />
-                  <Label htmlFor="helpAdminVisible">Показывать вкладку «От Администратора» в справке</Label>
-                </div>
-                <Button onClick={saveVisibility} disabled={saving} size="sm">
-                  {saving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-                  Сохранить видимость
+              ))}
+              <div className="pt-1">
+                <Button onClick={saveVisibility} disabled={savingVisibility || !visibilityDirty} size="sm">
+                  {savingVisibility && <Loader2 className="animate-spin" />}
+                  Сохранить
                 </Button>
               </div>
             </div>
-          </section>
+          </Section>
 
-          {/* Блок: Основные моменты */}
-          <section id="main" className="scroll-mt-24">
-            <div className="rounded-xl border border-border/60 bg-card p-6 shadow-sm">
-              <h2 className="text-base font-semibold mb-1">Основные моменты</h2>
-              <p className="text-sm text-muted-foreground mb-4">Текст вкладки «Основные моменты». Форматирование, списки, изображения — через панель инструментов.</p>
+          <Section
+            id="main"
+            className="scroll-mt-6"
+            title="Основные моменты"
+            description="Текст вкладки «Основные моменты». Форматирование, списки и изображения — через панель инструментов."
+          >
+            <div className="space-y-3">
               <HelpRichEditor
                 value={mainContent}
                 onChange={setMainContent}
                 minHeight="220px"
                 placeholder="Краткая справка по работе с планировщиком…"
               />
-              <Button className="mt-4" onClick={saveMain} disabled={saving} size="sm">
-                {saving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-                Сохранить
-              </Button>
+              <div className="flex items-center gap-3">
+                <Button onClick={saveMain} disabled={savingMain || !mainDirty} size="sm">
+                  {savingMain && <Loader2 className="animate-spin" />}
+                  Сохранить
+                </Button>
+                {mainDirty && <span className="text-xs text-muted-foreground">Есть несохранённые изменения</span>}
+              </div>
             </div>
-          </section>
+          </Section>
 
-          {/* Блок: Разделы (вкладки) в «Основные моменты» */}
-          <section id="main-sections" className="scroll-mt-24">
-            <div className="rounded-xl border border-border/60 bg-card p-6 shadow-sm">
-              <h2 className="text-base font-semibold mb-1">Разделы (вкладки) в «Основные моменты»</h2>
-              <p className="text-sm text-muted-foreground mb-4">Создайте несколько вкладок внутри «Основные моменты». Если разделов нет, показывается один блок текста выше.</p>
-              <Button variant="outline" size="sm" onClick={addMainSection} className="gap-2 mb-4">
-                <Plus className="h-4 w-4" />
-                Добавить раздел (вкладку)
+          <Section
+            id="main-sections"
+            className="scroll-mt-6"
+            bare
+            title="Разделы основных моментов"
+            description="Каждый раздел отображается отдельной вкладкой внутри «Основных моментов». Если разделов нет, показывается текст выше."
+            actions={
+              <Button variant="outline" size="sm" onClick={openAddSection}>
+                <Plus aria-hidden />
+                Добавить раздел
               </Button>
-              <div className="space-y-2">
+            }
+          >
+            {mainSections.length === 0 ? (
+              <EmptyState
+                icon={<FileText />}
+                title="Разделов пока нет"
+                description="Добавьте раздел — он появится вкладкой в «Основных моментах»."
+              />
+            ) : (
+              <ul className="divide-y rounded-lg border bg-card">
                 {mainSections.map((sec) => (
-                  <div key={sec.id} className="flex items-center justify-between gap-2 rounded-lg border p-3 bg-muted/20">
-                    <span className="font-medium truncate flex-1 min-w-0">{sec.title}</span>
-                    <div className="flex gap-1 shrink-0">
-                      <Button variant="ghost" size="sm" onClick={() => editMainSection(sec)}>
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      <Button variant="ghost" size="sm" className="text-destructive" onClick={() => setDeleteMainSectionId(sec.id)}>
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  </div>
+                  <HelpListRow
+                    key={sec.id}
+                    title={sec.title}
+                    editLabel={`Изменить раздел «${sec.title}»`}
+                    deleteLabel={`Удалить раздел «${sec.title}»`}
+                    onEdit={() => openEditSection(sec)}
+                    onDelete={() => setDeleteSection(sec)}
+                  />
                 ))}
-                {mainSections.length === 0 && (
-                  <p className="text-sm text-muted-foreground">Нет разделов. Добавьте раздел — он отобразится как вкладка во вкладке «Основные моменты».</p>
-                )}
-              </div>
-            </div>
-          </section>
-
-          {/* Блок: Каталоги */}
-          <section id="catalogs" className="scroll-mt-24">
-            <div className="rounded-xl border border-border/60 bg-card p-6 shadow-sm">
-              <h2 className="text-base font-semibold mb-1">Каталоги (От Администратора)</h2>
-              <p className="text-sm text-muted-foreground mb-4">Разделы по шагам. В каждом каталоге — инструкции и FAQ.</p>
-              <div className="space-y-4">
-          <Button variant="outline" size="sm" onClick={addCatalog} className="gap-2">
-            <FolderPlus className="h-4 w-4" />
-            Добавить каталог
-          </Button>
-          {catalogs.map((cat) => (
-            <div key={cat.id} className="border rounded-lg p-4 space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="font-medium">{cat.title}</span>
-                <div className="flex gap-2">
-                  <Link href={`/dashboard/admin/help/admin/catalogs/${cat.id}`}>
-                    <Button variant="ghost" size="sm">Редактировать</Button>
-                  </Link>
-                  <Button variant="ghost" size="sm" className="text-destructive" onClick={() => setDeleteCatalogTarget(cat)}>
-                    Удалить
-                  </Button>
-                </div>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Инструкций: {cat.instructions.length}, FAQ: {cat.faqs.length}
-              </p>
-            </div>
-          ))}
-              {catalogs.length === 0 && (
-                <p className="text-sm text-muted-foreground">Нет каталогов. Добавьте каталог и перейдите в него для добавления инструкций и FAQ.</p>
-              )}
-              </div>
-            </div>
-          </section>
-
-          {/* Блок: Глобальный FAQ */}
-          <section id="faq" className="scroll-mt-24">
-            <div className="rounded-xl border border-border/60 bg-card p-6 shadow-sm">
-              <h2 className="text-base font-semibold mb-1">Глобальный FAQ</h2>
-              <p className="text-sm text-muted-foreground mb-4">Вопросы и ответы без привязки к каталогу. Показываются во вкладке «От Администратора».</p>
-              <div className="space-y-4">
-          <Button variant="outline" size="sm" onClick={openAddGlobalFaq} className="gap-2">
-            <Plus className="h-4 w-4" />
-            Добавить вопрос
-          </Button>
-          {globalFaqs.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Нет глобальных вопросов. Добавьте первый.</p>
-          ) : (
-            <ul className="space-y-2">
-              {globalFaqs.map((faq) => (
-                <li
-                  key={faq.id}
-                  className="flex items-center justify-between gap-2 rounded-lg border p-3 bg-muted/20"
-                >
-                  <p className="text-sm font-medium truncate flex-1 min-w-0">{faq.question}</p>
-                  <div className="flex gap-1 shrink-0">
-                    <Button variant="ghost" size="sm" onClick={() => openEditGlobalFaq(faq)}>
-                      <Pencil className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-destructive"
-                      onClick={() => setDeleteFaqId(faq.id)}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </li>
-              ))}
               </ul>
-              )}
-              </div>
-            </div>
-          </section>
+            )}
+          </Section>
 
-          {/* Блок: Загрузки */}
-          <section id="uploads" className="scroll-mt-24">
-            <div className="rounded-xl border border-border/60 bg-card p-6 shadow-sm">
-              <h2 className="text-base font-semibold mb-1">Загрузка изображений</h2>
-              <p className="text-sm text-muted-foreground mb-4">Загрузите файл — ссылка скопируется в буфер. Можно вставлять изображения и через кнопку в редакторе.</p>
+          <Section
+            id="catalogs"
+            className="scroll-mt-6"
+            bare
+            title="Каталоги «От Администратора»"
+            description="Разделы по темам. В каждом каталоге — свои инструкции и вопросы."
+            actions={
+              <Button variant="outline" size="sm" onClick={openAddCatalog}>
+                <FolderPlus aria-hidden />
+                Добавить каталог
+              </Button>
+            }
+          >
+            {catalogs.length === 0 ? (
+              <EmptyState
+                icon={<BookOpen />}
+                title="Каталогов пока нет"
+                description="Добавьте каталог, затем откройте его, чтобы создать инструкции и вопросы."
+              />
+            ) : (
+              <ul className="divide-y rounded-lg border bg-card">
+                {catalogs.map((cat) => (
+                  <HelpListRow
+                    key={cat.id}
+                    title={cat.title}
+                    meta={`Инструкций: ${cat.instructions.length} · Вопросов: ${cat.faqs.length}`}
+                    editLabel={`Открыть каталог «${cat.title}»`}
+                    deleteLabel={`Удалить каталог «${cat.title}»`}
+                    editHref={`/dashboard/admin/help/admin/catalogs/${cat.id}${helpAdminRouteSuffix}`}
+                    onDelete={() => setDeleteCatalogTarget(cat)}
+                  />
+                ))}
+              </ul>
+            )}
+          </Section>
+
+          <Section
+            id="faq"
+            className="scroll-mt-6"
+            bare
+            title="Глобальный FAQ"
+            description="Вопросы и ответы без привязки к каталогу. Показываются во вкладке «От Администратора»."
+            actions={
+              <Button variant="outline" size="sm" onClick={() => setFaqDialog({ mode: 'create', faq: null })}>
+                <Plus aria-hidden />
+                Добавить вопрос
+              </Button>
+            }
+          >
+            {globalFaqs.length === 0 ? (
+              <EmptyState
+                icon={<HelpCircle />}
+                title="Вопросов пока нет"
+                description="Добавьте первый вопрос — он появится в справке."
+              />
+            ) : (
+              <ul className="divide-y rounded-lg border bg-card">
+                {globalFaqs.map((faq) => (
+                  <HelpListRow
+                    key={faq.id}
+                    title={faq.question}
+                    meta={helpRolesLabel(normalizeHelpRoles(faq.roles))}
+                    editLabel="Изменить вопрос"
+                    deleteLabel="Удалить вопрос"
+                    onEdit={() => setFaqDialog({ mode: 'edit', faq })}
+                    onDelete={() => setDeleteFaq(faq)}
+                  />
+                ))}
+              </ul>
+            )}
+          </Section>
+
+          <Section
+            id="uploads"
+            className="scroll-mt-6"
+            title="Загрузка изображений"
+            description="Загрузите файл — ссылка скопируется в буфер. Вставлять изображения можно и кнопкой в редакторе."
+          >
+            <div className="space-y-3">
               <input
+                ref={uploadInputRef}
                 type="file"
                 accept="image/jpeg,image/png,image/gif,image/webp"
                 className="hidden"
-                id="help-upload"
                 onChange={uploadImage}
                 disabled={uploading}
+                aria-label="Выбрать изображение для загрузки"
               />
-              <Label htmlFor="help-upload">
-                <Button variant="outline" size="sm" asChild disabled={uploading}>
-                  <span>
-                    {uploading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <ImagePlus className="h-4 w-4 mr-2" />}
-                    Выбрать изображение
-                  </span>
-                </Button>
-              </Label>
+              <Button variant="outline" size="sm" disabled={uploading} onClick={() => uploadInputRef.current?.click()}>
+                {uploading ? <Loader2 className="animate-spin" /> : <ImagePlus aria-hidden />}
+                {uploading ? 'Загрузка…' : 'Выбрать изображение'}
+              </Button>
+              <p className="text-xs text-muted-foreground">JPEG, PNG, GIF или WebP, до 5 МБ.</p>
+              {uploadedUrl && (
+                <div className="flex items-center gap-1">
+                  <Input readOnly value={uploadedUrl} aria-label="Ссылка на загруженное изображение" className="font-mono text-xs" />
+                  <CopyButton text={uploadedUrl} variant="outline" size="icon" aria-label="Скопировать ссылку" />
+                </div>
+              )}
             </div>
-          </section>
-        </main>
+          </Section>
+        </div>
       </div>
 
-      <Dialog open={faqDialogOpen} onOpenChange={setFaqDialogOpen}>
-        <DialogContent className="max-w-lg">
+      {/* Раздел основных моментов */}
+      <Dialog open={sectionDialogOpen} onOpenChange={(o) => !sectionSaving && setSectionDialogOpen(o)}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl" aria-describedby={undefined}>
           <DialogHeader>
-            <DialogTitle>
-              {faqDialogMode === 'create' ? 'Добавить вопрос (глобальный FAQ)' : 'Редактировать вопрос'}
-            </DialogTitle>
+            <DialogTitle>{sectionMode === 'create' ? 'Новый раздел' : 'Редактировать раздел'}</DialogTitle>
           </DialogHeader>
-          <div className="grid gap-4 py-4">
-            <div className="space-y-2">
-              <Label>Видимость для ролей (ничего не выбрано = для всех)</Label>
-              <div className="flex flex-wrap gap-4">
-                {HELP_ROLE_OPTIONS.filter((o) => o.value).map((o) => (
-                  <label key={o.value} className="flex items-center gap-2 cursor-pointer">
-                    <Checkbox
-                      checked={faqRoles.includes(o.value)}
-                      onCheckedChange={(checked) =>
-                        setFaqRoles((prev) =>
-                          checked ? [...prev, o.value] : prev.filter((r) => r !== o.value)
-                        )
-                      }
-                    />
-                    <span className="text-sm">{o.label}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label>Вопрос</Label>
-              <Input
-                value={faqQuestion}
-                onChange={(e) => setFaqQuestion(e.target.value)}
-                placeholder="Текст вопроса"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>Ответ</Label>
-              <Textarea
-                value={faqAnswer}
-                onChange={(e) => setFaqAnswer(e.target.value)}
-                className="min-h-[100px]"
-                placeholder="Текст ответа"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>Порядок (число)</Label>
-              <Input
-                type="number"
-                value={faqOrder}
-                onChange={(e) => setFaqOrder(Number(e.target.value) || 0)}
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setFaqDialogOpen(false)}>
-              Отмена
-            </Button>
-            <Button onClick={saveGlobalFaq} disabled={faqSaving}>
-              {faqSaving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-              {faqDialogMode === 'create' ? 'Добавить' : 'Сохранить'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <AlertDialog open={!!deleteCatalogTarget} onOpenChange={(open) => !open && setDeleteCatalogTarget(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Удалить каталог?</AlertDialogTitle>
-            <AlertDialogDescription>
-              {deleteCatalogTarget && (
-                <>
-                  Будет удалено: каталог «<strong>{deleteCatalogTarget.title}</strong>», инструкций: {deleteCatalogTarget.instructions.length}, вопросов: {deleteCatalogTarget.faqs.length}.
-                  Действие нельзя отменить.
-                </>
-              )}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Отмена</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground"
-              onClick={() => deleteCatalogTarget && deleteCatalog(deleteCatalogTarget.id)}
+          <form onSubmit={saveSection} noValidate className="space-y-4">
+            <Field
+              label="Название вкладки"
+              htmlFor="help-section-title"
+              required
+              error={sectionSubmitted ? sectionTitleError : undefined}
             >
-              Удалить
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      <AlertDialog open={!!deleteFaqId} onOpenChange={() => setDeleteFaqId(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Удалить вопрос?</AlertDialogTitle>
-            <AlertDialogDescription>Действие нельзя отменить.</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Отмена</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground"
-              onClick={() => deleteFaqId && deleteGlobalFaq(deleteFaqId)}
-            >
-              Удалить
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      <Dialog open={mainSectionDialogOpen} onOpenChange={setMainSectionDialogOpen}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>
-              {mainSectionDialogMode === 'create' ? 'Добавить раздел (вкладку)' : 'Редактировать раздел'}
-            </DialogTitle>
-          </DialogHeader>
-          <div className="grid gap-4 py-4">
-            <div className="space-y-2">
-              <Label>Название вкладки</Label>
               <Input
-                value={mainSectionTitle}
-                onChange={(e) => setMainSectionTitle(e.target.value)}
+                id="help-section-title"
+                value={sectionTitle}
+                onChange={(e) => setSectionTitle(e.target.value)}
                 placeholder="Например: Быстрый старт"
+                aria-invalid={sectionSubmitted && !!sectionTitleError}
+                disabled={sectionSaving}
+                autoFocus
               />
-            </div>
-            <div className="space-y-2">
-              <Label>Содержимое</Label>
+            </Field>
+            <Field label="Содержимое">
               <HelpRichEditor
-                value={mainSectionContent}
-                onChange={setMainSectionContent}
+                value={sectionContent}
+                onChange={setSectionContent}
                 minHeight="200px"
                 placeholder="Текст раздела…"
               />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setMainSectionDialogOpen(false)}>
-              Отмена
-            </Button>
-            <Button onClick={saveMainSection} disabled={mainSectionSaving}>
-              {mainSectionSaving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-              {mainSectionDialogMode === 'create' ? 'Добавить' : 'Сохранить'}
-            </Button>
-          </DialogFooter>
+            </Field>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setSectionDialogOpen(false)} disabled={sectionSaving}>
+                Отмена
+              </Button>
+              <Button type="submit" disabled={sectionSaving || (sectionSubmitted && !!sectionTitleError)}>
+                {sectionSaving && <Loader2 className="animate-spin" />}
+                {sectionMode === 'create' ? 'Добавить' : 'Сохранить'}
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
 
-      <AlertDialog open={!!deleteMainSectionId} onOpenChange={(open) => !open && setDeleteMainSectionId(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Удалить раздел?</AlertDialogTitle>
-            <AlertDialogDescription>Действие нельзя отменить.</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Отмена</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground"
-              onClick={() => deleteMainSectionId && deleteMainSection(deleteMainSectionId)}
+      {/* Новый каталог */}
+      <Dialog open={catalogDialogOpen} onOpenChange={(o) => !catalogSaving && setCatalogDialogOpen(o)}>
+        <DialogContent className="sm:max-w-md" aria-describedby={undefined}>
+          <DialogHeader>
+            <DialogTitle>Новый каталог</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={addCatalog} noValidate className="space-y-4">
+            <Field
+              label="Название каталога"
+              htmlFor="help-catalog-title"
+              required
+              hint="Станет названием вкладки в справке."
+              error={catalogSubmitted ? catalogTitleError : undefined}
             >
-              Удалить
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </div>
+              <Input
+                id="help-catalog-title"
+                value={catalogTitle}
+                onChange={(e) => setCatalogTitle(e.target.value)}
+                placeholder="Например: Работа с анонсами"
+                aria-invalid={catalogSubmitted && !!catalogTitleError}
+                disabled={catalogSaving}
+                autoFocus
+              />
+            </Field>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setCatalogDialogOpen(false)} disabled={catalogSaving}>
+                Отмена
+              </Button>
+              <Button type="submit" disabled={catalogSaving || (catalogSubmitted && !!catalogTitleError)}>
+                {catalogSaving && <Loader2 className="animate-spin" />}
+                Добавить
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <HelpFaqDialog
+        open={faqDialog !== null}
+        onOpenChange={(o) => !o && setFaqDialog(null)}
+        title={faqDialog?.mode === 'edit' ? 'Редактировать вопрос' : 'Новый вопрос (глобальный FAQ)'}
+        submitLabel={faqDialog?.mode === 'edit' ? 'Сохранить' : 'Добавить'}
+        initial={faqInitial}
+        onSubmit={submitGlobalFaq}
+      />
+
+      <ConfirmDialog
+        open={!!deleteSection}
+        onOpenChange={(o) => !o && setDeleteSection(null)}
+        title="Удалить раздел?"
+        description={
+          deleteSection && (
+            <>
+              Раздел «<strong>{deleteSection.title}</strong>» и его содержимое будут удалены. Действие нельзя отменить.
+            </>
+          )
+        }
+        confirmLabel="Удалить"
+        destructive
+        loading={deleting}
+        onConfirm={confirmDeleteSection}
+      />
+
+      <ConfirmDialog
+        open={!!deleteCatalogTarget}
+        onOpenChange={(o) => !o && setDeleteCatalogTarget(null)}
+        title="Удалить каталог?"
+        description={
+          deleteCatalogTarget && (
+            <>
+              Каталог «<strong>{deleteCatalogTarget.title}</strong>» будет удалён вместе с инструкциями (
+              {deleteCatalogTarget.instructions.length}) и вопросами ({deleteCatalogTarget.faqs.length}). Действие нельзя
+              отменить.
+            </>
+          )
+        }
+        confirmLabel="Удалить"
+        destructive
+        loading={deleting}
+        onConfirm={confirmDeleteCatalog}
+      />
+
+      <ConfirmDialog
+        open={!!deleteFaq}
+        onOpenChange={(o) => !o && setDeleteFaq(null)}
+        title="Удалить вопрос?"
+        description={
+          deleteFaq && (
+            <>
+              Вопрос «<strong>{deleteFaq.question}</strong>» будет удалён. Действие нельзя отменить.
+            </>
+          )
+        }
+        confirmLabel="Удалить"
+        destructive
+        loading={deleting}
+        onConfirm={confirmDeleteFaq}
+      />
+    </PageContainer>
   )
 }

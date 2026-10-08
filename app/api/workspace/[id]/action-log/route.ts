@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { requireAuth } from '@/lib/auth';
+import { getSafeErrorMessage, isUnsafeId } from '@/lib/security';
+import { requireAuth } from '@/lib/api-auth';
 
 export async function GET(
   _request: Request,
@@ -9,14 +10,16 @@ export async function GET(
   try {
     const currentUser = await requireAuth();
     const { id: workspaceId } = await params;
+    if (isUnsafeId(workspaceId)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
 
     let workspace = await prisma.workspaceConnection.findFirst({
-      where: currentUser.role === 'SUPPORT' ? { id: workspaceId } : { id: workspaceId, userId: currentUser.id },
+      where: currentUser.role === 'SUP' ? { id: workspaceId } : { id: workspaceId, userId: currentUser.id },
+      select: { id: true, workspaceUrl: true },
     });
-    if (!workspace && (currentUser.role === 'ADMIN' || currentUser.role === 'ADM')) {
+    if (!workspace && (currentUser.role === 'LEAD_SUP' || currentUser.role === 'ADM')) {
       const assigned = await prisma.workspaceAdminAssignment.findFirst({
         where: { workspaceId, userId: currentUser.id },
-        include: { workspace: true },
+        include: { workspace: { select: { id: true, workspaceUrl: true } } },
       });
       if (assigned?.workspace) workspace = assigned.workspace;
     }
@@ -38,7 +41,7 @@ export async function GET(
     });
     if (sameUrlConnections.length > 0) {
       workspaceIdsForSpaceSettings = sameUrlConnections.map((w) => w.id);
-      if (currentUser.role === 'SUPPORT') {
+      if (currentUser.role === 'SUP') {
         workspaceIdsToConsider = workspaceIdsForSpaceSettings;
       }
     }
@@ -124,7 +127,7 @@ export async function GET(
   } catch (error: any) {
     console.error('Action log error:', error);
     return NextResponse.json(
-      { error: error?.message || 'Failed to fetch action log' },
+      { error: getSafeErrorMessage(error, 'Failed to fetch action log') },
       { status: 500 }
     );
   }

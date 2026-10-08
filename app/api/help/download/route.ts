@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
-import { getCurrentUser } from '@/lib/auth';
+import { getCurrentUser } from '@/lib/api-auth';
 import { getClientIp, logSecurityEvent, SecurityEventType } from '@/lib/security';
 import path from 'path';
 import fs from 'fs';
+import { isSafeHelpFileName } from '@/lib/help-upload-validation';
 
 const UPLOAD_DIR = path.join(process.cwd(), 'public', 'help-uploads');
 
@@ -17,14 +18,14 @@ export async function GET(request: Request) {
     const file = searchParams.get('file');
     
     // ИСПРАВЛЕНО: проверка на null перед использованием
-    if (!file || /[\\/]/.test(file) || file.startsWith('..')) {
+    if (!isSafeHelpFileName(file)) {
       await logSecurityEvent({
         type: SecurityEventType.PATH_TRAVERSAL_ATTEMPT,
         path: '/api/help/download',
         method: 'GET',
         ipAddress: getClientIp(request),
         userAgent: request.headers.get('user-agent') ?? undefined,
-        details: `Подозрительный параметр file: ${file?.slice(0, 100) ?? 'null'}`,
+        details: `Подозрительный параметр file: ${file != null ? JSON.stringify(String(file).slice(0, 100)) : 'null'}`,
         blocked: true,
         userId: user.id,
       });
@@ -53,12 +54,16 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 });
     }
     // Экранирование filename для защиты от header injection (CRLF, кавычки)
+    // (isSafeHelpFileName уже допускает только [A-Za-z0-9._-]; замена — дополнительная страховка)
     const safeFilename = file.replace(/[\r\n"\\]/g, '_');
     const buf = fs.readFileSync(resolvedPath);
     return new NextResponse(buf, {
       headers: {
         'Content-Disposition': `attachment; filename="${safeFilename}"`,
         'Content-Type': 'application/octet-stream',
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': 'private, no-store',
+        'Content-Security-Policy': "default-src 'none'; sandbox",
       },
     });
   } catch {

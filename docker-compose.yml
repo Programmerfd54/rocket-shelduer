@@ -1,10 +1,40 @@
-# Запуск: из каталога с .env
-#   docker compose up -d --build
-# Полная пересборка с нуля (осторожно: удалит данные БД в volume):
-#   docker compose down -v && docker compose up -d --build
+# Запуск (из каталога с .env):   docker compose up -d --build
+# Обновление с даунтаймом в секунды, с бэкапом БД и проверкой .env:   ./deploy/update.sh
+#
+# По умолчанию поднимается ТОЛЬКО сервис web — как в прежней версии (main): БД внешняя, строка подключения
+# берётся из DATABASE_URL в .env. Всё остальное — по желанию, через профили:
+#   docker compose --profile db up -d --build     # + встроенный PostgreSQL (для новой установки; DATABASE_URL → postgres:5432)
+#   docker compose --profile cron up -d --build   # + отдельный контейнер-«будильник» (обычно не нужен: приложение
+#                                                 #   само запускает внутренний cron, а отправка защищена от дублей)
+# Полный стек «PostgreSQL + приложение + nginx» — в каталоге deploy/ (см. deploy/README.md).
 
 services:
+  web:
+    build: .
+    # Порт снаружи по умолчанию 3000 — как в прежнем docker-compose.yml. Прокси (nginx/Caddy) ходит на него.
+    # Другой порт: APP_PORT=4001 в .env. APP_BIND_ADDRESS=127.0.0.1 — открыть порт только для прокси на этом же хосте
+    # (рекомендуется, если снаружи работает nginx/Caddy; прямой доступ по IP:порт минует TLS).
+    ports:
+      - "${APP_BIND_ADDRESS:-0.0.0.0}:${APP_PORT:-3000}:3000"
+    env_file:
+      - .env
+    restart: unless-stopped
+    # Загрузки справки и аватары переживают пересоздание контейнера (при `up --build` контейнер создаётся заново)
+    volumes:
+      - help_uploads:/app/public/help-uploads
+      - avatar_uploads:/app/public/uploads/avatars
+    # Харденинг: процесс node (uid 1001) не нуждается ни в каких capabilities (порт 3000 > 1024)
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: ${APP_PIDS_LIMIT:-1024}
+    # Лимит памяти по умолчанию не задан (0 = без лимита, как раньше). Пример: APP_MEM_LIMIT=2g
+    mem_limit: ${APP_MEM_LIMIT:-0}
+    # read_only не включён: Next пишет кэш в .next/cache, npx/tsx при старте — во временные каталоги
+
   postgres:
+    profiles: ["db"]
     image: postgres:15-alpine
     restart: unless-stopped
     environment:
@@ -13,6 +43,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-rocketchat_scheduler}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-rocketchat_scheduler}"]
       interval: 5s
@@ -20,20 +52,8 @@ services:
       retries: 10
       start_period: 10s
 
-  web:
-    build: .
-    # Снаружи 4001 — как в deploy/nginx-example.conf и Caddy на sheduler.yar.21-school.ru (прокси на 127.0.0.1:4001).
-    # Если прокси настроен на другой порт — поменяйте левую часть (например "3000:3000").
-    ports:
-      - "4001:3000"
-    env_file:
-      - .env
-    restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
-
   cron:
+    profiles: ["cron"]
     build:
       context: .
       dockerfile: Dockerfile.cron
@@ -43,12 +63,22 @@ services:
       - .env
     depends_on:
       - web
+    # Секрет передаётся curl через stdin (-H @-), а не аргументом командной строки
     command: >
       sh -c "while true; do
-      curl -sf -H \"Authorization: Bearer $$CRON_SECRET\" http://web:3000/api/cron/send-messages || true;
+      printf 'Authorization: Bearer %s\n' \"$$CRON_SECRET\" | curl -sf -o /dev/null -H @- http://web:3000/api/cron/send-messages || true;
       sleep 60;
       done"
     restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 64m
 
 volumes:
   postgres_data:
+  help_uploads:
+  avatar_uploads:

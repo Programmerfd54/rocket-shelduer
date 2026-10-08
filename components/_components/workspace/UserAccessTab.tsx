@@ -3,13 +3,14 @@
 import { useState, useMemo } from 'react';
 import { formatDistanceToNow } from 'date-fns/formatDistanceToNow';
 import { ru } from 'date-fns/locale/ru';
-import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
-import { LogIn, KeyRound, Users, Download, Search, HelpCircle } from 'lucide-react';
+import { Field } from '@/components/ui/field';
+import { Section } from '@/components/common/Section';
+import { EmptyState } from '@/components/common/EmptyState';
+import { LogIn, Download, Search, HelpCircle, UserX } from 'lucide-react';
 import { toast } from 'sonner';
 import { Spinner } from '@/components/ui/spinner';
 import { Progress } from '@/components/ui/progress';
@@ -71,18 +72,18 @@ const FRESHNESS_LABEL: Record<Exclude<Freshness, 'none'>, string> = {
   stale: 'Очень давно',
 };
 
-function freshnessBadgeClass(f: Freshness): string {
+function freshnessVariant(f: Freshness): 'success' | 'info' | 'warning' | 'danger' | 'muted' {
   switch (f) {
     case 'active':
-      return 'border-emerald-500/50 bg-emerald-500/15 text-emerald-800 dark:text-emerald-200';
+      return 'success';
     case 'recent':
-      return 'border-cyan-500/50 bg-cyan-500/15 text-cyan-900 dark:text-cyan-100';
+      return 'info';
     case 'aging':
-      return 'border-amber-500/50 bg-amber-500/15 text-amber-900 dark:text-amber-100';
+      return 'warning';
     case 'stale':
-      return 'border-orange-600/50 bg-orange-500/15 text-orange-900 dark:text-orange-100';
+      return 'danger';
     default:
-      return 'border-border bg-muted text-muted-foreground';
+      return 'muted';
   }
 }
 
@@ -113,7 +114,7 @@ function tagScheduler(results: Result[], orderOffset: number): Result[] {
   }));
 }
 
-export function UserAccessTab({ workspaceId, currentUserRole = 'USER' }: { workspaceId: string; currentUserRole?: string }) {
+export function UserAccessTab({ workspaceId, currentUserRole = 'MEMBER' }: { workspaceId: string; currentUserRole?: string }) {
   const [usernames, setUsernames] = useState('');
   const [adminUsername, setAdminUsername] = useState('');
   const [adminPassword, setAdminPassword] = useState('');
@@ -127,8 +128,30 @@ export function UserAccessTab({ workspaceId, currentUserRole = 'USER' }: { works
   const [filterLogin, setFilterLogin] = useState('');
   const [filterPreset, setFilterPreset] = useState<FilterPreset>('all');
   const [sortMode, setSortMode] = useState<SortMode>('order');
+  /** Проверка завершилась успешно (нужно, чтобы отличить «ещё не проверяли» от «никого не нашли»). */
+  const [checked, setChecked] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
 
   const hideTimestampForAdm = currentUserRole === 'ADM';
+
+  const parsedLogins = useMemo(() => usernames.split(/[\n,;]+/).map((s) => s.trim()).filter(Boolean), [usernames]);
+  const hasAdminUser = adminUsername.trim().length > 0;
+  const hasAdminPass = adminPassword.length > 0;
+  const credsPartial = hasAdminUser !== hasAdminPass;
+  const credsError = credsPartial
+    ? hasAdminUser
+      ? 'Укажите и пароль администратора'
+      : 'Укажите и логин администратора'
+    : undefined;
+  const usernamesError = parsedLogins.length > 100 ? `Максимум 100 пользователей за раз — сейчас ${parsedLogins.length}` : undefined;
+  const planText =
+    parsedLogins.length === 0
+      ? hasAdminUser && hasAdminPass
+        ? 'Список пуст — будут проверены все пользователи Rocket.Chat (по кредам администратора).'
+        : 'Список пуст — будут проверены все пользователи Rocket.Chat (через ваше подключение к пространству).'
+      : hasAdminUser && hasAdminPass
+        ? `Будет проверено логинов: ${parsedLogins.length} — по данным Rocket.Chat (креды администратора).`
+        : `Будет проверено логинов: ${parsedLogins.length} — по учёту приложения (только добавленные через «Добавление пользователей»).`;
 
   const dataSourceLabel = useMemo((): DataSource | null => {
     const s = results[0]?.dataSource;
@@ -331,19 +354,26 @@ export function UserAccessTab({ workspaceId, currentUserRole = 'USER' }: { works
   };
 
   const handleSubmit = async () => {
-    const raw = usernames.split(/[\n,;]+/).map((s) => s.trim()).filter(Boolean);
+    setSubmitted(true);
+    const raw = parsedLogins;
     if (raw.length > 100) {
       toast.error('Максимум 100 пользователей за раз');
       return;
     }
-    const useRc = !!(adminUsername.trim() && adminPassword) || raw.length === 0;
-    if (!useRc && raw.length === 0) {
-      toast.error('Введите хотя бы один логин или укажите креды админа RC для списка всех пользователей');
+    if (credsPartial) {
+      toast.error(credsError ?? 'Укажите логин и пароль администратора RC целиком');
       return;
     }
+    const useRc = !!(adminUsername.trim() && adminPassword) || raw.length === 0;
     setLoading(true);
     setResults([]);
+    setChecked(false);
     setCheckProgress(null);
+    const toastId = toast.loading('Проверяем пользователей…');
+    const done = (count: number, rc: boolean) => {
+      setChecked(true);
+      toast.success(`Проверено: ${count} пользователей${rc ? ' (Rocket.Chat)' : ''}`, { id: toastId });
+    };
     try {
       if (useRc) {
         if (raw.length === 0) {
@@ -358,9 +388,9 @@ export function UserAccessTab({ workspaceId, currentUserRole = 'USER' }: { works
           const data = await res.json().catch(() => ({}));
           if (res.ok && Array.isArray(data.results)) {
             setResults(tagRc(data.results as Result[], 0));
-            toast.success(`Проверено: ${data.results.length} пользователей (Rocket.Chat)`);
+            done(data.results.length, true);
           } else {
-            toast.error(data.error ?? data.details ?? 'Ошибка запроса');
+            toast.error(data.error ?? data.details ?? 'Не удалось получить список. Проверьте данные и повторите.', { id: toastId });
           }
         } else if (raw.length > RC_CHECK_BATCH_SIZE) {
           const total = raw.length;
@@ -379,16 +409,17 @@ export function UserAccessTab({ workspaceId, currentUserRole = 'USER' }: { works
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok || !Array.isArray(data.results)) {
-              toast.error(data.error ?? data.details ?? 'Ошибка запроса');
+              toast.error(`${data.error ?? data.details ?? 'Ошибка запроса'}. Проверено ${merged.length} из ${total} — повторите для остальных.`, { id: toastId });
               setResults(merged);
               return;
             }
             merged.push(...tagRc(data.results as Result[], merged.length));
-            const done = merged.length;
-            setCheckProgress({ done, total });
+            const doneCount = merged.length;
+            setCheckProgress({ done: doneCount, total });
             setResults([...merged]);
+            toast.loading(`Проверяем пользователей: ${doneCount} из ${total}`, { id: toastId });
           }
-          toast.success(`Проверено: ${merged.length} пользователей (Rocket.Chat)`);
+          done(merged.length, true);
         } else {
           const res = await fetch(`/api/workspace/${workspaceId}/admin/user-access-rc`, {
             method: 'POST',
@@ -402,9 +433,9 @@ export function UserAccessTab({ workspaceId, currentUserRole = 'USER' }: { works
           const data = await res.json().catch(() => ({}));
           if (res.ok && Array.isArray(data.results)) {
             setResults(tagRc(data.results as Result[], 0));
-            toast.success(`Проверено: ${data.results.length} пользователей (Rocket.Chat)`);
+            done(data.results.length, true);
           } else {
-            toast.error(data.error ?? data.details ?? 'Ошибка запроса');
+            toast.error(data.error ?? data.details ?? 'Ошибка запроса. Проверьте данные и повторите.', { id: toastId });
           }
         }
       } else if (raw.length > LOCAL_CHECK_BATCH_SIZE) {
@@ -418,27 +449,28 @@ export function UserAccessTab({ workspaceId, currentUserRole = 'USER' }: { works
           );
           const data = await res.json().catch(() => ({}));
           if (!res.ok || !Array.isArray(data.results)) {
-            toast.error(data.error ?? 'Ошибка запроса');
+            toast.error(`${data.error ?? 'Ошибка запроса'}. Проверено ${merged.length} из ${total} — повторите для остальных.`, { id: toastId });
             setResults(merged);
             return;
           }
           merged.push(...tagScheduler(data.results as Result[], merged.length));
           setCheckProgress({ done: merged.length, total });
           setResults([...merged]);
+          toast.loading(`Проверяем пользователей: ${merged.length} из ${total}`, { id: toastId });
         }
-        toast.success(`Проверено: ${merged.length} пользователей`);
+        done(merged.length, false);
       } else {
         const res = await fetch(`/api/workspace/${workspaceId}/admin/user-access?usernames=${encodeURIComponent(raw.join(','))}`);
         const data = await res.json().catch(() => ({}));
         if (res.ok && Array.isArray(data.results)) {
           setResults(tagScheduler(data.results as Result[], 0));
-          toast.success(`Проверено: ${data.results.length} пользователей`);
+          done(data.results.length, false);
         } else {
-          toast.error(data.error ?? 'Ошибка запроса');
+          toast.error(data.error ?? 'Ошибка запроса. Повторите попытку.', { id: toastId });
         }
       }
     } catch {
-      toast.error('Ошибка запроса');
+      toast.error('Нет связи с сервером. Повторите попытку.', { id: toastId });
     } finally {
       setLoading(false);
       setCheckProgress(null);
@@ -446,365 +478,373 @@ export function UserAccessTab({ workspaceId, currentUserRole = 'USER' }: { works
   };
 
   return (
-    <Card className="rounded-2xl border-2 border-border/80 bg-card shadow-[0_2px_12px_rgba(0,0,0,0.06)] overflow-hidden">
-      <div className="px-4 py-3 border-b-2 border-border/70 bg-gradient-to-b from-cyan-500/8 to-transparent">
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-cyan-500/15 text-cyan-600 dark:text-cyan-400">
-            <LogIn className="h-5 w-5" />
-          </div>
-          <div>
-            <h3 className="font-semibold text-foreground">Состояние входа</h3>
-            <p className="text-sm text-muted-foreground mt-0.5">
-              Введите логины пользователей (по одному на строку или через запятую). Будет показано, входил ли каждый в пространство и когда был последний заход.
-            </p>
-            <p className="text-xs text-muted-foreground mt-1">
-              Если вы подключены к пространству — можно без кредов (используется ваше подключение). С кредами RC — все пользователи Rocket.Chat. Без кредов и без подключения — только пользователи, добавленные через «Добавление пользователей».
-            </p>
-          </div>
-        </div>
-      </div>
-      <CardContent className="pt-4 space-y-4">
-        <div className="rounded-xl border-2 border-violet-400/40 bg-violet-500/5 p-4 space-y-3">
-          <p className="text-sm font-medium flex items-center gap-2">
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-500/20 text-violet-600 dark:text-violet-400">
-              <KeyRound className="w-4 h-4" />
-            </span>
-            Креды администратора Rocket.Chat (опционально — для доступа ко всем пользователям RC)
-          </p>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <Label htmlFor="access-admin-username" className="text-xs">Логин админа RC</Label>
-              <Input
-                id="access-admin-username"
-                type="text"
-                placeholder="admin"
-                value={adminUsername}
-                onChange={(e) => setAdminUsername(e.target.value)}
-                className="mt-1.5 h-9 border-2 border-violet-300/30 focus:border-violet-400/50 rounded-lg bg-background"
-                disabled={loading}
-              />
+    <div className="space-y-6">
+      <Section
+        title="Состояние входа"
+        description="Показывает, входил ли пользователь в пространство и когда был последний заход."
+      >
+        <div className="space-y-5">
+          <div className="space-y-3">
+            <div className="space-y-0.5">
+              <p className="text-sm font-medium">Доступ к Rocket.Chat</p>
+              <p className="text-xs text-muted-foreground">
+                Необязательно. Если вы подключены к пространству — креды не нужны. С кредами администратора доступны все пользователи Rocket.Chat; без кредов и без подключения — только добавленные через «Добавление пользователей».
+              </p>
             </div>
-            <div>
-              <Label htmlFor="access-admin-password" className="text-xs">Пароль админа RC</Label>
-              <Input
-                id="access-admin-password"
-                type="password"
-                placeholder="••••••••"
-                value={adminPassword}
-                onChange={(e) => setAdminPassword(e.target.value)}
-                className="mt-1.5 h-9 border-2 border-violet-300/30 focus:border-violet-400/50 rounded-lg bg-background"
-                disabled={loading}
-              />
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Логин админа RC" htmlFor="access-admin-username">
+                <Input
+                  id="access-admin-username"
+                  type="text"
+                  placeholder="admin"
+                  autoComplete="off"
+                  value={adminUsername}
+                  onChange={(e) => setAdminUsername(e.target.value)}
+                  aria-invalid={submitted && credsPartial && !hasAdminUser}
+                  disabled={loading}
+                />
+              </Field>
+              <Field label="Пароль админа RC" htmlFor="access-admin-password">
+                <Input
+                  id="access-admin-password"
+                  type="password"
+                  placeholder="••••••••"
+                  autoComplete="new-password"
+                  value={adminPassword}
+                  onChange={(e) => setAdminPassword(e.target.value)}
+                  aria-invalid={submitted && credsPartial && !hasAdminPass}
+                  disabled={loading}
+                />
+              </Field>
             </div>
+            {(submitted || (hasAdminUser && hasAdminPass)) && credsError && (
+              <p role="alert" className="text-xs text-destructive">{credsError}</p>
+            )}
           </div>
-        </div>
-        <div className="rounded-xl border-2 border-blue-400/40 bg-blue-500/5 p-4 space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <Label htmlFor="user-access-usernames" className="flex items-center gap-2 text-sm font-medium shrink-0">
-              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-500/20 text-blue-600 dark:text-blue-400">
-                <Users className="w-4 h-4" />
-              </span>
-              Логины (несколько — по одному на строку; при кредах RC можно оставить пустым)
-            </Label>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-8 text-xs border-2 border-blue-300/40 rounded-lg"
-              onClick={loadAddedList}
-              disabled={addedListLoading}
+
+          <div className="space-y-3 border-t pt-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-sm font-medium">Кого проверяем</span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={loadAddedList}
+                disabled={addedListLoading}
+              >
+                {addedListLoading ? <Spinner /> : null}
+                {addedListVisible && addedList.length > 0 ? 'Скрыть список' : 'Показать список добавленных'}
+              </Button>
+            </div>
+            {addedListVisible && addedList.length > 0 && (
+              <div className="rounded-md border bg-muted/30 p-3 text-xs">
+                <p className="mb-1.5 text-muted-foreground">Добавленные логины ({addedList.length}):</p>
+                <p className="break-all font-mono text-foreground">{addedList.map((u) => u.username).join(', ')}</p>
+              </div>
+            )}
+            <Field
+              label="Логины"
+              htmlFor="user-access-usernames"
+              error={usernamesError}
+              hint="По одному на строку или через запятую, до 100. При кредах RC поле можно оставить пустым — проверим всех."
             >
-              {addedListLoading ? <Spinner className="w-3 h-3 mr-1" /> : null}
-              {addedListVisible && addedList.length > 0 ? 'Скрыть список' : 'Показать список добавленных'}
-            </Button>
+              <Textarea
+                id="user-access-usernames"
+                placeholder={'wrightag\nivanov\npetrov'}
+                value={usernames}
+                onChange={(e) => {
+                  setUsernames(e.target.value);
+                  setResults([]);
+                  setChecked(false);
+                  setFilterPreset('all');
+                }}
+                aria-invalid={!!usernamesError}
+                className="min-h-[120px] resize-y font-mono text-sm"
+                disabled={loading}
+              />
+            </Field>
           </div>
-          {addedListVisible && addedList.length > 0 && (
-            <div className="rounded-lg border-2 border-blue-300/30 bg-blue-500/10 p-3 text-xs">
-              <p className="text-muted-foreground mb-2">Логины для проверки ({addedList.length}):</p>
-              <p className="font-mono text-foreground break-all">{addedList.map((u) => u.username).join(', ')}</p>
+
+          <div className="flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center">
+            <Button onClick={handleSubmit} disabled={loading || !!usernamesError || credsPartial}>
+              {loading ? <Spinner /> : <LogIn />}
+              {loading ? 'Проверяем…' : 'Проверить'}
+            </Button>
+            <p className="text-xs text-muted-foreground">{planText}</p>
+          </div>
+
+          {loading && checkProgress && (
+            <div className="space-y-2 rounded-md border bg-muted/30 px-3 py-2.5" role="status" aria-live="polite">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                <span className="font-medium tabular-nums text-foreground">
+                  Проверено: {checkProgress.done} из {checkProgress.total}
+                </span>
+                <span className="text-xs tabular-nums text-muted-foreground">
+                  Осталось: {Math.max(0, checkProgress.total - checkProgress.done)}
+                </span>
+              </div>
+              <Progress
+                value={checkProgress.total > 0 ? (checkProgress.done / checkProgress.total) * 100 : 0}
+                aria-label="Прогресс проверки"
+                className="h-1.5"
+              />
             </div>
           )}
-          <Textarea
-            id="user-access-usernames"
-            placeholder={'wrightag\nivanov\npetrov'}
-            value={usernames}
-            onChange={(e) => {
-              setUsernames(e.target.value);
-              setResults([]);
-              setFilterPreset('all');
-            }}
-            className="min-h-[120px] font-mono text-sm resize-y border-2 border-blue-300/30 focus:border-blue-400/50 rounded-lg bg-background"
-            disabled={loading}
-          />
         </div>
-        <Button
-          onClick={handleSubmit}
-          disabled={loading}
-          className="gap-2 rounded-lg border-2 border-cyan-400/50 bg-cyan-500 hover:bg-cyan-600 text-white shadow-sm"
+      </Section>
+
+      {checked && !loading && results.length === 0 && (
+        <EmptyState
+          icon={<UserX />}
+          title="Пользователей не найдено"
+          description="Источник вернул пустой список. Проверьте логины и доступ к Rocket.Chat."
+        />
+      )}
+
+      {results.length > 0 && (
+        <Section
+          title="Результат"
+          bare
+          actions={
+            <Button variant="outline" size="sm" onClick={exportToExcel}>
+              <Download />
+              Экспорт в Excel
+            </Button>
+          }
         >
-          {loading ? <Spinner className="w-4 h-4" /> : <LogIn className="w-4 h-4" />}
-          Проверить
-        </Button>
-        {loading && checkProgress && (
-          <div
-            className="rounded-xl border border-cyan-400/30 bg-cyan-500/5 px-4 py-3 space-y-2"
-            role="status"
-            aria-live="polite"
-          >
-            <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-              <span className="text-foreground font-medium tabular-nums">
-                Проверено: {checkProgress.done} из {checkProgress.total}
-              </span>
-              <span className="text-muted-foreground tabular-nums">
-                Осталось: {Math.max(0, checkProgress.total - checkProgress.done)}
-              </span>
-            </div>
-            <Progress
-              value={checkProgress.total > 0 ? (checkProgress.done / checkProgress.total) * 100 : 0}
-              className="h-2"
-            />
-          </div>
-        )}
-        {results.length > 0 && (
-          <div className="mt-4 rounded-xl border-2 border-emerald-400/40 bg-emerald-500/5 overflow-hidden space-y-3">
-            <div className="p-3 sm:p-4 border-b border-border/50 bg-emerald-500/[0.07] space-y-3">
-              <p className="text-sm font-semibold text-foreground">Сводка по выборке</p>
-              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 text-center">
-                {[
-                  { label: 'Всего', value: summary.total },
-                  { label: 'Найдено', value: summary.found },
-                  { label: 'Не в списке', value: summary.notFound },
-                  { label: 'Был вход', value: summary.entered },
-                  { label: 'Не входил', value: summary.foundNotEntered },
-                  { label: '≤ 7 дней', value: summary.week },
-                  { label: 'Без даты', value: summary.noActivityDate },
-                  { label: 'Старше 90 дн.', value: summary.stale },
-                ].map((cell) => (
-                  <div
-                    key={cell.label}
-                    className="rounded-lg border border-border/60 bg-background/80 px-2 py-2 shadow-sm"
-                  >
-                    <div className="text-lg font-bold tabular-nums text-foreground leading-tight">{cell.value}</div>
-                    <div className="text-[10px] sm:text-[11px] text-muted-foreground leading-snug mt-0.5">{cell.label}</div>
-                  </div>
-                ))}
-              </div>
-              <div className="space-y-1">
-                <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-muted">
-                  {summary.total > 0 ? (
-                    <>
-                      <div
-                        className="bg-emerald-500 transition-all"
-                        style={{ width: `${(summary.entered / summary.total) * 100}%` }}
-                        title="Был вход"
-                      />
-                      <div
-                        className="bg-amber-500/90 transition-all"
-                        style={{ width: `${(summary.foundNotEntered / summary.total) * 100}%` }}
-                        title="Найден, не входил"
-                      />
-                      <div
-                        className="bg-muted-foreground/45 transition-all"
-                        style={{ width: `${(summary.notFound / summary.total) * 100}%` }}
-                        title="Не найден"
-                      />
-                    </>
-                  ) : null}
+          <div className="space-y-4 rounded-lg border bg-card p-4">
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4 lg:grid-cols-8">
+              {[
+                { label: 'Всего', value: summary.total },
+                { label: 'Найдено', value: summary.found },
+                { label: 'Не в списке', value: summary.notFound },
+                { label: 'Был вход', value: summary.entered },
+                { label: 'Не входил', value: summary.foundNotEntered },
+                { label: '≤ 7 дней', value: summary.week },
+                { label: 'Без даты', value: summary.noActivityDate },
+                { label: 'Старше 90 дн.', value: summary.stale },
+              ].map((cell) => (
+                <div key={cell.label}>
+                  <dd className="text-lg font-semibold leading-tight tabular-nums text-foreground">{cell.value}</dd>
+                  <dt className="text-xs text-muted-foreground">{cell.label}</dt>
                 </div>
-                <p className="text-[11px] text-muted-foreground">
-                  Полоса: зелёный — был вход, жёлтый — найден без входа, серый — не найден в источнике.
-                </p>
+              ))}
+            </dl>
+            <div className="space-y-1">
+              <div className="flex h-2 w-full overflow-hidden rounded-sm bg-muted">
+                {summary.total > 0 ? (
+                  <>
+                    <div
+                      className="bg-emerald-500 transition-all"
+                      style={{ width: `${(summary.entered / summary.total) * 100}%` }}
+                      title="Был вход"
+                    />
+                    <div
+                      className="bg-amber-500 transition-all"
+                      style={{ width: `${(summary.foundNotEntered / summary.total) * 100}%` }}
+                      title="Найден, не входил"
+                    />
+                    <div
+                      className="bg-muted-foreground/40 transition-all"
+                      style={{ width: `${(summary.notFound / summary.total) * 100}%` }}
+                      title="Не найден"
+                    />
+                  </>
+                ) : null}
               </div>
-              {dataSourceLabel && (
-                <p className="text-xs text-muted-foreground">
-                  Источник дат активности:{' '}
-                  <span className="font-medium text-foreground">
-                    {dataSourceLabel === 'rocketchat'
-                      ? 'Rocket.Chat (поле lastLogin на сервере)'
-                      : 'приложение (учёт по списку «добавленных» в пространство)'}
-                  </span>
-                </p>
-              )}
+              <p className="text-xs text-muted-foreground">
+                Зелёный — был вход, жёлтый — найден без входа, серый — не найден в источнике.
+                {dataSourceLabel && (
+                  <>
+                    {' '}Источник дат:{' '}
+                    <span className="font-medium text-foreground">
+                      {dataSourceLabel === 'rocketchat'
+                        ? 'Rocket.Chat (lastLogin на сервере)'
+                        : 'приложение (учёт добавленных в пространство)'}
+                    </span>
+                  </>
+                )}
+              </p>
             </div>
-            <div className="px-3 pb-0 flex flex-wrap items-center gap-3">
-              <div className="relative flex-1 min-w-[140px]">
-                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                <Input
-                  placeholder="Фильтр по логину..."
-                  value={filterLogin}
-                  onChange={(e) => setFilterLogin(e.target.value)}
-                  className="pl-8 h-9 text-sm"
-                />
-              </div>
-              <Select value={filterPreset} onValueChange={(v: FilterPreset) => setFilterPreset(v)}>
-                <SelectTrigger className="w-[220px] h-9 text-sm">
-                  <SelectValue placeholder="Фильтр" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Все строки</SelectItem>
-                  <SelectItem value="entered">Был вход</SelectItem>
-                  <SelectItem value="not-entered">Не входил (найден)</SelectItem>
-                  <SelectItem value="not-found">Не найден в источнике</SelectItem>
-                  <SelectItem value="no-activity-date">Нет даты активности</SelectItem>
-                  <SelectItem value="week">Активность за 7 дней</SelectItem>
-                  <SelectItem value="stale">Давно (&gt;90 дней)</SelectItem>
-                </SelectContent>
-              </Select>
-              <Select value={sortMode} onValueChange={(v: SortMode) => setSortMode(v)}>
-                <SelectTrigger className="w-[200px] h-9 text-sm">
-                  <SelectValue placeholder="Сортировка" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="order">Как в списке</SelectItem>
-                  <SelectItem value="login-asc">Логин А→Я</SelectItem>
-                  <SelectItem value="activity-desc">Сначала свежие</SelectItem>
-                  <SelectItem value="activity-asc">Сначала старые</SelectItem>
-                </SelectContent>
-              </Select>
-              <Button variant="outline" size="sm" className="gap-2 h-9" onClick={exportToExcel}>
-                <Download className="w-4 h-4" />
-                Экспорт в Excel
-              </Button>
-              <span className="text-xs text-muted-foreground">
-                Показано {filteredResults.length} из {results.length}
-              </span>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative min-w-[140px] flex-1 sm:max-w-xs">
+              <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
+              <Input
+                placeholder="Фильтр по логину…"
+                aria-label="Фильтр по логину"
+                value={filterLogin}
+                onChange={(e) => setFilterLogin(e.target.value)}
+                className="pl-8"
+              />
             </div>
-            <div className="max-h-[480px] overflow-x-auto overflow-y-auto px-3 pb-3">
-              <table className="w-full text-sm min-w-[720px]">
-                <thead className="bg-muted/30 sticky top-0 z-10">
-                  <tr>
-                    <th className="text-left p-2 font-medium align-bottom">Логин</th>
-                    <th className="text-left p-2 font-medium align-bottom w-[100px]">Источник</th>
-                    <th className="text-left p-2 font-medium align-bottom min-w-[120px]">
-                      <span className="block">Добавлен</span>
-                      <span className="text-[10px] font-normal text-muted-foreground">в приложение</span>
-                    </th>
-                    <th className="text-left p-2 font-medium align-bottom min-w-[220px]">
-                      <div className="flex items-start gap-1">
-                        <span>
-                          <span className="block">Активность</span>
-                          <span className="text-[10px] font-normal text-muted-foreground block leading-tight">
-                            {dataSourceLabel === 'scheduler'
-                              ? 'последний вход (учёт)'
-                              : dataSourceLabel === 'rocketchat'
-                                ? 'lastLogin в Rocket.Chat'
-                                : 'дата входа'}
-                          </span>
+            <Select value={filterPreset} onValueChange={(v: FilterPreset) => setFilterPreset(v)}>
+              <SelectTrigger className="w-full sm:w-[220px]" aria-label="Фильтр по состоянию">
+                <SelectValue placeholder="Фильтр" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Все строки</SelectItem>
+                <SelectItem value="entered">Был вход</SelectItem>
+                <SelectItem value="not-entered">Не входил (найден)</SelectItem>
+                <SelectItem value="not-found">Не найден в источнике</SelectItem>
+                <SelectItem value="no-activity-date">Нет даты активности</SelectItem>
+                <SelectItem value="week">Активность за 7 дней</SelectItem>
+                <SelectItem value="stale">Давно (&gt;90 дней)</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={sortMode} onValueChange={(v: SortMode) => setSortMode(v)}>
+              <SelectTrigger className="w-full sm:w-[200px]" aria-label="Сортировка">
+                <SelectValue placeholder="Сортировка" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="order">Как в списке</SelectItem>
+                <SelectItem value="login-asc">Логин А→Я</SelectItem>
+                <SelectItem value="activity-desc">Сначала свежие</SelectItem>
+                <SelectItem value="activity-asc">Сначала старые</SelectItem>
+              </SelectContent>
+            </Select>
+            <span className="text-xs text-muted-foreground sm:ml-auto">
+              Показано {filteredResults.length} из {results.length}
+            </span>
+          </div>
+
+          <div className="max-h-[480px] overflow-auto rounded-lg border bg-card">
+            <table className="w-full min-w-[640px] text-sm">
+              <thead className="sticky top-0 z-10 bg-muted">
+                <tr>
+                  <th className="p-2 px-3 text-left align-bottom text-xs font-medium text-muted-foreground">Логин</th>
+                  <th className="w-[100px] p-2 px-3 text-left align-bottom text-xs font-medium text-muted-foreground">Источник</th>
+                  <th className="min-w-[120px] p-2 px-3 text-left align-bottom text-xs font-medium text-muted-foreground">
+                    Добавлен в приложение
+                  </th>
+                  <th className="min-w-[220px] p-2 px-3 text-left align-bottom text-xs font-medium text-muted-foreground">
+                    <div className="flex items-center gap-1">
+                      <span>
+                        Активность
+                        <span className="ml-1 font-normal">
+                          ({dataSourceLabel === 'scheduler'
+                            ? 'последний вход (учёт)'
+                            : dataSourceLabel === 'rocketchat'
+                              ? 'lastLogin в RC'
+                              : 'дата входа'})
                         </span>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <button
-                              type="button"
-                              className="mt-0.5 text-muted-foreground hover:text-foreground rounded"
-                              aria-label="Справка по колонке"
-                            >
-                              <HelpCircle className="w-3.5 h-3.5" />
-                            </button>
-                          </TooltipTrigger>
-                          <TooltipContent side="bottom" className="max-w-[280px] text-xs leading-relaxed">
-                            {dataSourceLabel === 'scheduler'
-                              ? 'Дата и факт входа берутся из учёта приложения для пользователей, добавленных в пространство через «Добавление пользователей».'
-                              : 'Дата последнего входа в Rocket.Chat (поле lastLogin). Это не то же самое, что активность в одном канале, если сервер отдаёт только общий вход.'}
-                          </TooltipContent>
-                        </Tooltip>
-                      </div>
-                    </th>
+                      </span>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            className="rounded text-muted-foreground hover:text-foreground"
+                            aria-label="Справка по колонке"
+                          >
+                            <HelpCircle className="size-3.5" />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom" className="max-w-[280px] text-xs leading-relaxed">
+                          {dataSourceLabel === 'scheduler'
+                            ? 'Дата и факт входа берутся из учёта приложения для пользователей, добавленных в пространство через «Добавление пользователей».'
+                            : 'Дата последнего входа в Rocket.Chat (поле lastLogin). Это не то же самое, что активность в одном канале, если сервер отдаёт только общий вход.'}
+                        </TooltipContent>
+                      </Tooltip>
+                    </div>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredResults.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="p-6 text-center text-sm text-muted-foreground">
+                      Ничего не найдено по текущему фильтру.{' '}
+                      <button
+                        type="button"
+                        className="text-primary underline-offset-2 hover:underline"
+                        onClick={() => {
+                          setFilterLogin('');
+                          setFilterPreset('all');
+                        }}
+                      >
+                        Сбросить фильтры
+                      </button>
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {filteredResults.map((r, i) => {
-                    const ts = getActivityTs(r);
-                    const fr = getFreshness(ts);
-                    const frKey = fr === 'none' ? null : fr;
-                    return (
-                      <tr key={`${r.username}-${r.orderIndex ?? i}`} className="border-t border-border/50">
-                        <td className="p-2 font-mono align-top">
-                          {r.username}
-                          {r.email && (
-                            <span className="text-muted-foreground font-normal block text-xs">{r.email}</span>
-                          )}
-                        </td>
-                        <td className="p-2 align-top">
-                          {r.dataSource === 'rocketchat' ? (
-                            <Badge variant="outline" className="text-[10px] px-1.5 py-0">
-                              RC
-                            </Badge>
-                          ) : r.dataSource === 'scheduler' ? (
-                            <Badge variant="outline" className="text-[10px] px-1.5 py-0">
-                              Прилож.
-                            </Badge>
-                          ) : (
-                            <span className="text-muted-foreground">—</span>
-                          )}
-                        </td>
-                        <td className="p-2 text-muted-foreground align-top text-xs">
-                          {r.found && r.addedAt
-                            ? new Date(r.addedAt).toLocaleString('ru-RU')
-                            : r.found
-                              ? '—'
-                              : (r.message ?? '—')}
-                        </td>
-                        <td className="p-2 align-top">
-                          {!r.found ? (
-                            <span className="text-destructive">{r.message}</span>
-                          ) : r.enteredWorkspace && ts != null ? (
-                            <div className="space-y-1">
-                              <div className="flex flex-wrap items-center gap-1.5">
-                                {frKey && (
-                                  <span
-                                    className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium ${freshnessBadgeClass(fr)}`}
-                                  >
-                                    {FRESHNESS_LABEL[frKey]}
-                                  </span>
-                                )}
-                                {!hideTimestampForAdm && (
-                                  <span className="text-green-700 dark:text-green-400 text-xs">
-                                    {formatDistanceToNow(new Date(ts), { addSuffix: true, locale: ru })}
-                                  </span>
-                                )}
-                                {hideTimestampForAdm && (
-                                  <span className="text-green-600 dark:text-green-400 text-xs">Входил</span>
-                                )}
-                              </div>
+                )}
+                {filteredResults.map((r, i) => {
+                  const ts = getActivityTs(r);
+                  const fr = getFreshness(ts);
+                  const frKey = fr === 'none' ? null : fr;
+                  return (
+                    <tr key={`${r.username}-${r.orderIndex ?? i}`} className="border-t hover:bg-muted/40">
+                      <td className="p-2 px-3 align-top font-mono">
+                        {r.username}
+                        {r.email && (
+                          <span className="block text-xs font-normal text-muted-foreground">{r.email}</span>
+                        )}
+                      </td>
+                      <td className="p-2 px-3 align-top">
+                        {r.dataSource === 'rocketchat' ? (
+                          <Badge variant="muted">RC</Badge>
+                        ) : r.dataSource === 'scheduler' ? (
+                          <Badge variant="muted">Прилож.</Badge>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </td>
+                      <td className="p-2 px-3 align-top text-xs text-muted-foreground">
+                        {r.found && r.addedAt
+                          ? new Date(r.addedAt).toLocaleString('ru-RU')
+                          : r.found
+                            ? '—'
+                            : (r.message ?? '—')}
+                      </td>
+                      <td className="p-2 px-3 align-top">
+                        {!r.found ? (
+                          <span className="text-destructive">{r.message ?? 'Не найден'}</span>
+                        ) : r.enteredWorkspace && ts != null ? (
+                          <div className="space-y-1">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {frKey && (
+                                <Badge variant={freshnessVariant(fr)}>{FRESHNESS_LABEL[frKey]}</Badge>
+                              )}
                               {!hideTimestampForAdm && (
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <button
-                                      type="button"
-                                      className="text-left text-[11px] text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
-                                    >
-                                      {new Date(ts).toLocaleString('ru-RU')}
-                                    </button>
-                                  </TooltipTrigger>
-                                  <TooltipContent className="max-w-xs text-xs">
-                                    Точное время последней активности по данным{' '}
-                                    {r.dataSource === 'scheduler' ? 'приложения' : 'Rocket.Chat'}.
-                                  </TooltipContent>
-                                </Tooltip>
+                                <span className="text-xs text-foreground">
+                                  {formatDistanceToNow(new Date(ts), { addSuffix: true, locale: ru })}
+                                </span>
+                              )}
+                              {hideTimestampForAdm && (
+                                <span className="text-xs text-foreground">Входил</span>
                               )}
                             </div>
-                          ) : r.enteredWorkspace && ts == null ? (
-                            <span className="text-green-600 dark:text-green-400 text-xs">Входил (дата недоступна)</span>
-                          ) : (
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              <span
-                                className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium ${freshnessBadgeClass('none')}`}
-                              >
-                                Нет входа
-                              </span>
-                              <span className="text-amber-600 dark:text-amber-400 text-xs">Не входил</span>
-                            </div>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                            {!hideTimestampForAdm && (
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <button
+                                    type="button"
+                                    className="text-left text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                                  >
+                                    {new Date(ts).toLocaleString('ru-RU')}
+                                  </button>
+                                </TooltipTrigger>
+                                <TooltipContent className="max-w-xs text-xs">
+                                  Точное время последней активности по данным{' '}
+                                  {r.dataSource === 'scheduler' ? 'приложения' : 'Rocket.Chat'}.
+                                </TooltipContent>
+                              </Tooltip>
+                            )}
+                          </div>
+                        ) : r.enteredWorkspace && ts == null ? (
+                          <span className="text-xs text-foreground">Входил (дата недоступна)</span>
+                        ) : (
+                          <Badge variant="warning">Не входил</Badge>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
-        )}
-      </CardContent>
-    </Card>
+        </Section>
+      )}
+    </div>
   );
 }

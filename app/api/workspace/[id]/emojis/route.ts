@@ -1,10 +1,17 @@
 import { NextResponse } from 'next/server';
-import prisma from '@/lib/prisma';
-import { requireAuth } from '@/lib/auth';
+import { isUnsafeId } from '@/lib/security';
+import { requireAuth } from '@/lib/api-auth';
 import { RocketChatClient } from '@/lib/rocketchat';
-import { getEffectiveConnectionForRc } from '@/lib/workspace-rc';
 import { rcNotConnectedResponse } from '@/lib/rc-http';
+import { isRcNetworkFailure } from '@/lib/rc-network';
+import { resolveEmojiWorkspace } from '@/lib/emoji-workspace';
 
+/**
+ * Кастомные эмодзи воркспейса Rocket.Chat.
+ * Успех:  200 { emojis, workspaceUrl }
+ * Ошибка RC (сеть, 401 токена RC, и т.п.): 502 { emojis: [], workspaceUrl, error, code }
+ *   — клиент отличает «эмодзи нет» (пустой список, 200) от «не удалось загрузить» (поле error).
+ */
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -12,51 +19,55 @@ export async function GET(
   try {
     const user = await requireAuth();
     const { id } = await params;
+    if (isUnsafeId(id)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
 
-    let workspace = await prisma.workspaceConnection.findFirst({
-      where: { id, userId: user.id },
-    });
-    if (!workspace) {
-      const assignment = await prisma.workspaceAdminAssignment.findFirst({
-        where: { workspaceId: id, userId: user.id },
-      });
-      if (assignment) workspace = await prisma.workspaceConnection.findUnique({ where: { id } });
+    const access = await resolveEmojiWorkspace(user.id, id);
+    if (!access) {
+      return NextResponse.json({ error: 'Workspace not found' }, { status: 404 });
     }
-
-    if (!workspace) {
-      return NextResponse.json(
-        { error: 'Workspace not found' },
-        { status: 404 }
-      );
-    }
-
-    const effective = await getEffectiveConnectionForRc(user.id, id);
-    if (!effective?.authToken || !effective.userId_RC) {
-      return rcNotConnectedResponse();
+    if (!access.auth) {
+      return rcNotConnectedResponse({ emojis: [], workspaceUrl: access.workspaceUrl });
     }
 
     try {
-      const rcClient = new RocketChatClient(effective.workspaceUrl);
-      const emojis = await rcClient.getEmojis(
-        effective.authToken,
-        effective.userId_RC
+      const rcClient = new RocketChatClient(access.workspaceUrl);
+      // fetchCustomEmojis бросает ошибку при сбое (в отличие от getEmojis, который глотает её и отдаёт []).
+      const emojis = await rcClient.fetchCustomEmojis(
+        access.auth.authToken,
+        access.auth.userId_RC
       );
 
-      return NextResponse.json({
-        emojis: emojis.map(emoji => ({
-          _id: emoji._id,
-          name: emoji.name,
-          aliases: emoji.aliases || [],
-          extension: emoji.extension || 'png',
-          _updatedAt: emoji._updatedAt,
-        })),
-        workspaceUrl: effective.workspaceUrl, // Для построения URL изображений
-      });
-    } catch (rcError: any) {
-      console.error('Rocket.Chat emojis error:', rcError);
-      // Возвращаем пустой массив если не удалось получить эмодзи
-      // Frontend будет использовать стандартные эмодзи
-      return NextResponse.json({ emojis: [] });
+      return NextResponse.json(
+        {
+          emojis: emojis.map((emoji) => ({
+            _id: emoji._id,
+            name: emoji.name,
+            aliases: emoji.aliases || [],
+            extension: emoji.extension || 'png',
+            _updatedAt: emoji._updatedAt,
+          })),
+          workspaceUrl: access.workspaceUrl, // Для построения URL изображений
+        },
+        { headers: { 'Cache-Control': 'private, max-age=30' } }
+      );
+    } catch (rcError: unknown) {
+      const message = rcError instanceof Error ? rcError.message : String(rcError);
+      console.error('Rocket.Chat emojis error:', message);
+      const network = isRcNetworkFailure(rcError);
+      const unauthorized = /unauthorized|You must be logged in/i.test(message);
+      return NextResponse.json(
+        {
+          emojis: [],
+          workspaceUrl: access.workspaceUrl,
+          error: network
+            ? 'Сервер Rocket.Chat недоступен'
+            : unauthorized
+              ? 'Сессия Rocket.Chat истекла — подключитесь к пространству заново'
+              : message || 'Не удалось получить эмодзи',
+          code: network ? 'RC_UNREACHABLE' : unauthorized ? 'RC_UNAUTHORIZED' : 'RC_EMOJIS_FAILED',
+        },
+        { status: 502, headers: { 'Cache-Control': 'no-store' } }
+      );
     }
   } catch (error) {
     console.error('Get emojis error:', error);

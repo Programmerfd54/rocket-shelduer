@@ -1,14 +1,14 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Card, CardContent } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
 import { R2D2TabPanel } from '@/components/_components/workspace/R2D2TabPanel'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { Field } from '@/components/ui/field'
+import { Progress } from '@/components/ui/progress'
 import {
   Select,
   SelectContent,
@@ -17,23 +17,19 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Section } from '@/components/common/Section'
+import { ConfirmDialog } from '@/components/common/ConfirmDialog'
+import { EmptyState } from '@/components/common/EmptyState'
 import {
   Hash,
   Plus,
   RefreshCw,
-  CheckCircle2,
-  MessageSquareOff,
-  Mail,
-  ShieldOff,
-  Image,
-  FileUp,
   Check,
   AlertTriangle,
-  ListOrdered,
+  Settings2,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Spinner } from '@/components/ui/spinner'
-import { cn } from '@/lib/utils'
 
 export const CHANNEL_TEMPLATES: { name: string; topic: string; description: string; readOnly?: boolean; isPrivate?: boolean }[] = [
   {
@@ -100,11 +96,8 @@ interface SettingBlockProps {
   keyId: SettingKey
   stepNumber: number
   workspaceId: string
-  icon: React.ReactNode
   title: string
   description: string
-  borderColor?: string
-  iconBg?: string
   status: 'idle' | 'applied' | 'checking'
   applyLoading: boolean
   checkLoading: boolean
@@ -158,6 +151,13 @@ export function SpaceSettingsTab({ workspaceId, workspaceUrl, channels, onChanne
   const [channelCreating, setChannelCreating] = useState(false)
   const [channelCheckLoading, setChannelCheckLoading] = useState<string | null>(null)
   const [channelSetDefaultLoading, setChannelSetDefaultLoading] = useState<string | null>(null)
+  const [channelApplySettingsLoading, setChannelApplySettingsLoading] = useState<string | null>(null)
+  const [channelNameTouched, setChannelNameTouched] = useState(false)
+  /** Канал, для которого открыт диалог «Применить настройки». */
+  const [applyConfirmChannel, setApplyConfirmChannel] = useState<ChannelInfo | null>(null)
+  /** Ожидает подтверждения: включить/выключить скрытие системных сообщений во всём пространстве. */
+  const [pendingHideSystem, setPendingHideSystem] = useState<boolean | null>(null)
+  const [hideSystemSyncing, setHideSystemSyncing] = useState(false)
 
   const [settingStatus, setSettingStatus] = useState<Record<SettingKey, 'idle' | 'applied' | 'checking'>>({
     hideSystemMessages: 'idle',
@@ -190,6 +190,17 @@ export function SpaceSettingsTab({ workspaceId, workspaceUrl, channels, onChanne
     permissionDeleteD: false,
   })
 
+  const normalizedChannelName = channelName.trim().replace(/^#/, '').replace(/\s+/g, '_')
+  const channelNameError = !normalizedChannelName
+    ? 'Укажите название канала'
+    : /[^\p{L}\p{N}._-]/u.test(normalizedChannelName)
+      ? 'Допустимы буквы, цифры, точка, дефис и подчёркивание'
+      : normalizedChannelName.length > 100
+        ? 'Название не длиннее 100 символов'
+        : channels.some((c) => (c.name || '').toLowerCase() === normalizedChannelName.toLowerCase())
+          ? `Канал #${normalizedChannelName} уже есть в Rocket.Chat`
+          : undefined
+
   const applyTemplate = (t: (typeof CHANNEL_TEMPLATES)[0]) => {
     setChannelName(t.name)
     setChannelTopic(t.topic)
@@ -198,13 +209,42 @@ export function SpaceSettingsTab({ workspaceId, workspaceUrl, channels, onChanne
     setChannelReadOnly(t.readOnly ?? false)
   }
 
+  const syncHideSystemMessagesGlobal = async (hide: boolean) => {
+    try {
+      const res = await fetch(`/api/workspace/${workspaceId}/space-settings/apply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(
+          hide ? { key: 'hideSystemMessages' } : { key: 'hideSystemMessages', clear: true }
+        ),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        if (res.status === 403 || data.code === 'RC_SETTINGS_FORBIDDEN') {
+          toast.warning(
+            data.error ||
+              'Нет прав менять глобальный список в Rocket.Chat. Нужен администратор RC или токен с ролью admin.'
+          )
+          return
+        }
+        throw new Error(data.error || 'Ошибка синхронизации')
+      }
+      setSettingStatus((p) => ({ ...p, hideSystemMessages: hide ? 'applied' : 'idle' }))
+      if (!hide) toast.success('Список скрытых системных сообщений в RC сброшен')
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Не удалось синхронизировать настройку RC')
+    }
+  }
+
   const createChannel = async () => {
-    const name = channelName.trim().replace(/^#/, '').replace(/\s+/g, '_')
-    if (!name) {
-      toast.error('Укажите название канала')
+    const name = normalizedChannelName
+    if (channelNameError) {
+      setChannelNameTouched(true)
+      toast.error(channelNameError)
       return
     }
     setChannelCreating(true)
+    const toastId = toast.loading(`Создаём канал #${name}…`)
     try {
       const res = await fetch(`/api/workspace/${workspaceId}/space-settings/channels/create`, {
         method: 'POST',
@@ -221,14 +261,27 @@ export function SpaceSettingsTab({ workspaceId, workspaceUrl, channels, onChanne
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Ошибка создания')
-      toast.success(`Канал #${name} создан`)
-      setChannelName('')
-      setChannelTopic('')
-      setChannelDescription('')
-      onChannelsRefresh()
+      if (data.warning) {
+        toast.warning(data.warning, { duration: 12_000 })
+      }
+      toast.success(
+        data.partial
+          ? `Канал #${name} создан с замечаниями — см. предупреждение`
+          : `Канал #${name} создан`,
+        { id: toastId }
+      )
+      if (data.partial || data.warning) {
+        onChannelsRefresh()
+      } else {
+        setChannelName('')
+        setChannelTopic('')
+        setChannelDescription('')
+        setChannelNameTouched(false)
+        onChannelsRefresh()
+      }
       onSpaceSettingsAction?.()
-    } catch (err: any) {
-      toast.error(err.message || 'Ошибка создания канала')
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Не удалось создать канал. Повторите попытку.', { id: toastId })
     } finally {
       setChannelCreating(false)
     }
@@ -245,10 +298,84 @@ export function SpaceSettingsTab({ workspaceId, workspaceUrl, channels, onChanne
         toast.info(data.error || 'Канал не найден')
       }
       onChannelsRefresh()
-    } catch (err: any) {
-      toast.error(err.message || 'Ошибка проверки')
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Ошибка проверки')
     } finally {
       setChannelCheckLoading(null)
+    }
+  }
+
+  const getSettingsForChannel = (ch: ChannelInfo) => {
+    const norm = (ch.name || ch.displayName || '').toLowerCase().replace(/^#/, '').replace(/\s+/g, '_')
+    const formNorm = channelName.trim().toLowerCase().replace(/^#/, '').replace(/\s+/g, '_')
+    if (formNorm && formNorm === norm) {
+      return {
+        topic: channelTopic.trim(),
+        description: channelDescription.trim(),
+        hideSystemMessages: channelHideSystemMessages,
+        default: channelDefault,
+        readOnly: channelReadOnly,
+      }
+    }
+    const tmpl = CHANNEL_TEMPLATES.find((t) => t.name === norm)
+    if (tmpl) {
+      return {
+        topic: tmpl.topic,
+        description: tmpl.description,
+        hideSystemMessages: channelHideSystemMessages,
+        default: channelDefault,
+        readOnly: tmpl.readOnly ?? false,
+      }
+    }
+    return {
+      topic: channelTopic.trim(),
+      description: channelDescription.trim(),
+      hideSystemMessages: channelHideSystemMessages,
+      default: channelDefault,
+      readOnly: channelReadOnly,
+    }
+  }
+
+  const applyChannelSettings = async (ch: ChannelInfo) => {
+    const settings = getSettingsForChannel(ch)
+    setChannelApplySettingsLoading(ch.id)
+    const toastId = toast.loading(`Применяем настройки к #${ch.name || ch.displayName}…`)
+    try {
+      const res = await fetch(
+        `/api/workspace/${workspaceId}/space-settings/channels/apply-settings`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            roomId: ch.id,
+            isPrivate: ch.type === 'p',
+            topic: settings.topic || undefined,
+            description: settings.description || undefined,
+            hideSystemMessages: settings.hideSystemMessages,
+            default: settings.default,
+            readOnly: settings.readOnly,
+            fillMissingOnly: true,
+          }),
+        }
+      )
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Ошибка')
+      const applied = (data.applied as string[] | undefined)?.join(', ') || 'настройки'
+      const skipped = data.skipped as string[] | undefined
+      const detail = skipped?.length
+        ? `#${data.roomName || ch.name}: применено (${applied}); пропущено: ${skipped.join(', ')}`
+        : `#${data.roomName || ch.name}: настройки применены (${applied})`
+      if (data.partial || data.warning) {
+        toast.warning(data.warning ? `${detail}. ${data.warning}` : detail, { id: toastId, duration: 12_000 })
+      } else {
+        toast.success(detail, { id: toastId })
+      }
+      onChannelsRefresh()
+      onSpaceSettingsAction?.()
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Не удалось применить настройки', { id: toastId })
+    } finally {
+      setChannelApplySettingsLoading(null)
     }
   }
 
@@ -264,8 +391,8 @@ export function SpaceSettingsTab({ workspaceId, workspaceUrl, channels, onChanne
       if (!res.ok) throw new Error(data.error || 'Ошибка')
       toast.success(isDefault ? 'Канал установлен по умолчанию' : 'С канала снят статус по умолчанию')
       onChannelsRefresh()
-    } catch (err: any) {
-      toast.error(err.message || 'Не удалось')
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Не удалось изменить статус «по умолчанию»')
     } finally {
       setChannelSetDefaultLoading(null)
     }
@@ -273,6 +400,7 @@ export function SpaceSettingsTab({ workspaceId, workspaceUrl, channels, onChanne
 
   const applySetting = async (key: SettingKey) => {
     setSettingApplyLoading((p) => ({ ...p, [key]: true }))
+    const toastId = toast.loading('Применяем настройку в Rocket.Chat…')
     try {
       const res = await fetch(`/api/workspace/${workspaceId}/space-settings/apply`, {
         method: 'POST',
@@ -282,10 +410,10 @@ export function SpaceSettingsTab({ workspaceId, workspaceUrl, channels, onChanne
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Ошибка')
       setSettingStatus((p) => ({ ...p, [key]: 'applied' }))
-      toast.success('Настройка применена')
+      toast.success('Настройка применена', { id: toastId })
       onSpaceSettingsAction?.()
-    } catch (err: any) {
-      toast.error(err.message || 'Не удалось применить')
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Не удалось применить настройку. Проверьте права администратора RC.', { id: toastId })
     } finally {
       setSettingApplyLoading((p) => ({ ...p, [key]: false }))
     }
@@ -306,9 +434,9 @@ export function SpaceSettingsTab({ workspaceId, workspaceUrl, channels, onChanne
         setSettingStatus((p) => ({ ...p, [key]: 'idle' }))
         if (!silent) toast.warning(data.error || 'Настройка не применена')
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       setSettingStatus((p) => ({ ...p, [key]: 'idle' }))
-      if (!silent) toast.error(err.message || 'Ошибка проверки')
+      if (!silent) toast.error(err instanceof Error ? err.message : 'Ошибка проверки')
     } finally {
       if (!silent) setSettingCheckLoading((p) => ({ ...p, [key]: false }))
     }
@@ -342,24 +470,36 @@ export function SpaceSettingsTab({ workspaceId, workspaceUrl, channels, onChanne
     }
   }
 
-
-  const blockClass = 'rounded-xl border border-border/70 overflow-hidden shadow-sm'
-  const headerClass = 'px-3 py-2.5 border-b flex items-start gap-3'
-
   const appliedCount = Object.values(settingStatus).filter((s) => s === 'applied').length
   const totalSettings = 8
+
+  const confirmHideSystem = async () => {
+    if (pendingHideSystem === null) return
+    const hide = pendingHideSystem
+    setHideSystemSyncing(true)
+    setChannelHideSystemMessages(hide)
+    await syncHideSystemMessagesGlobal(hide)
+    setHideSystemSyncing(false)
+    setPendingHideSystem(null)
+  }
+
+  const confirmCh = applyConfirmChannel
+  const confirmSettings = confirmCh ? getSettingsForChannel(confirmCh) : null
+  const confirmNothingToFill = Boolean(
+    confirmCh && confirmSettings && !confirmSettings.topic && !confirmSettings.description && confirmSettings.default === confirmCh.default
+  )
+
+  const channelTypeBtn = 'flex-1 sm:flex-none'
 
   return (
     <div className="space-y-4">
       {/* Предупреждение: пространство 21-school.ru настраивать нельзя */}
       {isRestrictedWorkspace && (
-        <div className="rounded-2xl border border-amber-500/35 bg-amber-500/[0.06] p-4 flex items-start gap-3 shadow-sm ring-1 ring-amber-500/15">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-500/15 text-amber-600 dark:text-amber-400 ring-1 ring-amber-500/20">
-            <AlertTriangle className="h-5 w-5" />
-          </div>
-          <div>
-            <h3 className="font-semibold text-amber-800 dark:text-amber-200">Это пространство настраивать нельзя</h3>
-            <p className="text-sm text-amber-700 dark:text-amber-300 mt-0.5">
+        <div role="alert" className="flex items-start gap-3 rounded-lg border bg-card p-4">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden />
+          <div className="space-y-1">
+            <h3 className="text-sm font-semibold text-foreground">Это пространство настраивать нельзя</h3>
+            <p className="text-[13px] text-muted-foreground">
               {isStaffWorkspace ? (
                 <>
                   Пространство <span className="font-mono">{STAFF_WORKSPACE_HOST}</span>: массовые настройки и импорт здесь отключены. При необходимости введите одноразовый код 2FA при входе в Rocket.Chat (аутентификатор).
@@ -374,437 +514,289 @@ export function SpaceSettingsTab({ workspaceId, workspaceUrl, channels, onChanne
         </div>
       )}
 
-      {/* Статус по всем шагам */}
-      {!hideFullSpaceSettings && (
-        <div className="rounded-2xl border border-border/50 bg-card p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center gap-4 shadow-sm ring-1 ring-border/40">
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-primary/20">
-            <ListOrdered className="h-6 w-6" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <h3 className="font-semibold text-foreground tracking-tight">Прогресс настройки</h3>
-            <p className="text-sm text-muted-foreground mt-0.5">
-              Применено: <span className="font-semibold tabular-nums text-foreground">{appliedCount}</span> из {totalSettings} настроек
-            </p>
-          </div>
-          <div className="w-full sm:flex-1 sm:max-w-[220px]">
-            <div className="h-2 rounded-full bg-muted overflow-hidden ring-1 ring-border/30">
-              <div
-                className="h-full rounded-full bg-primary transition-all duration-300"
-                style={{ width: `${(appliedCount / totalSettings) * 100}%` }}
-              />
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Подвкладки: каналы / настройки / импорт / R2D2 */}
       {!hideFullSpaceSettings && (
       <>
       <Tabs defaultValue="channels" className="w-full space-y-4">
-        {/* ui/tabs задаёт TabsList height: 2.25rem — при padding и min-h триггеров ломается вертикаль; inline-style перебивает класс */}
-        <TabsList
-          style={{ height: 'auto', minHeight: '2.75rem' }}
-          className="grid w-full grid-cols-2 sm:grid-cols-4 gap-1 p-1 bg-muted/40 rounded-xl border border-border/50 items-stretch content-stretch ring-1 ring-border/30"
-        >
-          <TabsTrigger
-            value="channels"
-            className="rounded-lg text-xs sm:text-sm min-h-10 h-full! box-border px-2.5 py-2 flex items-center justify-center text-center shadow-none data-[state=active]:shadow-sm data-[state=active]:bg-background data-[state=active]:ring-1 data-[state=active]:ring-border/50"
-          >
-            Каналы
-          </TabsTrigger>
-          <TabsTrigger
-            value="settings"
-            className="rounded-lg text-xs sm:text-sm min-h-10 h-full! box-border px-2.5 py-2 flex items-center justify-center text-center shadow-none data-[state=active]:shadow-sm data-[state=active]:bg-background data-[state=active]:ring-1 data-[state=active]:ring-border/50"
-          >
+        <TabsList className="grid w-full grid-cols-2 sm:inline-flex sm:w-fit">
+          <TabsTrigger value="channels">Каналы</TabsTrigger>
+          <TabsTrigger value="settings">
             Настройки RC
+            <span className="ml-1 text-xs tabular-nums text-muted-foreground">{appliedCount}/{totalSettings}</span>
           </TabsTrigger>
-          <TabsTrigger
-            value="import"
-            className="rounded-lg text-xs sm:text-sm min-h-10 h-full! box-border px-2.5 py-2 flex items-center justify-center text-center shadow-none data-[state=active]:shadow-sm data-[state=active]:bg-background data-[state=active]:ring-1 data-[state=active]:ring-border/50"
-          >
-            Импорт
-          </TabsTrigger>
-          <TabsTrigger
-            value="r2d2"
-            className="rounded-lg text-xs sm:text-sm min-h-10 h-full! box-border px-2.5 py-2 flex items-center justify-center gap-1.5 text-center shadow-none data-[state=active]:shadow-sm data-[state=active]:bg-background data-[state=active]:ring-1 data-[state=active]:ring-border/50"
-          >
-            <span className="inline-flex items-center gap-1.5 leading-none">
-              <span>R2D2</span>
-              <Badge
-                variant="secondary"
-                className="text-[10px] font-medium leading-none px-1.5 py-0.5 h-5 shrink-0 inline-flex items-center justify-center bg-cyan-500/20 text-cyan-800 dark:text-cyan-200 border-0"
-              >
-                new
-              </Badge>
-            </span>
+          <TabsTrigger value="import">Импорт</TabsTrigger>
+          <TabsTrigger value="r2d2">
+            R2D2
+            <Badge variant="info" className="px-1 py-0 text-[10px]">new</Badge>
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="channels" className="mt-0 space-y-4 focus-visible:outline-none">
-      <Card className={cn(blockClass, 'border-l-2 border-l-blue-400/50 bg-card')}>
-        <div className={cn(headerClass, 'bg-muted/20 border-border/60')}>
-          <div className="flex items-center gap-2 shrink-0">
-            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-blue-500/25 text-blue-700 dark:text-blue-300 font-bold text-xs">
-              1
-            </span>
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-500/15 text-blue-600 dark:text-blue-400">
-              <Hash className="h-5 w-5" />
-            </div>
-          </div>
-          <div>
-            <h3 className="text-base font-semibold text-foreground tracking-tight">
-              Создание каналов
-            </h3>
-            <p className="text-sm text-muted-foreground mt-0.5">
-              Создайте каналы в Rocket.Chat с темой и описанием. Открытый/закрытый и readonly задаются при создании. «По умолчанию» — новые пользователи автоматически присоединятся при авторизации.
-            </p>
-          </div>
-        </div>
-        <CardContent className="p-3 space-y-4">
-          <div className="space-y-2">
-            <Label>Шаблон канала</Label>
-            <Select onValueChange={(v) => {
-              const t = CHANNEL_TEMPLATES.find((x) => x.name === v)
-              if (t) applyTemplate(t)
-            }}>
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="Выберите шаблон или введите вручную" />
-              </SelectTrigger>
-              <SelectContent>
-                {CHANNEL_TEMPLATES.map((t) => (
-                  <SelectItem key={t.name} value={t.name}>
-                    #{t.name} {t.isPrivate ? '(закрытый)' : ''} {t.readOnly ? '(readonly)' : ''}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+        <TabsContent value="channels" className="mt-0 space-y-6 focus-visible:outline-none">
+          <Section
+            title="Создание канала"
+            description="Канал создаётся в Rocket.Chat с темой и описанием. Тип и readonly задаются только при создании."
+          >
+            <div className="space-y-4">
+              <Field label="Шаблон" htmlFor="channel-template" hint="Подставит название, тему, описание и тип — их можно изменить ниже.">
+                <Select onValueChange={(v) => {
+                  const t = CHANNEL_TEMPLATES.find((x) => x.name === v)
+                  if (t) {
+                    applyTemplate(t)
+                    setChannelNameTouched(false)
+                  }
+                }}>
+                  <SelectTrigger id="channel-template" className="w-full">
+                    <SelectValue placeholder="Выберите шаблон или заполните вручную" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {CHANNEL_TEMPLATES.map((t) => (
+                      <SelectItem key={t.name} value={t.name}>
+                        #{t.name}{t.isPrivate ? ' · закрытый' : ''}{t.readOnly ? ' · readonly' : ''}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
 
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor="channel-name">Название канала</Label>
-              <Input
-                id="channel-name"
-                placeholder="general"
-                value={channelName}
-                onChange={(e) => setChannelName(e.target.value)}
-                disabled={channelCreating}
-                className="font-mono"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>Тип</Label>
-              <div className="flex items-center gap-4 pt-2">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <Checkbox
-                    checked={!channelIsPrivate}
-                    onCheckedChange={(v) => setChannelIsPrivate(!v)}
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field
+                  label="Название канала"
+                  htmlFor="channel-name"
+                  required
+                  error={channelNameTouched ? channelNameError : undefined}
+                  hint={normalizedChannelName && !channelNameError ? `Будет создан как #${normalizedChannelName}` : 'Например: general'}
+                >
+                  <Input
+                    id="channel-name"
+                    placeholder="general"
+                    value={channelName}
+                    onChange={(e) => setChannelName(e.target.value)}
+                    onBlur={() => setChannelNameTouched(true)}
+                    aria-invalid={channelNameTouched && !!channelNameError}
                     disabled={channelCreating}
+                    className="font-mono"
                   />
-                  <span className="text-sm">Открытый</span>
-                </label>
-                <label className="flex items-center gap-2 cursor-pointer">
+                </Field>
+                <Field label="Тип канала">
+                  <div className="flex gap-1.5" role="group" aria-label="Тип канала">
+                    <Button
+                      type="button"
+                      size="sm"
+                      className={channelTypeBtn}
+                      variant={!channelIsPrivate ? 'default' : 'outline'}
+                      aria-pressed={!channelIsPrivate}
+                      disabled={channelCreating}
+                      onClick={() => setChannelIsPrivate(false)}
+                    >
+                      Открытый
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      className={channelTypeBtn}
+                      variant={channelIsPrivate ? 'default' : 'outline'}
+                      aria-pressed={channelIsPrivate}
+                      disabled={channelCreating}
+                      onClick={() => setChannelIsPrivate(true)}
+                    >
+                      Закрытый
+                    </Button>
+                  </div>
+                </Field>
+              </div>
+
+              <Field label="Тема" htmlFor="channel-topic">
+                <Input
+                  id="channel-topic"
+                  placeholder="Тема канала"
+                  value={channelTopic}
+                  onChange={(e) => setChannelTopic(e.target.value)}
+                  disabled={channelCreating}
+                />
+              </Field>
+
+              <Field label="Описание" htmlFor="channel-desc">
+                <Textarea
+                  id="channel-desc"
+                  placeholder="Описание канала"
+                  value={channelDescription}
+                  onChange={(e) => setChannelDescription(e.target.value)}
+                  disabled={channelCreating}
+                  rows={3}
+                  className="resize-none"
+                />
+              </Field>
+
+              <div className="space-y-3 border-t pt-4">
+                <label className="flex cursor-pointer items-start gap-2.5">
                   <Checkbox
-                    checked={channelIsPrivate}
-                    onCheckedChange={(v) => setChannelIsPrivate(!!v)}
-                    disabled={channelCreating}
-                  />
-                  <span className="text-sm">Закрытый</span>
-                </label>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <Checkbox
+                    className="mt-0.5"
                     checked={channelReadOnly}
                     onCheckedChange={(v) => setChannelReadOnly(!!v)}
                     disabled={channelCreating}
                   />
-                  <span className="text-sm">Readonly</span>
+                  <span className="space-y-0.5">
+                    <span className="block text-sm">Readonly</span>
+                    <span className="block text-xs text-muted-foreground">Писать в канал смогут только модераторы и владельцы.</span>
+                  </span>
+                </label>
+                <label className="flex cursor-pointer items-start gap-2.5">
+                  <Checkbox
+                    className="mt-0.5"
+                    checked={channelDefault}
+                    onCheckedChange={(v) => setChannelDefaultCheckbox(!!v)}
+                    disabled={channelCreating}
+                  />
+                  <span className="space-y-0.5">
+                    <span className="block text-sm">Канал по умолчанию</span>
+                    <span className="block text-xs text-muted-foreground">Новые пользователи автоматически присоединятся к нему при авторизации.</span>
+                  </span>
+                </label>
+                <label className="flex cursor-pointer items-start gap-2.5">
+                  <Checkbox
+                    className="mt-0.5"
+                    checked={channelHideSystemMessages}
+                    onCheckedChange={(v) => setPendingHideSystem(!!v)}
+                    disabled={channelCreating || hideSystemSyncing}
+                  />
+                  <span className="space-y-0.5">
+                    <span className="block text-sm">Скрыть системные сообщения во всём пространстве</span>
+                    <span className="block text-xs text-muted-foreground">
+                      Меняет настройку Rocket.Chat сразу, не дожидаясь создания канала: Настройки → Сообщение → «Select messages to hide». При выключении сбрасываются и переключатель, и все пункты списка; для уже созданных каналов — «Применить настройки».
+                    </span>
+                  </span>
                 </label>
               </div>
+
+              <div className="flex justify-end border-t pt-4">
+                <Button onClick={createChannel} disabled={channelCreating || (channelNameTouched && !!channelNameError)}>
+                  {channelCreating ? <Spinner /> : <Plus />}
+                  {channelCreating ? 'Создаём…' : 'Создать канал'}
+                </Button>
+              </div>
             </div>
-          </div>
+          </Section>
 
-          <div className="space-y-2">
-            <Label htmlFor="channel-topic">Тема</Label>
-            <Input
-              id="channel-topic"
-              placeholder="Тема канала"
-              value={channelTopic}
-              onChange={(e) => setChannelTopic(e.target.value)}
-              disabled={channelCreating}
-            />
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="channel-desc">Описание</Label>
-            <Textarea
-              id="channel-desc"
-              placeholder="Описание канала"
-              value={channelDescription}
-              onChange={(e) => setChannelDescription(e.target.value)}
-              disabled={channelCreating}
-              rows={3}
-              className="resize-none"
-            />
-          </div>
-
-          <label className="flex items-center gap-2 cursor-pointer">
-            <Checkbox
-              checked={channelHideSystemMessages}
-              onCheckedChange={(v) => setChannelHideSystemMessages(!!v)}
-              disabled={channelCreating}
-            />
-            <span className="text-sm">Скрыть системные сообщения в пространстве</span>
-          </label>
-
-          <label className="flex items-center gap-2 cursor-pointer">
-            <Checkbox
-              checked={channelDefault}
-              onCheckedChange={(v) => setChannelDefaultCheckbox(!!v)}
-              disabled={channelCreating}
-            />
-            <span className="text-sm">По умолчанию — новые пользователи автоматически присоединятся при авторизации</span>
-          </label>
-
-          <Button onClick={createChannel} disabled={channelCreating} className="gap-2">
-            {channelCreating ? <Spinner className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
-            Создать канал
-          </Button>
-
-          {/* Список каналов */}
-          <div className="space-y-3 pt-4 border-t border-border/60">
-            <div className="flex items-center justify-between">
-              <Label>Каналы в Rocket.Chat</Label>
-              <Button variant="outline" size="sm" onClick={onChannelsRefresh} className="gap-1">
-                <RefreshCw className="w-3.5 h-3.5" />
+          <Section
+            title="Каналы в Rocket.Chat"
+            description="«Применить настройки» заполнит тему и описание из формы выше (или из шаблона с тем же именем), только если в Rocket.Chat их ещё нет; также применит скрытие системных сообщений и «по умолчанию»."
+            actions={
+              <Button variant="outline" size="sm" onClick={onChannelsRefresh}>
+                <RefreshCw />
                 Обновить
               </Button>
-            </div>
-            <div className="rounded-xl border border-border/70 divide-y divide-border/50 max-h-64 overflow-y-auto">
-              {channels.length === 0 ? (
-                <div className="p-4 text-sm text-muted-foreground text-center">Нет каналов или загрузите список</div>
-              ) : (
-                channels.map((ch) => (
-                  <div key={ch.id} className="p-4 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-medium">#{ch.name || ch.displayName}</span>
-                        <span className="text-xs text-muted-foreground">{formatTs(ch.ts)}</span>
-                        {(() => {
-                          const creator = channelCreators[ch.id] || channelCreators[(ch.name || ch.displayName || '').toLowerCase()];
-                          const rcCreator = ch.createdByRcUsername;
-                          if (creator) {
-                            return (
-                              <span
-                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 text-xs font-medium border border-emerald-400/30"
-                                title={formatCreatorApplier(creator)}
-                              >
-                                создал: {creator.rcUsername ? `@${creator.rcUsername}` : (creator.userName || creator.userEmail)} ({formatCreatorApplierDate(creator.at)})
-                              </span>
-                            );
-                          }
-                          if (rcCreator) {
-                            return (
-                              <span
-                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-muted/50 text-muted-foreground text-xs font-medium border border-border/50"
-                                title="Создатель из Rocket.Chat (до внедрения учёта в приложении)"
-                              >
-                                создал: @{rcCreator}
-                              </span>
-                            );
-                          }
-                          return null;
-                        })()}
+            }
+            bare
+          >
+            {channels.length === 0 ? (
+              <EmptyState
+                icon={<Hash />}
+                title="Каналов пока нет"
+                description="Создайте первый канал выше или обновите список, если он должен быть."
+                action={{ label: 'Обновить список', onClick: onChannelsRefresh }}
+              />
+            ) : (
+              <div className="max-h-[28rem] divide-y overflow-y-auto rounded-lg border bg-card">
+                {channels.map((ch) => {
+                  const creator = channelCreators[ch.id] || channelCreators[(ch.name || ch.displayName || '').toLowerCase()]
+                  const rcCreator = ch.createdByRcUsername
+                  return (
+                    <div key={ch.id} className="flex flex-col gap-2 p-3 hover:bg-muted/40 sm:flex-row sm:items-center sm:gap-4">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                          <span className="font-mono text-sm font-medium">#{ch.name || ch.displayName}</span>
+                          {ch.type === 'p' ? <Badge variant="muted">Закрытый</Badge> : <Badge variant="muted">Открытый</Badge>}
+                          {ch.default && <Badge variant="info">По умолчанию</Badge>}
+                          {ch.readOnly && <Badge variant="muted">Readonly</Badge>}
+                          <span className="text-xs text-muted-foreground">{formatTs(ch.ts)}</span>
+                        </div>
+                        {ch.topic && <p className="mt-0.5 truncate text-xs text-muted-foreground" title={ch.topic}>Тема: {ch.topic}</p>}
+                        {ch.description && <p className="truncate text-xs text-muted-foreground" title={ch.description}>Описание: {ch.description}</p>}
+                        {creator ? (
+                          <p className="mt-0.5 text-xs text-muted-foreground" title={formatCreatorApplier(creator)}>
+                            Создал: {creator.rcUsername ? `@${creator.rcUsername}` : (creator.userName || creator.userEmail)} · {formatCreatorApplierDate(creator.at)}
+                          </p>
+                        ) : rcCreator ? (
+                          <p className="mt-0.5 text-xs text-muted-foreground" title="Создатель из Rocket.Chat (до внедрения учёта в приложении)">
+                            Создал: @{rcCreator}
+                          </p>
+                        ) : null}
                       </div>
-                      {ch.topic && <p className="text-xs text-muted-foreground mt-0.5 truncate" title={ch.topic}>Тема: {ch.topic}</p>}
-                      {ch.description && <p className="text-xs text-muted-foreground truncate" title={ch.description}>Описание: {ch.description}</p>}
-                      <div className="flex flex-wrap gap-1 mt-1">
-                        <BadgePill active={ch.type === 'c'}>Открытый</BadgePill>
-                        <BadgePill active={ch.type === 'p'}>Закрытый</BadgePill>
-                        <BadgePill active={ch.default}>По умолчанию</BadgePill>
-                        <BadgePill active={ch.readOnly}>Readonly</BadgePill>
+                      <div className="flex shrink-0 flex-wrap items-center gap-1 sm:justify-end">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setApplyConfirmChannel(ch)}
+                          disabled={channelApplySettingsLoading === ch.id}
+                          title="Тема, описание, скрытие системных сообщений и «по умолчанию» из формы или шаблона"
+                        >
+                          {channelApplySettingsLoading === ch.id ? <Spinner /> : <Settings2 />}
+                          Применить настройки
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setExistingChannelDefault(ch, !ch.default)}
+                          disabled={channelSetDefaultLoading === ch.id || ch.type === 'p'}
+                          title={
+                            ch.type === 'p'
+                              ? 'Закрытые каналы не поддерживают статус «по умолчанию» в Rocket.Chat'
+                              : ch.default
+                                ? 'Снять статус «по умолчанию»'
+                                : 'Сделать каналом по умолчанию'
+                          }
+                        >
+                          {channelSetDefaultLoading === ch.id ? <Spinner /> : null}
+                          {ch.default ? 'Снять «по умолчанию»' : 'По умолчанию'}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => checkChannel(ch.id)}
+                          disabled={channelCheckLoading === ch.id}
+                          title="Проверить, что канал существует в Rocket.Chat"
+                        >
+                          {channelCheckLoading === ch.id ? <Spinner /> : <Check />}
+                          Проверить
+                        </Button>
                       </div>
                     </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setExistingChannelDefault(ch, !ch.default)}
-                        disabled={channelSetDefaultLoading === ch.id || ch.type === 'p'}
-                        className="gap-1"
-                        title={
-                          ch.type === 'p'
-                            ? 'Закрытые каналы не поддерживают статус «по умолчанию» в Rocket.Chat'
-                            : ch.default
-                              ? 'Снять статус «по умолчанию»'
-                              : 'Сделать каналом по умолчанию'
-                        }
-                      >
-                        {channelSetDefaultLoading === ch.id ? <Spinner className="w-4 h-4" /> : null}
-                        {ch.default ? 'Снять' : 'По умолчанию'}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => checkChannel(ch.id)}
-                        disabled={channelCheckLoading === ch.id}
-                      >
-                        {channelCheckLoading === ch.id ? <Spinner className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
-                        Проверить
-                      </Button>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+                  )
+                })}
+              </div>
+            )}
+          </Section>
         </TabsContent>
 
         <TabsContent value="settings" className="mt-0 space-y-4 focus-visible:outline-none">
-      {/* Шаг 2: Скрыть системные сообщения кроме «Пользователь заглушен/не заглушен» */}
-      <SettingBlock
-        keyId="hideSystemMessages"
-        stepNumber={2}
-        workspaceId={workspaceId}
-        icon={<MessageSquareOff className="h-5 w-5" />}
-        title="Скрыть системные сообщения (кроме «Пользователь заглушен/не заглушен»)"
-        description="Настройки рабочего пространства → Сообщение → Скрыть Системные Сообщения. Все галочки кроме «Пользователь заглушен/не заглушен»."
-        borderColor="border-l-amber-500/60"
-        iconBg="bg-amber-500/15 text-amber-600 dark:text-amber-400"
-        status={settingStatus.hideSystemMessages}
-        applyLoading={settingApplyLoading.hideSystemMessages}
-        checkLoading={settingCheckLoading.hideSystemMessages}
-        applier={settingAppliers.hideSystemMessages}
-        onApply={() => applySetting('hideSystemMessages')}
-        onCheck={() => checkSetting('hideSystemMessages')}
-      />
-
-      {/* Шаг 3: Отключить отправку первого сообщения с треда в канал */}
-      <SettingBlock
-        keyId="threadDefault"
-        stepNumber={3}
-        workspaceId={workspaceId}
-        icon={<MessageSquareOff className="h-5 w-5" />}
-        title="Убрать галочку «Также отправить сообщение треда в чат»"
-        description="Настройки → Учётные записи → Поведение → «Выбрано не по умолчанию». Требуются права администратора RC."
-        borderColor="border-l-emerald-500/60"
-        iconBg="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
-        status={settingStatus.threadDefault}
-        applyLoading={settingApplyLoading.threadDefault}
-        checkLoading={settingCheckLoading.threadDefault}
-        applier={settingAppliers.threadDefault}
-        onApply={() => applySetting('threadDefault')}
-        onCheck={() => checkSetting('threadDefault')}
-      />
-
-      {/* Шаг 4: Отключить офлайн уведомления по Email */}
-      <SettingBlock
-        keyId="offlineEmail"
-        stepNumber={4}
-        workspaceId={workspaceId}
-        icon={<Mail className="h-5 w-5" />}
-        title="Отключить офлайн уведомления по Email"
-        description="Настройки пространства → Учётные записи → Настройки пользователя по умолчанию."
-        borderColor="border-l-violet-500/60"
-        iconBg="bg-violet-500/15 text-violet-600 dark:text-violet-400"
-        status={settingStatus.offlineEmail}
-        applyLoading={settingApplyLoading.offlineEmail}
-        checkLoading={settingCheckLoading.offlineEmail}
-        applier={settingAppliers.offlineEmail}
-        onApply={() => applySetting('offlineEmail')}
-        onCheck={() => checkSetting('offlineEmail')}
-      />
-
-      {/* Шаг 5: Запретить удаление и редактирование сообщений */}
-      <SettingBlock
-        keyId="messageEditDelete"
-        stepNumber={5}
-        workspaceId={workspaceId}
-        icon={<ShieldOff className="h-5 w-5" />}
-        title="Запретить удаление и редактирование сообщений"
-        description="Настройки рабочего пространства → Сообщение → Разрешить редактирование/удаление — выключить."
-        borderColor="border-l-rose-500/60"
-        iconBg="bg-rose-500/15 text-rose-600 dark:text-rose-400"
-        status={settingStatus.messageEditDelete}
-        applyLoading={settingApplyLoading.messageEditDelete}
-        checkLoading={settingCheckLoading.messageEditDelete}
-        applier={settingAppliers.messageEditDelete}
-        onApply={() => applySetting('messageEditDelete')}
-        onCheck={() => checkSetting('messageEditDelete')}
-      />
-
-      {/* Шаг 6: Размер аватарок до 200 МБ */}
-      <SettingBlock
-        keyId="avatarSize"
-        stepNumber={6}
-        workspaceId={workspaceId}
-        icon={<Image className="h-5 w-5" />}
-        title="Размер аватарок до 200 МБ"
-        description="Настройки → Аватар — до 200 МБ."
-        borderColor="border-l-cyan-500/60"
-        iconBg="bg-cyan-500/15 text-cyan-600 dark:text-cyan-400"
-        status={settingStatus.avatarSize}
-        applyLoading={settingApplyLoading.avatarSize}
-        checkLoading={settingCheckLoading.avatarSize}
-        applier={settingAppliers.avatarSize}
-        onApply={() => applySetting('avatarSize')}
-        onCheck={() => checkSetting('avatarSize')}
-      />
-
-      {/* Шаг 7: Размер загрузки файлов 25000000 */}
-      <SettingBlock
-        keyId="fileUploadSize"
-        stepNumber={7}
-        workspaceId={workspaceId}
-        icon={<FileUp className="h-5 w-5" />}
-        title="Размер загрузки файлов — 25000000 байт"
-        description="Настройки → Загрузка файлов — 25000000."
-        borderColor="border-l-teal-500/60"
-        iconBg="bg-teal-500/15 text-teal-600 dark:text-teal-400"
-        status={settingStatus.fileUploadSize}
-        applyLoading={settingApplyLoading.fileUploadSize}
-        checkLoading={settingCheckLoading.fileUploadSize}
-        applier={settingAppliers.fileUploadSize}
-        onApply={() => applySetting('fileUploadSize')}
-        onCheck={() => checkSetting('fileUploadSize')}
-      />
-
-      {/* Шаг 8: Права — create-c (убрать user, добавить moderator) */}
-      <SettingBlock
-        keyId="permissionCreateC"
-        stepNumber={8}
-        workspaceId={workspaceId}
-        icon={<ShieldOff className="h-5 w-5" />}
-        title="Создание публичных каналов: убрать у user, добавить moderator"
-        description="Права доступа → Создать публичные каналы. User — выключить, Moderator — включить."
-        borderColor="border-l-orange-500/60"
-        iconBg="bg-orange-500/15 text-orange-600 dark:text-orange-400"
-        status={settingStatus.permissionCreateC}
-        applyLoading={settingApplyLoading.permissionCreateC}
-        checkLoading={settingCheckLoading.permissionCreateC}
-        applier={settingAppliers.permissionCreateC}
-        onApply={() => applySetting('permissionCreateC')}
-        onCheck={() => checkSetting('permissionCreateC')}
-      />
-
-      {/* Шаг 9: Права — delete-d (добавить moderator) */}
-      <SettingBlock
-        keyId="permissionDeleteD"
-        stepNumber={9}
-        workspaceId={workspaceId}
-        icon={<ShieldOff className="h-5 w-5" />}
-        title="Удалять личные сообщения: добавить moderator"
-        description="Права доступа → Удалять личные сообщения. Moderator — включить."
-        borderColor="border-l-orange-500/60"
-        iconBg="bg-orange-500/15 text-orange-600 dark:text-orange-400"
-        status={settingStatus.permissionDeleteD}
-        applyLoading={settingApplyLoading.permissionDeleteD}
-        checkLoading={settingCheckLoading.permissionDeleteD}
-        applier={settingAppliers.permissionDeleteD}
-        onApply={() => applySetting('permissionDeleteD')}
-        onCheck={() => checkSetting('permissionDeleteD')}
-      />
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
+            <p className="text-sm text-muted-foreground sm:flex-1">
+              Применено <span className="font-medium tabular-nums text-foreground">{appliedCount}</span> из {totalSettings} настроек. Изменения вносятся в Rocket.Chat сразу и действуют на всё пространство; для них нужны права администратора RC.
+            </p>
+            <Progress
+              value={(appliedCount / totalSettings) * 100}
+              aria-label="Прогресс настройки пространства"
+              className="h-1.5 sm:w-48"
+            />
+          </div>
+          <div className="divide-y overflow-hidden rounded-lg border bg-card">
+            {settingBlocks.map((b, i) => (
+              <SettingBlock
+                key={b.keyId}
+                keyId={b.keyId}
+                stepNumber={i + 1}
+                workspaceId={workspaceId}
+                title={b.title}
+                description={b.description}
+                status={settingStatus[b.keyId]}
+                applyLoading={settingApplyLoading[b.keyId]}
+                checkLoading={settingCheckLoading[b.keyId]}
+                applier={settingAppliers[b.keyId]}
+                onApply={() => applySetting(b.keyId)}
+                onCheck={() => checkSetting(b.keyId)}
+              />
+            ))}
+          </div>
         </TabsContent>
 
         <TabsContent value="import" className="mt-0 space-y-4 focus-visible:outline-none">
@@ -819,21 +811,104 @@ export function SpaceSettingsTab({ workspaceId, workspaceUrl, channels, onChanne
       )}
 
       {isStaffWorkspace && (
-        <div className="rounded-2xl border border-cyan-500/25 bg-gradient-to-br from-cyan-500/6 to-background p-3 sm:p-4 shadow-sm">
+        <div className="rounded-lg border bg-card p-3 sm:p-4">
           <R2D2TabPanel workspaceId={workspaceId} variant="embedded" />
         </div>
       )}
+
+      <ConfirmDialog
+        open={pendingHideSystem !== null}
+        onOpenChange={(o) => { if (!o) setPendingHideSystem(null) }}
+        title={pendingHideSystem ? 'Скрыть системные сообщения?' : 'Вернуть системные сообщения?'}
+        confirmLabel={pendingHideSystem ? 'Скрыть' : 'Вернуть'}
+        loading={hideSystemSyncing}
+        onConfirm={confirmHideSystem}
+        description={
+          pendingHideSystem
+            ? 'В настройках Rocket.Chat будут отмечены типы системных сообщений в списке «Select messages to hide». Это применяется сразу ко всему пространству, а не только к новому каналу.'
+            : 'В Rocket.Chat будет сброшен переключатель и все пункты списка «Select messages to hide». Это применяется сразу ко всему пространству. Для уже созданных каналов используйте «Применить настройки».'
+        }
+      />
+
+      <ConfirmDialog
+        open={!!confirmCh}
+        onOpenChange={(o) => { if (!o) setApplyConfirmChannel(null) }}
+        title={confirmCh ? `Применить настройки к #${confirmCh.name || confirmCh.displayName}?` : 'Применить настройки?'}
+        confirmLabel="Применить"
+        loading={!!confirmCh && channelApplySettingsLoading === confirmCh.id}
+        onConfirm={async () => {
+          if (!confirmCh) return
+          await applyChannelSettings(confirmCh)
+          setApplyConfirmChannel(null)
+        }}
+        description="В Rocket.Chat будут записаны значения ниже. Тема и описание заполняются только если у канала они ещё пусты."
+      >
+        {confirmCh && confirmSettings && (
+          <dl className="space-y-1.5 rounded-md border bg-muted/40 p-3 text-sm">
+            <div className="flex gap-2"><dt className="w-28 shrink-0 text-muted-foreground">Тема</dt><dd className="min-w-0 break-words">{confirmSettings.topic || '— не задана'}</dd></div>
+            <div className="flex gap-2"><dt className="w-28 shrink-0 text-muted-foreground">Описание</dt><dd className="min-w-0 break-words">{confirmSettings.description || '— не задано'}</dd></div>
+            <div className="flex gap-2"><dt className="w-28 shrink-0 text-muted-foreground">По умолчанию</dt><dd>{confirmSettings.default ? 'да' : 'нет'}</dd></div>
+            <div className="flex gap-2"><dt className="w-28 shrink-0 text-muted-foreground">Readonly</dt><dd>{confirmSettings.readOnly ? 'да' : 'нет'}</dd></div>
+            <div className="flex gap-2"><dt className="w-28 shrink-0 text-muted-foreground">Скрыть сист.</dt><dd>{confirmSettings.hideSystemMessages ? 'да' : 'нет'}</dd></div>
+            {confirmNothingToFill && (
+              <p className="pt-1 text-xs text-amber-700 dark:text-amber-300">
+                Тема и описание пустые — заполните их в форме или выберите шаблон с тем же именем, что у канала.
+              </p>
+            )}
+          </dl>
+        )}
+      </ConfirmDialog>
     </div>
   )
 }
 
+const settingBlocks: { keyId: SettingKey; title: string; description: string }[] = [
+  {
+    keyId: 'hideSystemMessages',
+    title: 'Скрыть системные сообщения (кроме «Пользователь заглушен/не заглушен»)',
+    description: 'Настройки рабочего пространства → Сообщение → Скрыть Системные Сообщения. Все галочки кроме «Пользователь заглушен/не заглушен».',
+  },
+  {
+    keyId: 'threadDefault',
+    title: 'Убрать галочку «Также отправить сообщение треда в чат»',
+    description: 'Настройки → Учётные записи → Поведение → «Выбрано не по умолчанию». Требуются права администратора RC.',
+  },
+  {
+    keyId: 'offlineEmail',
+    title: 'Отключить офлайн уведомления по Email',
+    description: 'Настройки пространства → Учётные записи → Настройки пользователя по умолчанию.',
+  },
+  {
+    keyId: 'messageEditDelete',
+    title: 'Запретить удаление и редактирование сообщений',
+    description: 'Настройки рабочего пространства → Сообщение → Разрешить редактирование/удаление — выключить.',
+  },
+  {
+    keyId: 'avatarSize',
+    title: 'Размер аватарок до 200 МБ',
+    description: 'Настройки → Аватар — до 200 МБ.',
+  },
+  {
+    keyId: 'fileUploadSize',
+    title: 'Размер загрузки файлов — 25000000 байт',
+    description: 'Настройки → Загрузка файлов — 25000000.',
+  },
+  {
+    keyId: 'permissionCreateC',
+    title: 'Создание публичных каналов: убрать у user, добавить moderator',
+    description: 'Права доступа → Создать публичные каналы. User — выключить, Moderator — включить.',
+  },
+  {
+    keyId: 'permissionDeleteD',
+    title: 'Удалять личные сообщения: добавить moderator',
+    description: 'Права доступа → Удалять личные сообщения. Moderator — включить.',
+  },
+]
+
 function SettingBlock({
   stepNumber,
-  icon,
   title,
   description,
-  borderColor = 'border-l-muted',
-  iconBg = 'bg-muted/30 text-muted-foreground',
   status,
   applyLoading,
   checkLoading,
@@ -841,54 +916,39 @@ function SettingBlock({
   onApply,
   onCheck,
 }: SettingBlockProps) {
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const checking = status === 'checking' || (checkLoading && status !== 'applied')
   return (
-    <Card className={cn('rounded-xl border border-border/70 overflow-hidden shadow-sm border-l-2 bg-card', borderColor)}>
-      <div className={cn('px-3 py-2.5 border-b border-border/60 flex items-start gap-3')}>
-        <div className="flex items-center gap-2 shrink-0">
-          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-muted font-bold text-xs text-muted-foreground">
-            {stepNumber}
-          </span>
-          <div className={cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-xl', iconBg)}>
-            {icon}
-          </div>
+    <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:gap-4">
+      <span className="hidden w-5 shrink-0 pt-0.5 text-xs tabular-nums text-muted-foreground sm:block" aria-hidden>
+        {stepNumber}
+      </span>
+      <div className="min-w-0 flex-1 space-y-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 className="text-sm font-medium text-foreground">{title}</h3>
+          {status === 'applied' ? (
+            <Badge variant="success">Применено</Badge>
+          ) : checking ? (
+            <Badge variant="warning">Проверяем…</Badge>
+          ) : (
+            <Badge variant="muted">Не применено</Badge>
+          )}
         </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className={cn(
-              'text-xs font-medium px-2 py-0.5 rounded-full',
-              status === 'applied' && 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
-              status === 'checking' && 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
-              status === 'idle' && 'bg-muted text-muted-foreground'
-            )}>
-              {status === 'applied' && 'Применено'}
-              {status === 'checking' && 'Проверка...'}
-              {status === 'idle' && 'Не применено'}
-            </span>
-            {applier && (
-              <span
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 text-xs font-medium border border-emerald-400/30"
-                title={formatCreatorApplier(applier)}
-              >
-                применил: {applier.rcUsername ? `@${applier.rcUsername}` : (applier.userName || applier.userEmail)} ({formatCreatorApplierDate(applier.at)})
-              </span>
-            )}
-          </div>
-          <h3 className="text-base font-semibold text-foreground tracking-tight mt-1">
-            {title}
-          </h3>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            {description}
+        <p className="text-[13px] text-muted-foreground">{description}</p>
+        {applier && (
+          <p className="text-xs text-muted-foreground" title={formatCreatorApplier(applier)}>
+            Применил: {applier.rcUsername ? `@${applier.rcUsername}` : (applier.userName || applier.userEmail)} · {formatCreatorApplierDate(applier.at)}
           </p>
-        </div>
+        )}
       </div>
-      <CardContent className="p-3 flex flex-wrap items-center gap-2">
+      <div className="flex shrink-0 items-center gap-1.5">
         <Button
-          variant="outline"
-          onClick={onApply}
+          size="sm"
+          variant={status === 'applied' ? 'outline' : 'default'}
+          onClick={() => setConfirmOpen(true)}
           disabled={applyLoading || status === 'applied'}
-          className="gap-2"
         >
-          {applyLoading ? <Spinner className="w-4 h-4" /> : null}
+          {applyLoading ? <Spinner /> : null}
           Применить
         </Button>
         <Button
@@ -896,25 +956,29 @@ function SettingBlock({
           size="sm"
           onClick={onCheck}
           disabled={checkLoading}
-          className="gap-1.5"
           title="Проверить, что настройка активна"
         >
-          {checkLoading ? <Spinner className="w-4 h-4" /> : <Check className="w-4 h-4" />}
+          {checkLoading ? <Spinner /> : <Check />}
           Проверить
         </Button>
-      </CardContent>
-    </Card>
-  )
-}
-
-function BadgePill({ active, children }: { active?: boolean; children: React.ReactNode }) {
-  if (!active) return null
-  return (
-    <span className={cn(
-      'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium',
-      'bg-muted text-muted-foreground'
-    )}>
-      {children}
-    </span>
+      </div>
+      <ConfirmDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title="Применить настройку в Rocket.Chat?"
+        confirmLabel="Применить"
+        loading={applyLoading}
+        onConfirm={() => {
+          setConfirmOpen(false)
+          onApply()
+        }}
+        description={
+          <div className="space-y-2">
+            <p className="font-medium text-foreground">{title}</p>
+            <p>Значение изменится на сервере Rocket.Chat сразу и коснётся всех пользователей пространства. Нужны права администратора RC.</p>
+          </div>
+        }
+      />
+    </div>
   )
 }

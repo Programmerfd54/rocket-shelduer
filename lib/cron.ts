@@ -1,5 +1,6 @@
 import cron, { type ScheduledTask } from 'node-cron';
 import { sendScheduledMessages } from '@/scripts/send-scheduled-messages';
+import { runReactionRatingTick } from '@/lib/reactions/service';
 
 let cronJob: ScheduledTask | null = null;
 
@@ -22,9 +23,11 @@ export function startCronJob() {
         console.log(`✅ Cron: sent=${result.sent ?? 0}, failed=${result.failed ?? 0}`);
       }
     } catch (error) {
-      console.error('❌ Cron job error:', error);
+      console.error('❌ Cron job error:', error instanceof Error ? error.message : error);
     }
-  });
+    // Рейтинг реакций: синхронизация и автопубликации (сам ограничивает частоту, не блокирует отправку)
+    void runReactionRatingTick().catch((e) => console.error('❌ Reactions tick error:', e));
+  }, { name: 'send-scheduled-messages', noOverlap: true }); // медленный тик не запускается повторно поверх себя
 
   console.log('✅ Internal cron started! Messages will be sent every minute.');
 }

@@ -1,12 +1,16 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { useState, useEffect, useCallback, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Breadcrumbs } from '@/components/common/Breadcrumbs';
-import Link from 'next/link';
-import { Activity, Database, RefreshCw, CheckCircle, XCircle, AlertCircle, Network, ArrowLeft } from 'lucide-react';
+import { PageContainer, PageHeader } from '@/components/common/PageHeader';
+import { Section } from '@/components/common/Section';
+import { EmptyState } from '@/components/common/EmptyState';
+import { Activity, RefreshCw } from 'lucide-react';
+import { toast } from 'sonner';
+import { ROLE_LABELS } from '@/lib/roles';
 
 type CheckItem = {
   name: string;
@@ -27,202 +31,200 @@ type HealthData = {
   timestamp: string;
 };
 
+const CHECK_LABELS: Record<CheckItem['status'], string> = {
+  ok: 'Ок',
+  error: 'Ошибка',
+  skip: 'Пропущено',
+};
+
+function Stat({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+  return (
+    <div className="space-y-1 p-4">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <div className="text-base font-semibold leading-tight">{children}</div>
+      {hint && <p className="truncate text-xs text-muted-foreground" title={hint}>{hint}</p>}
+    </div>
+  );
+}
+
 export default function AdminHealthPage() {
   const [data, setData] = useState<HealthData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchHealth = async () => {
+  const fetchHealth = useCallback(async (manual = false) => {
     setLoading(true);
     setError(null);
     try {
       const res = await fetch('/api/admin/health');
       if (!res.ok) {
-        if (res.status === 403) {
-          setError('Доступ только для ADMIN');
-          return;
-        }
-        setError(`Ошибка ${res.status}`);
+        const msg =
+          res.status === 403
+            ? `Доступ только для ${ROLE_LABELS.LEAD_SUP}`
+            : `Не удалось получить состояние (ошибка ${res.status}). Повторите позже.`;
+        setError(msg);
+        if (manual) toast.error(msg);
         return;
       }
       const json = await res.json();
       setData(json);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Ошибка запроса');
+      if (manual) toast.success('Состояние обновлено');
+    } catch {
+      const msg = 'Не удалось получить состояние. Проверьте соединение и повторите.';
+      setError(msg);
+      if (manual) toast.error(msg);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchHealth();
-    const t = setInterval(fetchHealth, 60 * 1000);
+    const t = setInterval(() => fetchHealth(), 60 * 1000);
     return () => clearInterval(t);
-  }, []);
+  }, [fetchHealth]);
 
-  const statusIcon = data?.status === 'ok' ? CheckCircle : data?.status === 'degraded' ? AlertCircle : XCircle;
-  const StatusIcon = statusIcon;
+  const overallOk = data?.status === 'ok';
 
   return (
-    <div className="space-y-6">
-      <Link href="/dashboard/admin">
-        <Button variant="ghost" size="sm" className="mb-2 -ml-2 gap-2">
-          <ArrowLeft className="h-4 w-4" />
-          Назад в админку
-        </Button>
-      </Link>
-      <Breadcrumbs
-        items={[
-          { label: 'Дашборд', href: '/dashboard' },
-          { label: 'Админ', href: '/dashboard/admin' },
-          { label: 'Health-check', current: true },
-        ]}
+    <PageContainer>
+      <PageHeader
+        breadcrumbs={
+          <Breadcrumbs
+            items={[
+              { label: 'Дашборд', href: '/dashboard' },
+              { label: 'Админ панель', href: '/dashboard/admin' },
+              { label: 'Состояние', current: true },
+            ]}
+          />
+        }
+        title="Состояние системы"
+        description="Приложение, база данных и переменные окружения. Обновляется при открытии и каждые 60 секунд."
+        actions={
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => fetchHealth(true)}
+            disabled={loading}
+            aria-label="Обновить состояние"
+          >
+            <RefreshCw className={`size-4 ${loading ? 'animate-spin' : ''}`} />
+            Обновить
+          </Button>
+        }
       />
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold flex items-center gap-2">
-            <Activity className="h-7 w-7" />
-            Health-check
-          </h1>
-          <p className="text-muted-foreground mt-1">
-            Состояние приложения и БД. Обновляется при загрузке и каждые 60 с.
-          </p>
-        </div>
-        <Button variant="outline" onClick={fetchHealth} disabled={loading}>
-          <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
-          Обновить
-        </Button>
-      </div>
 
-      {error && (
-        <Card className="border-destructive">
-          <CardContent className="pt-6">
-            <p className="text-destructive">{error}</p>
-          </CardContent>
-        </Card>
+      {error && !data && (
+        <EmptyState
+          icon={<Activity />}
+          title="Состояние недоступно"
+          description={error}
+          action={{ label: 'Повторить', onClick: () => fetchHealth(true) }}
+        />
+      )}
+
+      {error && data && (
+        <p role="alert" className="mb-4 rounded-md border border-destructive/30 px-3 py-2 text-sm text-destructive">
+          {error}
+        </p>
       )}
 
       {loading && !data && !error && (
-        <Card>
-          <CardContent className="pt-6">
-            <p className="text-muted-foreground">Загрузка...</p>
-          </CardContent>
-        </Card>
+        <div className="space-y-6" role="status" aria-busy="true" aria-label="Загрузка">
+          <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border bg-border lg:grid-cols-5">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="space-y-2 bg-card p-4">
+                <Skeleton className="h-3 w-16" />
+                <Skeleton className="h-5 w-20" />
+                <Skeleton className="h-3 w-24" />
+              </div>
+            ))}
+          </div>
+          <div className="divide-y rounded-lg border bg-card">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="flex items-center justify-between gap-3 px-4 py-3">
+                <Skeleton className="h-4 w-44" />
+                <Skeleton className="h-5 w-14" />
+              </div>
+            ))}
+          </div>
+        </div>
       )}
 
       {data && (
-        <>
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-            <Card
-              className={
-                data.status === 'ok'
-                  ? 'border-green-500/50 dark:border-green-600/50'
-                  : data.status === 'degraded'
-                    ? 'border-amber-500/50 dark:border-amber-600/50'
-                    : 'border-destructive/50'
-              }
-            >
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium flex items-center gap-2">
-                  <StatusIcon
-                    className={
-                      data.status === 'ok' ? 'text-green-600' : data.status === 'degraded' ? 'text-amber-600' : 'text-destructive'
-                    }
-                  />
-                  Общий статус
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-2xl font-bold capitalize">{data.status}</p>
-                <p className="text-xs text-muted-foreground">status</p>
-              </CardContent>
-            </Card>
-            <Card
-              className={data.db === 'ok' ? 'border-green-500/50 dark:border-green-600/50' : 'border-destructive/50'}
-            >
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium flex items-center gap-2">
-                  <Database className="h-4 w-4" />
-                  База данных
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-2xl font-bold capitalize">{data.db}</p>
-                <p className="text-xs text-muted-foreground">{data.dbVersion ?? 'PostgreSQL'}</p>
-              </CardContent>
-            </Card>
-            <Card className="border-border">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium flex items-center gap-2">
-                  <Network className="h-4 w-4" />
-                  Порты
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-2xl font-bold">{data.ports?.application ?? '—'}</p>
-                <p className="text-xs text-muted-foreground">приложение</p>
-              </CardContent>
-            </Card>
-            <Card className="border-border">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium">Задержка</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-2xl font-bold">{data.latencyMs} ms</p>
-                <p className="text-xs text-muted-foreground">время ответа</p>
-              </CardContent>
-            </Card>
-            <Card className="border-border">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium">Окружение</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-2xl font-bold">{data.nodeEnv}</p>
-                <p className="text-xs text-muted-foreground">NODE_ENV</p>
-              </CardContent>
-            </Card>
+        <div className="space-y-6">
+          <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border bg-border lg:grid-cols-5 [&>div]:bg-card">
+            <Stat label="Общий статус">
+              <Badge variant={overallOk ? 'success' : 'warning'}>
+                {overallOk ? 'Работает' : 'Есть проблемы'}
+              </Badge>
+            </Stat>
+            <Stat label="База данных" hint={data.dbVersion ?? 'PostgreSQL'}>
+              <Badge variant={data.db === 'ok' ? 'success' : 'danger'}>
+                {data.db === 'ok' ? 'Доступна' : 'Ошибка'}
+              </Badge>
+            </Stat>
+            <Stat label="Порт приложения">
+              <span className="font-mono">{data.ports?.application ?? '—'}</span>
+            </Stat>
+            <Stat label="Задержка ответа">
+              <span className="tabular-nums">{data.latencyMs} мс</span>
+            </Stat>
+            <Stat label="Окружение" hint="NODE_ENV">
+              <span className="font-mono">{data.nodeEnv}</span>
+            </Stat>
           </div>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Проверки</CardTitle>
-              <CardDescription>
-                Детали по каждому пункту. Реальное состояние переменных (секреты отображаются замаскированно).
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <ul className="space-y-2">
-                {data.checks.map((c) => (
-                  <li
-                    key={c.name}
-                    className={`flex flex-wrap items-center justify-between gap-2 py-2 border-b border-border/60 last:border-0 ${
-                      c.status === 'ok' ? 'border-l-4 border-l-green-500/70 pl-2' : ''
-                    } ${c.status === 'error' ? 'border-l-4 border-l-destructive pl-2' : ''} ${c.status === 'skip' ? 'border-l-4 border-l-muted pl-2' : ''}`}
-                  >
-                    <span className="font-mono text-sm">{c.name}</span>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {c.durationMs != null && (
-                        <span className="text-xs text-muted-foreground">{c.durationMs} ms</span>
-                      )}
-                      <Badge
-                        variant={c.status === 'ok' ? 'default' : c.status === 'error' ? 'destructive' : 'secondary'}
+          <Section
+            bare
+            title="Проверки"
+            description="Состояние каждого пункта. Секреты отображаются в маскированном виде."
+          >
+            {data.checks.length === 0 ? (
+              <EmptyState icon={<Activity />} title="Проверок нет" description="Сервер не вернул ни одной проверки." />
+            ) : (
+              <div className="overflow-hidden rounded-lg border bg-card">
+                <ul className="divide-y">
+                  {data.checks.map((c) => {
+                    const detail = c.valueDisplay && c.valueDisplay !== '—' ? c.valueDisplay : c.message;
+                    return (
+                      <li
+                        key={c.name}
+                        className="flex flex-col gap-1 px-4 py-2.5 hover:bg-muted/40 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
                       >
-                        {c.status}
-                      </Badge>
-                      {(c.valueDisplay != null || c.message) && (
-                        <span className="text-xs text-muted-foreground font-mono max-w-full truncate" title={c.valueDisplay !== '—' ? c.valueDisplay : c.message}>
-                          {c.valueDisplay !== '—' && c.valueDisplay ? c.valueDisplay : c.message}
-                        </span>
-                      )}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-              <p className="text-xs text-muted-foreground mt-4">Обновлено: {new Date(data.timestamp).toLocaleString('ru-RU')}</p>
-            </CardContent>
-          </Card>
-        </>
+                        <span className="break-all font-mono text-sm">{c.name}</span>
+                        <div className="flex min-w-0 items-center gap-2 sm:justify-end">
+                          {detail && (
+                            <span
+                              className="min-w-0 max-w-[16rem] truncate font-mono text-xs text-muted-foreground"
+                              title={detail}
+                            >
+                              {detail}
+                            </span>
+                          )}
+                          {c.durationMs != null && (
+                            <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                              {c.durationMs} мс
+                            </span>
+                          )}
+                          <Badge
+                            variant={c.status === 'ok' ? 'success' : c.status === 'error' ? 'danger' : 'muted'}
+                          >
+                            {CHECK_LABELS[c.status] ?? c.status}
+                          </Badge>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            )}
+            <p className="mt-3 text-xs text-muted-foreground">
+              Обновлено: {new Date(data.timestamp).toLocaleString('ru-RU')}
+            </p>
+          </Section>
+        </div>
       )}
-    </div>
+    </PageContainer>
   );
 }

@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
-import { requireAuth } from '@/lib/auth';
+import { requireAuth } from '@/lib/api-auth';
+import { canPerformAction } from '@/lib/permissions';
+import { requireWorkspaceTabAccess } from '@/lib/workspace-tab-access';
 import { getSafeErrorMessage } from '@/lib/security';
 import { RocketChatClient } from '@/lib/rocketchat';
 import { getEffectiveConnectionForRc } from '@/lib/workspace-rc';
@@ -12,7 +14,12 @@ export async function POST(
 ) {
   try {
     const user = await requireAuth();
+    if (!canPerformAction(user, 'workspace:channels:set-default')) {
+      return NextResponse.json({ error: 'Недостаточно прав' }, { status: 403 });
+    }
     const { id: workspaceId } = await params;
+    const tabAccess = await requireWorkspaceTabAccess(user, workspaceId, 'spaceSettings');
+    if (!tabAccess.ok) return tabAccess.response;
     const body = await request.json().catch(() => ({}));
     const roomId = typeof body?.roomId === 'string' ? body.roomId.trim() : '';
     const isPrivate = body?.isPrivate === true;

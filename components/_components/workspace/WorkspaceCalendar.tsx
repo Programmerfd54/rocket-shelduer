@@ -1,9 +1,8 @@
 'use client'
 
 import { useState, useMemo } from 'react'
-import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { ChevronLeft, ChevronRight, Calendar as CalendarIcon } from 'lucide-react'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import Link from 'next/link'
 
@@ -51,28 +50,41 @@ export function WorkspaceCalendar({ messages, workspaceId }: WorkspaceCalendarPr
   const todayKey = `${today.getFullYear()}-${today.getMonth()}-${today.getDate()}`
 
   return (
-    <Card className="rounded-2xl border-2 border-teal-500/25 bg-gradient-to-b from-teal-500/[0.12] via-teal-500/[0.06] to-card shadow-sm overflow-hidden">
-      <div className="px-4 py-3 border-b border-teal-500/20 bg-teal-500/10 flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-foreground">Календарь по статусам</h3>
-        <Link href={`/dashboard/calendar?workspaceId=${workspaceId}`} className="text-xs text-primary hover:underline">
+    <div className="rounded-lg border bg-card">
+      <div className="flex items-center justify-between gap-2 border-b px-4 py-2.5">
+        <h3 className="text-sm font-semibold">Календарь по статусам</h3>
+        <Link
+          href={`/dashboard/calendar?workspaceId=${workspaceId}`}
+          className="text-xs text-primary hover:underline"
+        >
           Полный календарь →
         </Link>
       </div>
-      <CardContent className="p-4">
-        <div className="flex items-center justify-between mb-3">
-          <Button variant="ghost" size="icon" onClick={() => setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1))}>
-            <ChevronLeft className="w-4 h-4" />
+      <div className="p-3">
+        <div className="mb-2 flex items-center justify-between">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1))}
+            aria-label="Предыдущий месяц"
+          >
+            <ChevronLeft />
           </Button>
           <span className="text-sm font-medium">
             {MONTHS[currentDate.getMonth()]} {currentDate.getFullYear()}
           </span>
-          <Button variant="ghost" size="icon" onClick={() => setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1))}>
-            <ChevronRight className="w-4 h-4" />
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1))}
+            aria-label="Следующий месяц"
+          >
+            <ChevronRight />
           </Button>
         </div>
         <div className="grid grid-cols-7 gap-0.5 text-center">
           {WEEKDAYS.map((w) => (
-            <div key={w} className="text-[10px] font-medium text-muted-foreground py-1">
+            <div key={w} className="py-1 text-[11px] font-medium text-muted-foreground">
               {w}
             </div>
           ))}
@@ -86,50 +98,43 @@ export function WorkspaceCalendar({ messages, workspaceId }: WorkspaceCalendarPr
             const hasSent = (stat?.sent ?? 0) > 0
             const hasFailed = (stat?.failed ?? 0) > 0
             const total = (stat?.pending ?? 0) + (stat?.sent ?? 0) + (stat?.failed ?? 0)
-            // Жёлтый — есть ожидающие; зелёный — только отправленные (без ожидающих); красный — ошибки
-            const dayTone =
-              hasFailed
-                ? 'bg-rose-500/25 text-rose-800 dark:text-rose-200 ring-1 ring-rose-400/40'
-                : hasPending
-                  ? 'bg-amber-400/35 text-amber-950 dark:text-amber-100 ring-1 ring-amber-400/50'
-                  : hasSent
-                    ? 'bg-emerald-500/30 text-emerald-900 dark:text-emerald-100 ring-1 ring-emerald-400/40'
-                    : 'text-muted-foreground/70'
+            const label = `${day} ${MONTHS[currentDate.getMonth()].toLowerCase()}${total > 0 ? `: сообщений — ${total}` : ''}`
             return (
               <Link
                 key={key}
                 href={`/dashboard/calendar?workspaceId=${workspaceId}`}
+                aria-label={label}
+                title={label}
                 className={cn(
-                  'min-h-[36px] flex flex-col items-center justify-center rounded-lg text-xs font-medium transition-colors hover:ring-2 hover:ring-teal-500/40',
-                  isToday && 'ring-2 ring-teal-600 bg-teal-500/15',
-                  total === 0 && 'text-muted-foreground/60',
-                  total > 0 && dayTone
+                  'flex min-h-[36px] flex-col items-center justify-center rounded-md text-xs outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/40',
+                  total === 0 ? 'text-muted-foreground' : 'font-medium text-foreground',
+                  isToday && 'bg-primary text-primary-foreground hover:bg-primary/90'
                 )}
               >
                 <span>{day}</span>
                 {total > 0 && (
-                  <span className="flex gap-0.5 mt-0.5">
-                    {hasPending && <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />}
-                    {hasSent && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />}
-                    {hasFailed && <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />}
+                  <span className="mt-0.5 flex gap-0.5">
+                    {hasPending && <span className="size-1.5 rounded-full bg-amber-500" />}
+                    {hasSent && <span className="size-1.5 rounded-full bg-emerald-500" />}
+                    {hasFailed && <span className="size-1.5 rounded-full bg-red-500" />}
                   </span>
                 )}
               </Link>
             )
           })}
         </div>
-        <div className="flex flex-wrap gap-3 mt-4 pt-3 border-t border-border/60 text-[10px]">
+        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 border-t pt-3 text-xs text-muted-foreground">
           <span className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-amber-500" /> Ожидает
+            <span className="size-2 rounded-full bg-amber-500" /> Ожидает
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-emerald-500" /> Отправлено
+            <span className="size-2 rounded-full bg-emerald-500" /> Отправлено
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-rose-500" /> Ошибки
+            <span className="size-2 rounded-full bg-red-500" /> Ошибки
           </span>
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   )
 }

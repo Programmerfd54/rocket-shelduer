@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { requireAuth } from '@/lib/auth';
+import { requireAuth } from '@/lib/api-auth';
 import { createActivityLog } from '@/app/api/activity/route';
-
-const ALLOWED_ROLES = ['USER', 'SUPPORT', 'ADMIN', 'ADM', 'VOL'];
+import { canPerformAction } from '@/lib/permissions';
+import { isUnsafeId } from '@/lib/security';
+import { APP_ROLES, canManageUserWithRole, isAppRole, roleChangeAssignableRoles } from '@/lib/roles';
 
 export async function PATCH(
   request: Request,
@@ -13,7 +14,7 @@ export async function PATCH(
     const currentUser = await requireAuth();
     const { id } = await params;
 
-    if (currentUser.role !== 'SUPPORT' && currentUser.role !== 'ADMIN') {
+    if (!canPerformAction(currentUser, 'admin:users:edit-role')) {
       return NextResponse.json(
         { error: 'Insufficient permissions' },
         { status: 403 }
@@ -27,25 +28,33 @@ export async function PATCH(
       );
     }
 
-    const body = await request.json();
-    const { role, volunteerExpiresAt, volunteerIntensive } = body;
+    if (isUnsafeId(id)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
+    const body = await request.json().catch(() => ({}));
+    const { role, volunteerExpiresAt, volunteerIntensive } = body ?? {};
+    if (
+      volunteerExpiresAt != null &&
+      (typeof volunteerExpiresAt !== 'string' || Number.isNaN(new Date(volunteerExpiresAt).getTime()))
+    ) {
+      return NextResponse.json({ error: 'Некорректная дата окончания доступа' }, { status: 400 });
+    }
 
-    if (!role || !ALLOWED_ROLES.includes(role)) {
+    if (!isAppRole(role)) {
       return NextResponse.json(
-        { error: 'Invalid role. Allowed: USER, SUPPORT, ADMIN, ADM, VOL' },
+        { error: `Недопустимая роль. Допустимо: ${APP_ROLES.join(', ')}.` },
         { status: 400 }
       );
     }
-    // Только ADMIN может назначать роль ADMIN
-    if (role === 'ADMIN' && currentUser.role !== 'ADMIN') {
+
+    if (!roleChangeAssignableRoles(currentUser.role).includes(role)) {
       return NextResponse.json(
-        { error: 'Only superuser can assign ADMIN role' },
+        { error: `Вы не можете назначать роль ${role}` },
         { status: 403 }
       );
     }
 
     const targetUser = await prisma.user.findUnique({
       where: { id },
+      select: { id: true, role: true },
     });
 
     if (!targetUser) {
@@ -55,21 +64,21 @@ export async function PATCH(
       );
     }
 
-    // Только ADMIN может менять роль пользователя с ролью ADMIN
-    if (targetUser.role === 'ADMIN' && currentUser.role !== 'ADMIN') {
+    if (!canManageUserWithRole(currentUser.role, targetUser.role)) {
       return NextResponse.json(
-        { error: 'Only superuser can modify ADMIN users' },
+        { error: 'Недостаточно прав для изменения этого пользователя' },
         { status: 403 }
       );
     }
 
     const data: Record<string, unknown> = { role };
-    if (role === 'VOL') {
-      data.volunteerExpiresAt = volunteerExpiresAt
-        ? new Date(volunteerExpiresAt)
-        : null;
+    if (role === 'MEMBER' && volunteerExpiresAt) {
+      data.volunteerExpiresAt = new Date(volunteerExpiresAt);
       data.volunteerIntensive =
-        volunteerIntensive != null ? String(volunteerIntensive).trim() || null : null;
+        volunteerIntensive != null ? String(volunteerIntensive).trim().slice(0, 50) || null : null;
+    } else if (role === 'MEMBER' && body.volunteerExpiresAt === null) {
+      data.volunteerExpiresAt = null;
+      data.volunteerIntensive = null;
     } else {
       data.volunteerExpiresAt = null;
       data.volunteerIntensive = null;

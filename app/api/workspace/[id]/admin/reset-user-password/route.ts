@@ -1,18 +1,24 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { requireAuth, hashPassword } from '@/lib/auth';
+import { hashPassword } from '@/lib/auth';
+import { requireAuth } from '@/lib/api-auth';
 import { isUnsafeId } from '@/lib/security';
+import { canManageUserWithRole } from '@/lib/roles';
 import { RocketChatClient } from '@/lib/rocketchat';
 
-/** Проверка доступа: владелец пространства или назначенный SUP/ADMIN */
+/**
+ * Проверка доступа: только SUP / Lead_SUP (как во вкладке «Сброс учётки»), владелец пространства или назначенный.
+ * Раньше владелец пространства с любой ролью (ADM/MEMBER) мог сбросить пароль приложения любому
+ * пользователю (в т.ч. Lead_SUP) на известное значение = логин → захват учётной записи.
+ */
 async function canAccessWorkspaceAdmin(userId: string, userRole: string, workspaceId: string) {
+  if (userRole !== 'SUP' && userRole !== 'LEAD_SUP') return { ok: false as const, error: 'Forbidden' };
   const workspace = await prisma.workspaceConnection.findUnique({
     where: { id: workspaceId },
     select: { userId: true },
   });
   if (!workspace) return { ok: false as const, error: 'Workspace not found' };
   if (workspace.userId === userId) return { ok: true as const };
-  if (userRole !== 'SUPPORT' && userRole !== 'ADMIN') return { ok: false as const, error: 'Forbidden' };
   const assigned = await prisma.workspaceAdminAssignment.findFirst({
     where: { userId, workspaceId },
     select: { id: true },
@@ -48,7 +54,7 @@ async function findRcUserByUsername(
 /**
  * POST — сброс пароля по никнейму (логину).
  * Новый пароль = логин. Опционально: adminUsername + adminPassword — сброс также в Rocket.Chat.
- * Доступ: SUP или ADMIN с доступом к пространству.
+ * Доступ: владелец; SUP/LEAD_SUP с назначением на пространство.
  */
 export async function POST(
   request: Request,
@@ -70,7 +76,7 @@ export async function POST(
     const single = typeof body.username === 'string' ? body.username.trim() : '';
     const rawList = Array.isArray(body.usernames) ? body.usernames : null;
     const usernames: string[] = rawList
-      ? (rawList as string[]).map((u) => String(u).trim()).filter(Boolean)
+      ? (rawList as unknown[]).filter((u): u is string => typeof u === 'string').map((u) => u.trim().slice(0, 200)).filter(Boolean)
       : single ? [single] : [];
     const adminUsername = typeof body.adminUsername === 'string' ? body.adminUsername.trim() : '';
     const adminPassword = typeof body.adminPassword === 'string' ? body.adminPassword : '';
@@ -117,7 +123,7 @@ export async function POST(
             ...(normalized.includes('@') ? [] : [{ email: { startsWith: normalized + '@', mode: 'insensitive' as const } }]),
           ],
         },
-        select: { id: true, username: true, email: true },
+        select: { id: true, username: true, email: true, role: true },
       });
       const loginValue = targetUser ? (targetUser.username ?? targetUser.email.split('@')[0] ?? targetUser.email) : rawInput.trim();
 
@@ -140,11 +146,19 @@ export async function POST(
         continue;
       }
 
+      // Иерархия ролей: SUP — только ADM/MEMBER; себе пароль здесь не сбрасываем.
+      if (targetUser.id === currentUser.id || !canManageUserWithRole(currentUser.role, targetUser.role)) {
+        results.push({ username: rawInput, success: false, message: 'Недостаточно прав для сброса пароля этого пользователя.' });
+        continue;
+      }
+
       const newPasswordHash = await hashPassword(loginValue);
       await prisma.user.update({
         where: { id: targetUser.id },
         data: { password: newPasswordHash, requirePasswordChange: true },
       });
+      // Старые сессии пользователя больше не действительны
+      await prisma.session.deleteMany({ where: { userId: targetUser.id } });
 
       let msg = `Пароль = логин (${loginValue}). При первом входе потребуется сменить пароль.`;
       if (withRc && rcAuth && rc) {

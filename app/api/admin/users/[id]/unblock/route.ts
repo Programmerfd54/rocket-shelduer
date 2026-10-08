@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { requireAuth } from '@/lib/auth';
+import { requireAuth } from '@/lib/api-auth';
 import { createActivityLog } from '@/app/api/activity/route';
+import { canPerformAction } from '@/lib/permissions';
+import { canManageUserWithRole } from '@/lib/roles';
+import { isUnsafeId } from '@/lib/security';
 
 export async function PATCH(
   request: Request,
@@ -11,15 +14,17 @@ export async function PATCH(
     const currentUser = await requireAuth();
     const { id } = await params;
 
-    if (currentUser.role !== 'SUPPORT' && currentUser.role !== 'ADMIN') {
+    if (!canPerformAction(currentUser, 'admin:users:block')) {
       return NextResponse.json(
         { error: 'Insufficient permissions' },
         { status: 403 }
       );
     }
 
+    if (isUnsafeId(id)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
     const targetUser = await prisma.user.findUnique({
       where: { id },
+      select: { id: true, role: true, isBlocked: true },
     });
 
     if (!targetUser) {
@@ -29,9 +34,11 @@ export async function PATCH(
       );
     }
 
-    if (targetUser.role === 'ADMIN' && currentUser.role !== 'ADMIN') {
+    if (
+      !canManageUserWithRole(currentUser.role, targetUser.role)
+    ) {
       return NextResponse.json(
-        { error: 'Only superuser can unblock ADMIN users' },
+        { error: 'Недостаточно прав для разблокировки этого пользователя' },
         { status: 403 }
       );
     }

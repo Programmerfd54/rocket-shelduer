@@ -1,20 +1,21 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Tiptap, useEditor } from '@tiptap/react'
+import { Tiptap, useEditor, useTiptap, useTiptapState, type Editor } from '@tiptap/react'
+import { BubbleMenu } from '@tiptap/react/menus'
 import StarterKit from '@tiptap/starter-kit'
 import Image from '@tiptap/extension-image'
 import Link from '@tiptap/extension-link'
+import Placeholder from '@tiptap/extension-placeholder'
 import { TextStyle, Color, BackgroundColor } from '@tiptap/extension-text-style'
 import Highlight from '@tiptap/extension-highlight'
-import { useTiptap } from '@tiptap/react'
 import { NodeSelection } from '@tiptap/pm/state'
 import { BlockHighlight, HelpIcon } from '@/lib/helpEditorExtensions'
 import { HELPDOC_ICONS, HELPDOC_ICON_NAMES } from '@/lib/helpIcons'
 import { sanitizeSvgIcon } from '@/lib/sanitize'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
+import { Field } from '@/components/ui/field'
 import {
   Dialog,
   DialogContent,
@@ -32,9 +33,11 @@ import {
   Heading3,
   Quote,
   Link as LinkIcon,
+  Unlink,
   ImagePlus,
   Loader2,
   Code,
+  SquareCode,
   Minus,
   Plus,
   Video,
@@ -43,8 +46,11 @@ import {
   Bookmark,
   Palette,
   Highlighter,
-  Square,
+  MessageSquareQuote,
   Smile,
+  Undo2,
+  Redo2,
+  X,
 } from 'lucide-react'
 import {
   DropdownMenu,
@@ -52,20 +58,17 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from '@/components/ui/popover'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 
 const HELP_ROLE_OPTIONS = [
   { value: '', label: 'Для всех' },
-  { value: 'SUPPORT', label: 'SUPPORT' },
+  { value: 'SUP', label: 'SUP' },
   { value: 'ADM', label: 'ADM' },
-  { value: 'VOL', label: 'VOL' },
+  { value: 'MEMBER', label: 'MEMBER (волонтёр)' },
 ] as const
 
 const IMAGE_SIZES = [
@@ -96,13 +99,14 @@ const HIGHLIGHT_COLORS = [
   { name: 'Сбросить', value: '' },
 ]
 
+/** Цвета выносок (callout): значения совпадают с классами help-block-* / data-color в globals.css. */
 const BLOCK_HIGHLIGHT_COLORS = [
-  { name: 'Жёлтый (amber)', value: 'amber' },
-  { name: 'Синий', value: 'blue' },
-  { name: 'Зелёный', value: 'green' },
-  { name: 'Красный', value: 'red' },
-  { name: 'Фиолетовый', value: 'violet' },
-  { name: 'Серый', value: 'slate' },
+  { name: 'Жёлтая', value: 'amber', swatch: 'rgb(254 243 199)' },
+  { name: 'Синяя', value: 'blue', swatch: 'rgb(219 234 254)' },
+  { name: 'Зелёная', value: 'green', swatch: 'rgb(220 252 231)' },
+  { name: 'Красная', value: 'red', swatch: 'rgb(254 226 226)' },
+  { name: 'Фиолетовая', value: 'violet', swatch: 'rgb(237 233 254)' },
+  { name: 'Серая', value: 'slate', swatch: 'rgb(241 245 249)' },
 ]
 
 const ICON_COLORS = [
@@ -116,7 +120,63 @@ const ICON_COLORS = [
   { name: 'Розовый', value: '#db2777' },
 ]
 
-export { HELP_ROLE_OPTIONS }
+/** Лимиты совпадают с /api/admin/help/upload. */
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024
+const MAX_MEDIA_BYTES = 50 * 1024 * 1024
+const MAX_FILE_BYTES = 20 * 1024 * 1024
+
+/** Старые записи справки хранят роль волонтёра как 'VOL' — в редакторе показываем её как MEMBER. */
+function normalizeHelpRoles(roles: unknown): string[] {
+  if (!Array.isArray(roles)) return []
+  return Array.from(new Set(roles.map((r) => (r === 'VOL' ? 'MEMBER' : String(r)))))
+}
+
+export { HELP_ROLE_OPTIONS, normalizeHelpRoles }
+
+/* ---------- утилиты ---------- */
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
+/**
+ * Проверка и нормализация ссылки: http(s), mailto, tel, внутренние пути («/…», «#…»).
+ * Без протокола подставляется https://. Возвращает null, если ссылка некорректна.
+ */
+function normalizeUrl(raw: string): string | null {
+  const v = raw.trim()
+  if (!v || /\s/.test(v)) return null
+  if (/^[/#]/.test(v) && !v.startsWith('//')) return v
+  if (/^(mailto|tel):\S+$/i.test(v)) return v
+  const withProto = /^[a-z][a-z0-9+.-]*:/i.test(v) ? v : `https://${v}`
+  try {
+    const u = new URL(withProto)
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null
+    if (!u.hostname.includes('.') && u.hostname !== 'localhost') return null
+    return withProto
+  } catch {
+    return null
+  }
+}
+
+const URL_ERROR = 'Введите корректную ссылку, например https://example.com'
+
+function buildAnchor(url: string, label: string): string {
+  return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`
+}
+
+function errorText(e: unknown, fallback: string): string {
+  return e instanceof Error && e.message ? e.message : fallback
+}
+
+function shallowEqual<T extends Record<string, unknown>>(a: T, b: T | null): boolean {
+  if (!b) return false
+  const ka = Object.keys(a)
+  if (ka.length !== Object.keys(b).length) return false
+  return ka.every((k) => a[k] === b[k])
+}
+
+/* ---------- редактор ---------- */
 
 interface HelpRichEditorProps {
   value: string
@@ -134,18 +194,26 @@ export function HelpRichEditor({
   minHeight = '200px',
   className,
 }: HelpRichEditorProps) {
+  // Актуальные value/onChange для колбэка onUpdate (редактор создаётся один раз).
+  // Ref обновляем в эффекте, а не во время рендера.
   const valueRef = useRef(value)
-  valueRef.current = value
+  const onChangeRef = useRef(onChange)
+  useEffect(() => {
+    valueRef.current = value
+    onChangeRef.current = onChange
+  }, [value, onChange])
 
   const editor = useEditor(
     {
       extensions: [
         StarterKit.configure({
           heading: { levels: [1, 2, 3] },
-          codeBlock: { HTMLAttributes: { class: 'rounded-lg bg-muted/50 p-4 font-mono text-sm' } },
+          // Link подключаем ниже со своими настройками
+          link: false,
+          codeBlock: { HTMLAttributes: { class: 'rounded-md bg-muted/50 p-4 font-mono text-sm' } },
         }),
         Image.configure({
-          HTMLAttributes: { class: 'rounded-lg h-auto cursor-pointer' },
+          HTMLAttributes: { class: 'rounded-md h-auto cursor-pointer' },
           allowBase64: false,
           resize: {
             enabled: true,
@@ -158,6 +226,7 @@ export function HelpRichEditor({
           openOnClick: false,
           HTMLAttributes: { class: 'text-primary underline' },
         }),
+        Placeholder.configure({ placeholder }),
         TextStyle,
         Color,
         Highlight.configure({ multicolor: true }),
@@ -169,13 +238,16 @@ export function HelpRichEditor({
       immediatelyRender: false,
       editorProps: {
         attributes: {
-          class: 'prose prose-sm dark:prose-invert max-w-none min-h-[120px] px-4 py-3 focus:outline-none [&_.ProseMirror]:outline-none',
-          'data-placeholder': placeholder,
+          class:
+            'prose prose-sm dark:prose-invert max-w-none min-h-[120px] px-3 py-2.5 focus:outline-none [&_.ProseMirror]:outline-none',
+          role: 'textbox',
+          'aria-multiline': 'true',
+          'aria-label': 'Редактор текста',
         },
       },
       onUpdate: ({ editor }) => {
         const html = editor.getHTML()
-        if (html !== valueRef.current) onChange(html)
+        if (html !== valueRef.current) onChangeRef.current(html)
       },
     },
     []
@@ -191,11 +263,16 @@ export function HelpRichEditor({
   }, [value, editor])
 
   return (
-    <div className={cn('rounded-xl border border-border/80 bg-background overflow-hidden shadow-sm', className)}>
+    <div
+      className={cn(
+        'overflow-hidden rounded-md border border-input bg-background transition-colors focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/30',
+        className
+      )}
+    >
       {editor && (
-        <Tiptap instance={editor}>
-          <HelpEditorToolbar onImageUpload={onChange} />
-          <Tiptap.BubbleMenu
+        <Tiptap editor={editor}>
+          <HelpEditorToolbar />
+          <BubbleMenu
             options={{ placement: 'top' }}
             pluginKey="imageSize"
             shouldShow={({ state }) => {
@@ -204,8 +281,8 @@ export function HelpRichEditor({
             }}
           >
             <ImageSizeMenu />
-          </Tiptap.BubbleMenu>
-          <Tiptap.BubbleMenu
+          </BubbleMenu>
+          <BubbleMenu
             options={{ placement: 'top' }}
             pluginKey="helpIconColor"
             shouldShow={({ state }) => {
@@ -214,13 +291,15 @@ export function HelpRichEditor({
             }}
           >
             <HelpIconColorMenu />
-          </Tiptap.BubbleMenu>
-          <Tiptap.Loading>
-            <div className="flex items-center justify-center p-8 text-muted-foreground">
-              <Loader2 className="h-6 w-6 animate-spin" />
-            </div>
-          </Tiptap.Loading>
-          <div className="tiptap-editor-wrap bg-background" style={{ minHeight }}>
+          </BubbleMenu>
+          <div
+            className="tiptap-editor-wrap cursor-text bg-background"
+            style={{ minHeight }}
+            onClick={(e) => {
+              // Клик по пустому месту под текстом — фокус в редактор
+              if (e.target === e.currentTarget) editor.commands.focus('end')
+            }}
+          >
             <Tiptap.Content />
           </div>
         </Tiptap>
@@ -229,22 +308,27 @@ export function HelpRichEditor({
   )
 }
 
+/* ---------- всплывающие меню над выделенным объектом ---------- */
+
 function ImageSizeMenu() {
-  const { editor, isReady } = useTiptap()
-  if (!isReady || !editor) return null
+  const { editor } = useTiptap()
+  if (!editor) return null
   const setImageSize = (width: number | null) => {
     editor.chain().focus().updateAttributes('image', { width: width ?? undefined, height: undefined }).run()
   }
   return (
-    <div className="flex items-center gap-0.5 rounded-lg border bg-popover p-1 shadow-md">
-      <span className="px-2 text-xs text-muted-foreground">Масштаб:</span>
+    <div
+      role="toolbar"
+      aria-label="Размер изображения"
+      className="flex items-center gap-0.5 rounded-md border bg-popover p-0.5 shadow-md"
+    >
+      <span className="px-2 text-xs text-muted-foreground">Размер</span>
       {IMAGE_SIZES.map((s) => (
         <Button
           key={s.label}
           type="button"
           variant="ghost"
-          size="sm"
-          className="h-7 px-2 text-xs"
+          size="xs"
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => setImageSize(s.width)}
         >
@@ -256,291 +340,519 @@ function ImageSizeMenu() {
 }
 
 function HelpIconColorMenu() {
-  const { editor, isReady } = useTiptap()
-  if (!isReady || !editor) return null
+  const { editor } = useTiptap()
+  if (!editor) return null
   return (
-    <div className="flex items-center gap-0.5 rounded-lg border bg-popover p-1.5 shadow-md">
-      <span className="px-2 text-xs text-muted-foreground">Цвет иконки:</span>
+    <div
+      role="toolbar"
+      aria-label="Цвет иконки"
+      className="flex items-center gap-1 rounded-md border bg-popover p-1 shadow-md"
+    >
+      <span className="px-1.5 text-xs text-muted-foreground">Цвет иконки</span>
       {ICON_COLORS.map((c) => (
-        <button
+        <Swatch
           key={c.value || 'default'}
-          type="button"
-          className={cn(
-            'h-7 w-7 rounded border shrink-0',
-            !c.value && 'border-dashed'
-          )}
-          style={c.value ? { backgroundColor: c.value, borderColor: c.value } : undefined}
-          title={c.name}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => {
-            editor.chain().focus().setHelpIconColor(c.value || null).run()
-          }}
-        >
-          {!c.value && <span className="text-xs">×</span>}
-        </button>
+          label={c.name}
+          color={c.value}
+          onPick={() => editor.chain().focus().setHelpIconColor(c.value || null).run()}
+        />
       ))}
     </div>
   )
 }
 
+/** Квадратик выбора цвета; пустое значение = «сбросить». */
+function Swatch({
+  label,
+  color,
+  onPick,
+  selected = false,
+}: {
+  label: string
+  color: string
+  onPick: () => void
+  selected?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      className={cn(
+        'flex size-6 shrink-0 items-center justify-center rounded-sm border outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40',
+        !color && 'border-dashed text-muted-foreground',
+        selected && 'ring-2 ring-ring ring-offset-1 ring-offset-popover'
+      )}
+      style={color ? { backgroundColor: color, borderColor: color } : undefined}
+      title={label}
+      aria-label={label}
+      aria-pressed={selected}
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={onPick}
+    >
+      {!color && <X className="size-3" aria-hidden />}
+    </button>
+  )
+}
+
+/* ---------- панель инструментов ---------- */
+
 type InsertMediaType = 'video' | 'audio' | 'file' | 'bookmark'
 
-function HelpEditorToolbar({ onImageUpload }: { onImageUpload?: (html: string) => void }) {
-  const { editor, isReady } = useTiptap()
-  const inputRef = useRef<HTMLInputElement>(null)
-  const [insertDialogType, setInsertDialogType] = useState<InsertMediaType | null>(null)
-  const [insertUrl, setInsertUrl] = useState('')
-  const [insertLoading, setInsertLoading] = useState(false)
-  const [uploadLoading, setUploadLoading] = useState(false)
-  const [bookmarkUrl, setBookmarkUrl] = useState('')
-  const [bookmarkTitle, setBookmarkTitle] = useState('')
-  const [iconColor, setIconColor] = useState<string | null>(null)
+const INSERT_TITLES: Record<InsertMediaType, string> = {
+  video: 'Вставить видео',
+  audio: 'Вставить аудио',
+  file: 'Вставить файл',
+  bookmark: 'Веб-закладка',
+}
+
+const INSERT_DEFAULT_LABEL: Record<InsertMediaType, string> = {
+  video: 'Видео',
+  audio: 'Аудио',
+  file: 'Файл',
+  bookmark: '',
+}
+
+const TOOL_BTN = 'size-7 shrink-0 text-muted-foreground hover:text-foreground'
+
+/** Подсказка-тултип для кнопки панели. */
+function Tip({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <Tooltip delayDuration={400}>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side="bottom">{label}</TooltipContent>
+    </Tooltip>
+  )
+}
+
+function ToolbarButton({
+  onClick,
+  active = false,
+  disabled = false,
+  label,
+  children,
+}: {
+  onClick: () => void
+  active?: boolean
+  disabled?: boolean
+  /** Подсказка и aria-label (можно с горячей клавишей) */
+  label: string
+  children: React.ReactNode
+}) {
+  return (
+    <Tip label={label}>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        className={cn(TOOL_BTN, active && 'bg-accent text-foreground')}
+        disabled={disabled}
+        aria-label={label}
+        aria-pressed={active}
+        // mousedown: не терять выделение в редакторе при нажатии на кнопку
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={onClick}
+      >
+        {children}
+      </Button>
+    </Tip>
+  )
+}
+
+function ToolbarDivider() {
+  return <span className="mx-1 h-4 w-px bg-border" aria-hidden />
+}
+
+function HelpEditorToolbar() {
+  const { editor } = useTiptap()
+  if (!editor) return null
+  return <HelpEditorToolbarInner editor={editor} />
+}
+
+function HelpEditorToolbarInner({ editor }: { editor: Editor }) {
+  // Подписка на состояние редактора: подсветка активных кнопок обновляется при каждом изменении
+  const st = useTiptapState(
+    (s) => ({
+      bold: s.editor.isActive('bold'),
+      italic: s.editor.isActive('italic'),
+      code: s.editor.isActive('code'),
+      h1: s.editor.isActive('heading', { level: 1 }),
+      h2: s.editor.isActive('heading', { level: 2 }),
+      h3: s.editor.isActive('heading', { level: 3 }),
+      bulletList: s.editor.isActive('bulletList'),
+      orderedList: s.editor.isActive('orderedList'),
+      blockquote: s.editor.isActive('blockquote'),
+      codeBlock: s.editor.isActive('codeBlock'),
+      link: s.editor.isActive('link'),
+      canUndo: s.editor.can().undo(),
+      canRedo: s.editor.can().redo(),
+      textColor: (s.editor.getAttributes('textStyle').color as string | undefined) ?? '',
+    }),
+    shallowEqual
+  )
+
+  const fileRef = useRef<HTMLInputElement>(null)
   const mediaFileRef = useRef<HTMLInputElement>(null)
 
-  const uploadImage = useCallback(async (file: File) => {
-    if (!editor || !isReady) return
-    const form = new FormData()
-    form.append('file', file)
+  const [iconColor, setIconColor] = useState<string | null>(null)
+
+  // Диалог ссылки
+  const [linkOpen, setLinkOpen] = useState(false)
+  const [linkUrl, setLinkUrl] = useState('')
+  const [linkError, setLinkError] = useState<string | null>(null)
+
+  // Диалог вставки видео/аудио/файла/закладки
+  const [insertType, setInsertType] = useState<InsertMediaType | null>(null)
+  const [insertUrl, setInsertUrl] = useState('')
+  const [insertLabel, setInsertLabel] = useState('')
+  const [insertError, setInsertError] = useState<string | null>(null)
+  const [uploadLoading, setUploadLoading] = useState(false)
+
+  const run = useCallback(
+    (fn: () => void) => {
+      fn()
+      requestAnimationFrame(() => editor.commands.focus())
+    },
+    [editor]
+  )
+
+  /** Загрузка файла на сервер → URL. Показывает toast, проверяет размер на клиенте. */
+  const uploadFile = useCallback(async (type: 'image' | InsertMediaType, file: File): Promise<string | null> => {
+    const limit = type === 'image' ? MAX_IMAGE_BYTES : type === 'video' || type === 'audio' ? MAX_MEDIA_BYTES : MAX_FILE_BYTES
+    if (file.size > limit) {
+      toast.error(`Файл слишком большой (максимум ${Math.round(limit / 1024 / 1024)} МБ).`)
+      return null
+    }
+    const toastId = toast.loading('Загрузка файла…')
     try {
+      const form = new FormData()
+      form.append('file', file)
+      if (type !== 'image') form.append('type', type)
       const res = await fetch('/api/admin/help/upload', { method: 'POST', body: form })
       if (!res.ok) {
         const d = await res.json().catch(() => ({}))
         throw new Error(d.error || 'Ошибка загрузки')
       }
       const data = await res.json()
-      const url = data.url
-      if (url) {
-        editor.chain().focus().setImage({ src: url, alt: '' }).run()
-        onImageUpload?.(editor.getHTML())
-      }
-    } catch (e: any) {
-      toast.error(e.message || 'Не удалось загрузить изображение')
+      if (!data.url) throw new Error('Сервер не вернул ссылку на файл')
+      toast.success('Файл загружен', { id: toastId })
+      return data.url as string
+    } catch (e: unknown) {
+      toast.error(errorText(e, 'Не удалось загрузить файл. Попробуйте ещё раз.'), { id: toastId })
+      return null
     }
-  }, [editor, isReady, onImageUpload])
+  }, [])
 
-  const uploadMediaFile = useCallback(async (type: InsertMediaType, file: File) => {
-    if (!editor || !isReady) return
-    setUploadLoading(true)
-    const form = new FormData()
-    form.append('file', file)
-    form.append('type', type)
-    try {
-      const res = await fetch('/api/admin/help/upload', { method: 'POST', body: form })
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({}))
-        throw new Error(d.error || 'Ошибка загрузки')
-      }
-      const data = await res.json()
-      const url = data.url
-      if (url) {
-        const label = type === 'video' ? 'Видео' : type === 'audio' ? 'Аудио' : file.name || 'Файл'
-        editor.chain().focus().insertContent(`<a href="${url}" target="_blank" rel="noopener">${label}</a>`).run()
-        onImageUpload?.(editor.getHTML())
-        setInsertDialogType(null)
-        setInsertUrl('')
-      }
-    } catch (e: any) {
-      toast.error(e.message || 'Не удалось загрузить файл')
-    } finally {
-      setUploadLoading(false)
-    }
-  }, [editor, isReady, onImageUpload])
+  const uploadImage = useCallback(
+    async (file: File) => {
+      const url = await uploadFile('image', file)
+      if (url) editor.chain().focus().setImage({ src: url, alt: '' }).run()
+    },
+    [editor, uploadFile]
+  )
 
-  const handleInsertByUrl = useCallback(() => {
-    if (!editor || !isReady || !insertUrl.trim() || !insertDialogType) return
-    setInsertLoading(true)
-    const label = insertDialogType === 'video' ? 'Видео' : insertDialogType === 'audio' ? 'Аудио' : 'Файл'
-    editor.chain().focus().insertContent(`<a href="${insertUrl.trim()}" target="_blank" rel="noopener">${label}</a>`).run()
-    onImageUpload?.(editor.getHTML())
-    setInsertLoading(false)
-    setInsertDialogType(null)
+  const closeInsert = () => {
+    setInsertType(null)
     setInsertUrl('')
-  }, [editor, isReady, insertUrl, insertDialogType, onImageUpload])
+    setInsertLabel('')
+    setInsertError(null)
+  }
 
-  const runCommand = useCallback((fn: () => void) => {
-    if (!editor || !isReady) return
-    fn()
-    requestAnimationFrame(() => editor.commands.focus())
-  }, [editor, isReady])
+  const openInsert = (type: InsertMediaType) => {
+    setInsertUrl('')
+    setInsertLabel('')
+    setInsertError(null)
+    setInsertType(type)
+  }
 
-  if (!isReady || !editor) return null
+  const submitInsert = (e: React.FormEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (!insertType) return
+    const url = normalizeUrl(insertUrl)
+    if (!url) {
+      setInsertError(URL_ERROR)
+      return
+    }
+    const label = insertLabel.trim() || INSERT_DEFAULT_LABEL[insertType] || url
+    editor.chain().focus().insertContent(buildAnchor(url, label)).run()
+    toast.success('Вставлено в текст')
+    closeInsert()
+  }
+
+  const uploadMedia = async (type: InsertMediaType, file: File) => {
+    setUploadLoading(true)
+    const url = await uploadFile(type, file)
+    setUploadLoading(false)
+    if (!url) return
+    const label = insertLabel.trim() || (type === 'file' ? file.name || 'Файл' : INSERT_DEFAULT_LABEL[type])
+    editor.chain().focus().insertContent(buildAnchor(url, label)).run()
+    closeInsert()
+  }
+
+  const onLinkOpenChange = (open: boolean) => {
+    setLinkOpen(open)
+    if (open) {
+      setLinkUrl((editor.getAttributes('link').href as string | undefined) ?? '')
+      setLinkError(null)
+    }
+  }
+
+  const applyLink = (e: React.FormEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const url = normalizeUrl(linkUrl)
+    if (!url) {
+      setLinkError(URL_ERROR)
+      return
+    }
+    if (editor.state.selection.empty && !editor.isActive('link')) {
+      // Нет выделенного текста — вставляем ссылку с URL в качестве подписи
+      editor.chain().focus().insertContent(buildAnchor(url, url)).run()
+    } else {
+      editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run()
+    }
+    setLinkOpen(false)
+    toast.success('Ссылка добавлена')
+  }
+
+  const removeLink = () => {
+    editor.chain().focus().extendMarkRange('link').unsetLink().run()
+    setLinkOpen(false)
+    toast.success('Ссылка удалена')
+  }
 
   return (
-    <div className="flex flex-wrap items-center gap-0.5 border-b border-border/60 bg-muted/20 px-2 py-1.5">
+    <div
+      role="toolbar"
+      aria-label="Форматирование текста"
+      className="flex flex-wrap items-center gap-0.5 border-b bg-muted/30 px-1.5 py-1"
+    >
       <ToolbarButton
-        onClick={() => runCommand(() => editor.chain().focus().toggleBold().run())}
-        active={editor.isActive('bold')}
-        title="Жирный (Ctrl+B)"
+        label="Отменить (Ctrl+Z)"
+        disabled={!st.canUndo}
+        onClick={() => run(() => editor.chain().focus().undo().run())}
       >
-        <Bold className="h-4 w-4" />
+        <Undo2 />
       </ToolbarButton>
       <ToolbarButton
-        onClick={() => runCommand(() => editor.chain().focus().toggleItalic().run())}
-        active={editor.isActive('italic')}
-        title="Курсив (Ctrl+I)"
+        label="Повторить (Ctrl+Shift+Z)"
+        disabled={!st.canRedo}
+        onClick={() => run(() => editor.chain().focus().redo().run())}
       >
-        <Italic className="h-4 w-4" />
+        <Redo2 />
+      </ToolbarButton>
+      <ToolbarDivider />
+      <ToolbarButton
+        label="Жирный (Ctrl+B)"
+        active={st.bold}
+        onClick={() => run(() => editor.chain().focus().toggleBold().run())}
+      >
+        <Bold />
       </ToolbarButton>
       <ToolbarButton
-        onClick={() => runCommand(() => editor.chain().focus().toggleCode().run())}
-        active={editor.isActive('code')}
-        title="Код (инлайн)"
+        label="Курсив (Ctrl+I)"
+        active={st.italic}
+        onClick={() => run(() => editor.chain().focus().toggleItalic().run())}
       >
-        <Code className="h-4 w-4" />
-      </ToolbarButton>
-      <span className="w-px h-5 bg-border/80 mx-0.5" aria-hidden />
-      <ToolbarButton
-        onClick={() => runCommand(() => editor.chain().focus().toggleHeading({ level: 1 }).run())}
-        active={editor.isActive('heading', { level: 1 })}
-        title="Заголовок 1"
-      >
-        <Heading1 className="h-4 w-4" />
+        <Italic />
       </ToolbarButton>
       <ToolbarButton
-        onClick={() => runCommand(() => editor.chain().focus().toggleHeading({ level: 2 }).run())}
-        active={editor.isActive('heading', { level: 2 })}
-        title="Заголовок 2"
+        label="Код в строке"
+        active={st.code}
+        onClick={() => run(() => editor.chain().focus().toggleCode().run())}
       >
-        <Heading2 className="h-4 w-4" />
+        <Code />
+      </ToolbarButton>
+      <ToolbarDivider />
+      <ToolbarButton
+        label="Заголовок 1"
+        active={st.h1}
+        onClick={() => run(() => editor.chain().focus().toggleHeading({ level: 1 }).run())}
+      >
+        <Heading1 />
       </ToolbarButton>
       <ToolbarButton
-        onClick={() => runCommand(() => editor.chain().focus().toggleHeading({ level: 3 }).run())}
-        active={editor.isActive('heading', { level: 3 })}
-        title="Заголовок 3"
+        label="Заголовок 2"
+        active={st.h2}
+        onClick={() => run(() => editor.chain().focus().toggleHeading({ level: 2 }).run())}
       >
-        <Heading3 className="h-4 w-4" />
-      </ToolbarButton>
-      <span className="w-px h-5 bg-border/80 mx-0.5" aria-hidden />
-      <ToolbarButton
-        onClick={() => runCommand(() => editor.chain().focus().toggleBulletList().run())}
-        active={editor.isActive('bulletList')}
-        title="Маркированный список"
-      >
-        <List className="h-4 w-4" />
+        <Heading2 />
       </ToolbarButton>
       <ToolbarButton
-        onClick={() => runCommand(() => editor.chain().focus().toggleOrderedList().run())}
-        active={editor.isActive('orderedList')}
-        title="Нумерованный список"
+        label="Заголовок 3"
+        active={st.h3}
+        onClick={() => run(() => editor.chain().focus().toggleHeading({ level: 3 }).run())}
       >
-        <ListOrdered className="h-4 w-4" />
+        <Heading3 />
+      </ToolbarButton>
+      <ToolbarDivider />
+      <ToolbarButton
+        label="Маркированный список"
+        active={st.bulletList}
+        onClick={() => run(() => editor.chain().focus().toggleBulletList().run())}
+      >
+        <List />
       </ToolbarButton>
       <ToolbarButton
-        onClick={() => runCommand(() => editor.chain().focus().toggleBlockquote().run())}
-        active={editor.isActive('blockquote')}
-        title="Цитата / Callout"
+        label="Нумерованный список"
+        active={st.orderedList}
+        onClick={() => run(() => editor.chain().focus().toggleOrderedList().run())}
       >
-        <Quote className="h-4 w-4" />
+        <ListOrdered />
       </ToolbarButton>
       <ToolbarButton
-        onClick={() => runCommand(() => editor.chain().focus().toggleCodeBlock().run())}
-        active={editor.isActive('codeBlock')}
-        title="Блок кода"
+        label="Цитата"
+        active={st.blockquote}
+        onClick={() => run(() => editor.chain().focus().toggleBlockquote().run())}
       >
-        <Code className="h-4 w-4" />
+        <Quote />
       </ToolbarButton>
       <ToolbarButton
-        onClick={() => runCommand(() => editor.chain().focus().setHorizontalRule().run())}
-        active={false}
-        title="Разделитель"
+        label="Блок кода"
+        active={st.codeBlock}
+        onClick={() => run(() => editor.chain().focus().toggleCodeBlock().run())}
       >
-        <Minus className="h-4 w-4" />
+        <SquareCode />
       </ToolbarButton>
       <ToolbarButton
-        onClick={() => {
-          const url = window.prompt('Вставьте ссылку:')
-          if (url) runCommand(() => editor.chain().focus().setLink({ href: url }).run())
-        }}
-        active={editor.isActive('link')}
-        title="Ссылка"
+        label="Разделитель"
+        onClick={() => run(() => editor.chain().focus().setHorizontalRule().run())}
       >
-        <LinkIcon className="h-4 w-4" />
+        <Minus />
       </ToolbarButton>
-      <span className="w-px h-5 bg-border/80 mx-0.5" aria-hidden />
+
+      {/* Ссылка */}
+      <Popover open={linkOpen} onOpenChange={onLinkOpenChange}>
+        <Tip label="Ссылка">
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className={cn(TOOL_BTN, st.link && 'bg-accent text-foreground')}
+              aria-label="Ссылка"
+              aria-pressed={st.link}
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              <LinkIcon />
+            </Button>
+          </PopoverTrigger>
+        </Tip>
+        <PopoverContent align="start" className="w-80 p-3">
+          <form onSubmit={applyLink} className="space-y-3" noValidate>
+            <Field label="Адрес ссылки" htmlFor="help-link-url" error={linkError ?? undefined}>
+              <Input
+                id="help-link-url"
+                value={linkUrl}
+                onChange={(e) => {
+                  setLinkUrl(e.target.value)
+                  setLinkError(null)
+                }}
+                placeholder="https://example.com"
+                aria-invalid={!!linkError}
+                autoFocus
+              />
+            </Field>
+            <div className="flex items-center justify-between gap-2">
+              {st.link ? (
+                <Button type="button" variant="ghost" size="sm" onClick={removeLink}>
+                  <Unlink />
+                  Убрать
+                </Button>
+              ) : (
+                <span />
+              )}
+              <Button type="submit" size="sm" disabled={!linkUrl.trim()}>
+                Применить
+              </Button>
+            </div>
+          </form>
+        </PopoverContent>
+      </Popover>
+      <ToolbarDivider />
+
+      {/* Цвет текста */}
       <Popover>
-        <PopoverTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 shrink-0"
-            onMouseDown={(e) => e.preventDefault()}
-            title="Цвет текста"
-          >
-            <Palette className="h-4 w-4" />
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent className="w-48 p-2" align="start">
-          <div className="grid grid-cols-3 gap-1">
+        <Tip label="Цвет текста">
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className={TOOL_BTN}
+              aria-label="Цвет текста"
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              <Palette style={st.textColor ? { color: st.textColor } : undefined} />
+            </Button>
+          </PopoverTrigger>
+        </Tip>
+        <PopoverContent className="w-auto p-2" align="start">
+          <div className="grid grid-cols-5 gap-1.5">
             {TEXT_COLORS.map((c) => (
-              <button
+              <Swatch
                 key={c.value || 'default'}
-                type="button"
-                className={cn(
-                  'h-7 rounded border text-xs',
-                  !c.value && 'border-dashed'
-                )}
-                style={c.value ? { backgroundColor: c.value, borderColor: c.value } : undefined}
-                title={c.name}
-                onMouseDown={(e) => {
-                  e.preventDefault()
+                label={c.name}
+                color={c.value}
+                selected={c.value === st.textColor}
+                onPick={() => {
                   if (c.value) editor.chain().focus().setColor(c.value).run()
                   else editor.chain().focus().unsetColor().run()
                 }}
-              >
-                {!c.value && '×'}
-              </button>
+              />
             ))}
           </div>
         </PopoverContent>
       </Popover>
+
+      {/* Подсветка текста */}
       <Popover>
-        <PopoverTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 shrink-0"
-            onMouseDown={(e) => e.preventDefault()}
-            title="Подсветка текста"
-          >
-            <Highlighter className="h-4 w-4" />
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent className="w-48 p-2" align="start">
-          <div className="grid grid-cols-3 gap-1">
+        <Tip label="Подсветка текста">
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className={TOOL_BTN}
+              aria-label="Подсветка текста"
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              <Highlighter />
+            </Button>
+          </PopoverTrigger>
+        </Tip>
+        <PopoverContent className="w-auto p-2" align="start">
+          <div className="grid grid-cols-6 gap-1.5">
             {HIGHLIGHT_COLORS.map((c) => (
-              <button
+              <Swatch
                 key={c.value || 'none'}
-                type="button"
-                className="h-7 rounded border border-border text-xs"
-                style={c.value ? { backgroundColor: c.value } : undefined}
-                title={c.name}
-                onMouseDown={(e) => {
-                  e.preventDefault()
+                label={c.name}
+                color={c.value}
+                onPick={() => {
                   if (c.value) editor.chain().focus().setHighlight({ color: c.value }).run()
                   else editor.chain().focus().unsetHighlight().run()
                 }}
-              >
-                {!c.value ? '×' : ''}
-              </button>
+              />
             ))}
           </div>
         </PopoverContent>
       </Popover>
+
+      {/* Выноска (callout) */}
       <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 shrink-0"
-            onMouseDown={(e) => e.preventDefault()}
-            title="Выделить блок"
-          >
-            <Square className="h-4 w-4" />
-          </Button>
-        </DropdownMenuTrigger>
+        <Tip label="Выноска">
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className={TOOL_BTN}
+              aria-label="Выноска"
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              <MessageSquareQuote />
+            </Button>
+          </DropdownMenuTrigger>
+        </Tip>
         <DropdownMenuContent align="start" className="min-w-[160px]">
           {BLOCK_HIGHLIGHT_COLORS.map((c) => (
             <DropdownMenuItem
@@ -550,77 +862,58 @@ function HelpEditorToolbar({ onImageUpload }: { onImageUpload?: (html: string) =
                 e.preventDefault()
                 editor.chain().focus().toggleBlockHighlight(c.value).run()
               }}
-              className="gap-2"
             >
               <span
-                className="h-4 w-4 rounded border border-border shrink-0"
-                style={{
-                  backgroundColor:
-                    c.value === 'amber'
-                      ? 'rgb(254 243 199)'
-                      : c.value === 'blue'
-                        ? 'rgb(219 234 254)'
-                        : c.value === 'green'
-                          ? 'rgb(220 252 231)'
-                          : c.value === 'red'
-                            ? 'rgb(254 226 226)'
-                            : c.value === 'violet'
-                              ? 'rgb(237 233 254)'
-                              : 'rgb(241 245 249)',
-                }}
+                className="size-4 shrink-0 rounded-sm border"
+                style={{ backgroundColor: c.swatch }}
+                aria-hidden
               />
               {c.name}
             </DropdownMenuItem>
           ))}
         </DropdownMenuContent>
       </DropdownMenu>
+
+      {/* Иконка */}
       <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 shrink-0"
-            onMouseDown={(e) => e.preventDefault()}
-            title="Вставить иконку"
-          >
-            <Smile className="h-4 w-4" />
-          </Button>
-        </DropdownMenuTrigger>
+        <Tip label="Вставить иконку">
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className={TOOL_BTN}
+              aria-label="Вставить иконку"
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              <Smile />
+            </Button>
+          </DropdownMenuTrigger>
+        </Tip>
         <DropdownMenuContent align="start" className="min-w-[240px] max-h-[340px] p-2">
-          <div className="mb-2">
-            <p className="text-xs text-muted-foreground mb-1.5">Цвет иконки:</p>
-            <div className="flex flex-wrap gap-1">
-              {ICON_COLORS.map((c) => (
-                <button
-                  key={c.value || 'default'}
-                  type="button"
-                  className={cn(
-                    'h-6 w-6 rounded border shrink-0',
-                    !c.value && 'border-dashed'
-                  )}
-                  style={c.value ? { backgroundColor: c.value, borderColor: c.value } : undefined}
-                  title={c.name}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => setIconColor(c.value || null)}
-                >
-                  {!c.value && <span className="text-[10px]">×</span>}
-                </button>
-              ))}
-            </div>
+          <p className="mb-1.5 text-xs text-muted-foreground">Цвет иконки</p>
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {ICON_COLORS.map((c) => (
+              <Swatch
+                key={c.value || 'default'}
+                label={c.name}
+                color={c.value}
+                selected={(c.value || null) === iconColor}
+                onPick={() => setIconColor(c.value || null)}
+              />
+            ))}
           </div>
           <ScrollArea className="h-[220px]">
-            <div className="grid grid-cols-4 gap-1">
+            <div className="grid grid-cols-5 gap-1">
               {HELPDOC_ICON_NAMES.map((name) => (
                 <button
                   key={name}
                   type="button"
-                  className="flex h-9 w-9 items-center justify-center rounded border border-border hover:bg-muted/50"
+                  className="flex size-9 items-center justify-center rounded-md border hover:bg-accent focus-visible:ring-[3px] focus-visible:ring-ring/40 outline-none"
                   title={name}
+                  aria-label={`Иконка ${name}`}
                   onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    runCommand(() => editor.chain().focus().insertHelpIcon(name, iconColor).run())
-                  }}
+                  onClick={() => run(() => editor.chain().focus().insertHelpIcon(name, iconColor).run())}
                   dangerouslySetInnerHTML={{ __html: sanitizeSvgIcon(HELPDOC_ICONS[name] || '') }}
                 />
               ))}
@@ -628,264 +921,157 @@ function HelpEditorToolbar({ onImageUpload }: { onImageUpload?: (html: string) =
           </ScrollArea>
         </DropdownMenuContent>
       </DropdownMenu>
-      <span className="w-px h-5 bg-border/80 mx-0.5" aria-hidden />
+      <ToolbarDivider />
+
+      {/* Вставка: изображение, видео, аудио, файл, закладка */}
       <input
-        ref={inputRef}
+        ref={fileRef}
         type="file"
         accept="image/jpeg,image/png,image/gif,image/webp"
         className="hidden"
         onChange={(e) => {
           const file = e.target.files?.[0]
-          if (file) uploadImage(file)
+          if (file) void uploadImage(file)
           e.target.value = ''
         }}
       />
       <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 shrink-0"
-            onMouseDown={(e) => e.preventDefault()}
-            title="Вставить: изображение, видео, аудио, код, файл, закладка"
-          >
-            <Plus className="h-4 w-4" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="min-w-[200px]">
-          <DropdownMenuItem
-            onMouseDown={(e) => e.preventDefault()}
-            onSelect={(e) => { e.preventDefault(); inputRef.current?.click() }}
-            className="gap-2"
-          >
-            <ImagePlus className="h-4 w-4" />
-            Изображение
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            onMouseDown={(e) => e.preventDefault()}
-            onSelect={(e) => { e.preventDefault(); setInsertDialogType('video'); setInsertUrl('') }}
-            className="gap-2"
-          >
-            <Video className="h-4 w-4" />
-            Видео
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            onMouseDown={(e) => e.preventDefault()}
-            onSelect={(e) => { e.preventDefault(); setInsertDialogType('audio'); setInsertUrl('') }}
-            className="gap-2"
-          >
-            <Music className="h-4 w-4" />
-            Аудио
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            onMouseDown={(e) => e.preventDefault()}
-            onSelect={(e) => { e.preventDefault(); runCommand(() => editor.chain().focus().toggleCodeBlock().run()) }}
-            className="gap-2"
-          >
-            <Code className="h-4 w-4" />
-            Блок кода
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            onMouseDown={(e) => e.preventDefault()}
-            onSelect={(e) => { e.preventDefault(); setInsertDialogType('file'); setInsertUrl('') }}
-            className="gap-2"
-          >
-            <FileText className="h-4 w-4" />
-            Файл
-          </DropdownMenuItem>
+        <Tip label="Вставить: изображение, видео, аудио, файл, закладка">
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className={TOOL_BTN}
+              aria-label="Вставить: изображение, видео, аудио, файл, закладка"
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              <Plus />
+            </Button>
+          </DropdownMenuTrigger>
+        </Tip>
+        <DropdownMenuContent align="start" className="min-w-[180px]">
           <DropdownMenuItem
             onMouseDown={(e) => e.preventDefault()}
             onSelect={(e) => {
               e.preventDefault()
-              setBookmarkUrl('')
-              setBookmarkTitle('')
-              setInsertDialogType('bookmark')
+              fileRef.current?.click()
             }}
-            className="gap-2"
           >
-            <Bookmark className="h-4 w-4" />
+            <ImagePlus />
+            Изображение
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => openInsert('video')}>
+            <Video />
+            Видео
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => openInsert('audio')}>
+            <Music />
+            Аудио
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => openInsert('file')}>
+            <FileText />
+            Файл
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => openInsert('bookmark')}>
+            <Bookmark />
             Веб-закладка
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
 
-      {/* Диалог вставки видео/аудио/файла / веб-закладки */}
-      <Dialog open={insertDialogType !== null} onOpenChange={(open) => {
-        if (!open) {
-          setInsertDialogType(null)
-          setBookmarkUrl('')
-          setBookmarkTitle('')
-        }
-      }}>
-        <DialogContent className="sm:max-w-md" onPointerDownOutside={(e) => e.preventDefault()}>
+      <Dialog open={insertType !== null} onOpenChange={(open) => !open && !uploadLoading && closeInsert()}>
+        <DialogContent
+          className="sm:max-w-md"
+          aria-describedby={undefined}
+          onPointerDownOutside={(e) => e.preventDefault()}
+        >
           <DialogHeader>
-            <DialogTitle>
-              {insertDialogType === 'video' && 'Вставить видео'}
-              {insertDialogType === 'audio' && 'Вставить аудио'}
-              {insertDialogType === 'file' && 'Вставить файл'}
-              {insertDialogType === 'bookmark' && 'Веб-закладка'}
-            </DialogTitle>
+            <DialogTitle>{insertType ? INSERT_TITLES[insertType] : ''}</DialogTitle>
           </DialogHeader>
-          {insertDialogType === 'bookmark' ? (
-            <div className="space-y-4 py-2">
-              <div className="space-y-2">
-                <Label htmlFor="bookmark-url">URL страницы</Label>
-                <Input
-                  id="bookmark-url"
-                  value={bookmarkUrl}
-                  onChange={(e) => setBookmarkUrl(e.target.value)}
-                  placeholder="https://..."
-                  onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), document.getElementById('bookmark-title')?.focus())}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="bookmark-title">Подпись (необязательно)</Label>
-                <Input
-                  id="bookmark-title"
-                  value={bookmarkTitle}
-                  onChange={(e) => setBookmarkTitle(e.target.value)}
-                  placeholder="Текст ссылки"
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault()
-                      const url = bookmarkUrl.trim()
-                      if (url && editor && isReady) {
-                        const title = bookmarkTitle.trim() || url
-                        const safeUrl = url.replace(/"/g, '&quot;')
-                        const safeTitle = title.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-                        editor.chain().focus().insertContent(`<a href="${safeUrl}" target="_blank" rel="noopener">${safeTitle}</a>`).run()
-                        onImageUpload?.(editor.getHTML())
-                        setInsertDialogType(null)
-                        setBookmarkUrl('')
-                        setBookmarkTitle('')
-                      }
-                    }
+          <form onSubmit={submitInsert} className="space-y-4" noValidate>
+            <Field
+              label={insertType === 'bookmark' ? 'Адрес страницы' : 'Ссылка'}
+              htmlFor="help-insert-url"
+              error={insertError ?? undefined}
+            >
+              <Input
+                id="help-insert-url"
+                value={insertUrl}
+                onChange={(e) => {
+                  setInsertUrl(e.target.value)
+                  setInsertError(null)
+                }}
+                placeholder="https://…"
+                disabled={uploadLoading}
+                aria-invalid={!!insertError}
+                autoFocus
+              />
+            </Field>
+            <Field
+              label="Подпись"
+              htmlFor="help-insert-label"
+              hint={
+                insertType === 'bookmark'
+                  ? 'Необязательно. По умолчанию — адрес страницы.'
+                  : `Необязательно. По умолчанию — «${insertType ? INSERT_DEFAULT_LABEL[insertType] : ''}».`
+              }
+            >
+              <Input
+                id="help-insert-label"
+                value={insertLabel}
+                onChange={(e) => setInsertLabel(e.target.value)}
+                placeholder="Текст ссылки"
+                disabled={uploadLoading}
+              />
+            </Field>
+            {insertType && insertType !== 'bookmark' && (
+              <div className="space-y-2 border-t pt-4">
+                <p className="text-[13px] font-medium">Или загрузить файл</p>
+                <input
+                  ref={mediaFileRef}
+                  type="file"
+                  accept={
+                    insertType === 'video'
+                      ? 'video/mp4,video/webm,video/ogg'
+                      : insertType === 'audio'
+                        ? 'audio/mpeg,audio/mp3,audio/wav,audio/ogg,audio/webm,audio/mp4'
+                        : 'application/pdf,.doc,.docx,.xls,.xlsx,text/plain,text/csv'
+                  }
+                  className="hidden"
+                  disabled={uploadLoading}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0]
+                    if (file && insertType) void uploadMedia(insertType, file)
+                    e.target.value = ''
                   }}
                 />
-              </div>
-              <DialogFooter>
-                <Button type="button" variant="outline" onClick={() => setInsertDialogType(null)}>
-                  Отмена
-                </Button>
                 <Button
                   type="button"
-                  disabled={!bookmarkUrl.trim()}
-                  onClick={() => {
-                    const url = bookmarkUrl.trim()
-                    if (!url || !editor || !isReady) return
-                    const title = bookmarkTitle.trim() || url
-                    const safeUrl = url.replace(/"/g, '&quot;')
-                    const safeTitle = title.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-                    editor.chain().focus().insertContent(`<a href="${safeUrl}" target="_blank" rel="noopener">${safeTitle}</a>`).run()
-                    onImageUpload?.(editor.getHTML())
-                    setInsertDialogType(null)
-                    setBookmarkUrl('')
-                    setBookmarkTitle('')
-                  }}
+                  variant="outline"
+                  size="sm"
+                  disabled={uploadLoading}
+                  onClick={() => mediaFileRef.current?.click()}
                 >
-                  Вставить
+                  {uploadLoading && <Loader2 className="animate-spin" />}
+                  {uploadLoading ? 'Загрузка…' : 'Выбрать файл'}
                 </Button>
-              </DialogFooter>
-            </div>
-          ) : (
-            <>
-              <div className="space-y-4 py-2">
-                <div className="space-y-2">
-                  <Label>По ссылке (URL)</Label>
-                  <Input
-                    value={insertUrl}
-                    onChange={(e) => setInsertUrl(e.target.value)}
-                    placeholder="https://..."
-                    disabled={insertLoading || uploadLoading}
-                  />
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={handleInsertByUrl}
-                    disabled={!insertUrl.trim() || insertLoading || uploadLoading}
-                  >
-                    {insertLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-                    Вставить
-                  </Button>
-                </div>
-                <div className="relative border-t pt-4">
-                  <Label className="mb-2 block">Или загрузить файл</Label>
-                  <input
-                    ref={mediaFileRef}
-                    type="file"
-                    accept={
-                      insertDialogType === 'video'
-                        ? 'video/mp4,video/webm,video/ogg'
-                        : insertDialogType === 'audio'
-                          ? 'audio/mpeg,audio/mp3,audio/wav,audio/ogg,audio/webm,audio/mp4'
-                          : 'application/pdf,.doc,.docx,.xls,.xlsx,text/plain,text/csv'
-                    }
-                    className="hidden"
-                    disabled={uploadLoading}
-                    onChange={(e) => {
-                      const file = e.target.files?.[0]
-                      if (file && insertDialogType) {
-                        uploadMediaFile(insertDialogType, file)
-                      }
-                      e.target.value = ''
-                    }}
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={uploadLoading}
-                    onClick={() => mediaFileRef.current?.click()}
-                  >
-                    {uploadLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-                    {uploadLoading ? 'Загрузка…' : 'Выбрать файл'}
-                  </Button>
-                </div>
+                <p className="text-xs text-muted-foreground">
+                  {insertType === 'file' ? 'До 20 МБ: PDF, Word, Excel, TXT, CSV.' : 'До 50 МБ.'}
+                </p>
               </div>
-              <DialogFooter>
-                <Button type="button" variant="outline" onClick={() => setInsertDialogType(null)}>
-                  Отмена
-                </Button>
-              </DialogFooter>
-            </>
-          )}
+            )}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={closeInsert} disabled={uploadLoading}>
+                Отмена
+              </Button>
+              <Button type="submit" disabled={!insertUrl.trim() || uploadLoading}>
+                Вставить
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
     </div>
-  )
-}
-
-function ToolbarButton({
-  onClick,
-  active,
-  title,
-  children,
-}: {
-  onClick: () => void
-  active: boolean
-  title: string
-  children: React.ReactNode
-}) {
-  return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon"
-      className={cn('h-8 w-8 shrink-0', active && 'bg-muted text-foreground')}
-      onMouseDown={(e) => {
-        e.preventDefault()
-        e.stopPropagation()
-        onClick()
-      }}
-      onClick={(e) => {
-        e.preventDefault()
-        e.stopPropagation()
-      }}
-      title={title}
-      aria-label={title}
-    >
-      {children}
-    </Button>
   )
 }

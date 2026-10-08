@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { getCurrentUser } from '@/lib/auth';
+import { getCurrentUser } from '@/lib/api-auth';
 
 /** Сводка по пространствам для админки: активные, в архиве */
 export async function GET() {
@@ -10,7 +10,7 @@ export async function GET() {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
     const role = user.role as string;
-    if (role !== 'SUPPORT' && role !== 'ADM' && role !== 'ADMIN') {
+    if (role !== 'SUP' && role !== 'ADM' && role !== 'LEAD_SUP') {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 

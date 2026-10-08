@@ -1,12 +1,17 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { requireAdmin, isForbiddenError } from '@/lib/auth';
+import { requireAuth } from '@/lib/api-auth';
+import { requireAction } from '@/lib/permissions';
+import { getSystemSettings, getBool } from '@/lib/system-settings';
+import { helpAdminErrorResponse } from '@/lib/help-admin';
 
 const KEYS = ['templatesTabVisible', 'helpMainVisible', 'helpAdminVisible'] as const;
 
+/** Видимость разделов справки/шаблонов — глобальные настройки платформы (SystemSetting). */
 export async function PATCH(request: Request) {
   try {
-    await requireAdmin();
+    const user = await requireAuth();
+    requireAction(user, 'admin:help');
     const body = await request.json().catch(() => ({}));
     for (const key of KEYS) {
       if (body[key] === undefined) continue;
@@ -17,16 +22,13 @@ export async function PATCH(request: Request) {
         update: { value },
       });
     }
-    const rows = await prisma.systemSetting.findMany({ where: { key: { in: [...KEYS] } } });
-    const get = (k: string) => rows.find((r) => r.key === k)?.value ?? 'true';
+    const settings = await getSystemSettings();
     return NextResponse.json({
-      templatesTabVisible: get('templatesTabVisible') !== 'false',
-      helpMainVisible: get('helpMainVisible') !== 'false',
-      helpAdminVisible: get('helpAdminVisible') !== 'false',
+      templatesTabVisible: getBool(settings, 'templatesTabVisible'),
+      helpMainVisible: getBool(settings, 'helpMainVisible'),
+      helpAdminVisible: getBool(settings, 'helpAdminVisible'),
     });
   } catch (e) {
-    if (isForbiddenError(e)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    console.error('Admin help visibility error:', e);
-    return NextResponse.json({ error: 'Failed to update visibility' }, { status: 500 });
+    return helpAdminErrorResponse(e, 'Admin help visibility error:');
   }
 }

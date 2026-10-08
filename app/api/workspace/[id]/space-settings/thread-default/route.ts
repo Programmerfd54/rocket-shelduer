@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
-import { requireAuth } from '@/lib/auth';
+import { requireAuth } from '@/lib/api-auth';
+import { canPerformAction } from '@/lib/permissions';
+import { requireWorkspaceTabAccess } from '@/lib/workspace-tab-access';
 import { getSafeErrorMessage } from '@/lib/security';
 import { getEffectiveConnectionForRc } from '@/lib/workspace-rc';
 import { rcNotConnectedResponse } from '@/lib/rc-http';
@@ -15,7 +17,12 @@ export async function POST(
 ) {
   try {
     const user = await requireAuth();
+    if (!canPerformAction(user, 'workspace:space-settings')) {
+      return NextResponse.json({ error: 'Недостаточно прав' }, { status: 403 });
+    }
     const { id: workspaceId } = await params;
+    const tabAccess = await requireWorkspaceTabAccess(user, workspaceId, 'spaceSettings');
+    if (!tabAccess.ok) return tabAccess.response;
 
     const effective = await getEffectiveConnectionForRc(user.id, workspaceId);
     if (!effective?.authToken || !effective.userId_RC) {

@@ -1,11 +1,17 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { getSafeErrorMessage } from '@/lib/security';
-import { requireAuth } from '@/lib/auth';
+import { requireAuth } from '@/lib/api-auth';
+import { canPerformAction } from '@/lib/permissions';
+import { requireWorkspaceTabAccess } from '@/lib/workspace-tab-access';
 import { RocketChatClient } from '@/lib/rocketchat';
 import { getEffectiveConnectionForRc } from '@/lib/workspace-rc';
 import { rcNotConnectedResponse } from '@/lib/rc-http';
-import { applyHideSystemMessages, getHideSystemMessagesValuesAsync } from '@/lib/space-settings-rc';
+import {
+  applyHideSystemMessages,
+  clearHideSystemMessages,
+  getHideSystemMessagesValuesAsync,
+} from '@/lib/space-settings-rc';
 
 /** POST — создать канал в Rocket.Chat (публичный или приватный) с topic и description. */
 export async function POST(
@@ -14,7 +20,12 @@ export async function POST(
 ) {
   try {
     const user = await requireAuth();
+    if (!canPerformAction(user, 'workspace:channels:create')) {
+      return NextResponse.json({ error: 'Недостаточно прав' }, { status: 403 });
+    }
     const { id: workspaceId } = await params;
+    const tabAccess = await requireWorkspaceTabAccess(user, workspaceId, 'spaceSettings');
+    if (!tabAccess.ok) return tabAccess.response;
     const body = await request.json();
     const name = typeof body?.name === 'string' ? body.name.trim().replace(/^#/, '') : '';
     const topic = typeof body?.topic === 'string' ? body.topic.trim() : '';
@@ -39,12 +50,24 @@ export async function POST(
     }
 
     const baseUrl = effective.workspaceUrl.replace(/\/$/, '');
+    const postCreateWarnings: string[] = [];
+
     if (hideSystemMessages) {
       const res = await applyHideSystemMessages(baseUrl, effective.authToken, effective.userId_RC);
       if (!res.ok) {
-        return NextResponse.json(
-          { error: res.error || 'Не удалось применить скрытие системных сообщений. Создайте канал без этой опции или примените настройку вручную в RC.' },
-          { status: 400 }
+        postCreateWarnings.push(
+          res.permissionDenied
+            ? 'Глобальный список скрытых системных сообщений не обновлён (нет прав admin в RC).'
+            : res.error || 'Не удалось применить глобальное скрытие системных сообщений.'
+        );
+      }
+    } else {
+      const clearRes = await clearHideSystemMessages(baseUrl, effective.authToken, effective.userId_RC);
+      if (!clearRes.ok && !clearRes.skipped) {
+        postCreateWarnings.push(
+          clearRes.permissionDenied
+            ? 'Глобальный список скрытых системных сообщений не сброшен (нет прав admin в RC).'
+            : clearRes.error || 'Не удалось сбросить глобальное скрытие системных сообщений.'
         );
       }
     }
@@ -64,38 +87,88 @@ export async function POST(
           description: description || undefined,
         });
 
+    if (result.warnings?.length) {
+      postCreateWarnings.push(...result.warnings);
+    }
+
+    let roomId = result.roomId;
+
     if (result.error) {
-      return NextResponse.json(
-        { error: result.error },
-        { status: 400 }
-      );
+      const errLower = result.error.toLowerCase();
+      const alreadyExists =
+        errLower.includes('already exists') || errLower.includes('уже существует');
+      if (alreadyExists) {
+        const existing = await rc.getRoomInfoByName(
+          effective.authToken,
+          effective.userId_RC,
+          normalizedName,
+          isPrivate
+        );
+        if (existing.roomId) {
+          roomId = existing.roomId;
+          postCreateWarnings.push('Канал уже существовал в Rocket.Chat — применены настройки к существующему каналу.');
+          if (topic) {
+            const t = await rc.setRoomTopic(
+              effective.authToken,
+              effective.userId_RC,
+              roomId,
+              topic,
+              isPrivate
+            );
+            if (!t.ok) postCreateWarnings.push(`тема: ${t.error || 'ошибка'}`);
+          }
+          if (description) {
+            const d = await rc.setRoomDescription(
+              effective.authToken,
+              effective.userId_RC,
+              roomId,
+              description,
+              isPrivate
+            );
+            if (!d.ok) postCreateWarnings.push(`описание: ${d.error || 'ошибка'}`);
+          }
+        } else {
+          return NextResponse.json(
+            {
+              error: `Канал #${normalizedName} уже есть в Rocket.Chat, но не удалось получить его id: ${result.error}`,
+            },
+            { status: 400 }
+          );
+        }
+      } else {
+        return NextResponse.json({ error: result.error }, { status: 400 });
+      }
+    }
+
+    if (!roomId) {
+      return NextResponse.json({ error: 'Не получен id канала от Rocket.Chat' }, { status: 500 });
     }
 
     if (hideSystemMessages) {
-      // systemMessages в комнате — blacklist: скрываем все кроме «Пользователь заглушен/не заглушен»
-      const toHide = await getHideSystemMessagesValuesAsync(baseUrl, effective.authToken, effective.userId_RC);
-      const roomRes = await rc.saveRoomSettings(
+      const types = await getHideSystemMessagesValuesAsync(
+        baseUrl,
         effective.authToken,
-        effective.userId_RC,
-        result.roomId,
-        { systemMessages: toHide }
+        effective.userId_RC
       );
+      const roomRes = await rc.saveRoomSettings(effective.authToken, effective.userId_RC, roomId, {
+        systemMessages: types,
+      });
       if (!roomRes.success) {
-        return NextResponse.json(
-          { error: roomRes.error || 'Канал создан, но не удалось применить скрытие системных сообщений в комнате.' },
-          { status: 400 }
+        postCreateWarnings.push(
+          roomRes.error || 'не удалось применить скрытие системных сообщений в комнате'
         );
       }
     }
 
-    if (setAsDefault) {
-      const setDefault = isPrivate ? rc.setGroupDefault : rc.setChannelDefault;
-      const defRes = await setDefault.call(rc, effective.authToken, effective.userId_RC, result.roomId, true);
+    if (setAsDefault && !isPrivate) {
+      const defRes = await rc.setChannelDefault(
+        effective.authToken,
+        effective.userId_RC,
+        roomId,
+        true
+      );
       if (!defRes.ok) {
-        return NextResponse.json(
-          { error: defRes.error || 'Канал создан, но не удалось сделать каналом по умолчанию.' },
-          { status: 400 }
-        );
+        postCreateWarnings.push(defRes.error || 'не удалось сделать каналом по умолчанию');
       }
     }
 
@@ -104,15 +177,21 @@ export async function POST(
         workspaceId,
         userId: user.id,
         action: 'channel_create',
-        details: JSON.stringify({ roomId: result.roomId, channelName: normalizedName, rcUsername: effective.rcUsername }),
+        details: JSON.stringify({ roomId, channelName: normalizedName, rcUsername: effective.rcUsername }),
       },
     }).catch(() => {});
 
+    const warningText = postCreateWarnings.length
+      ? `${postCreateWarnings.join(' ')} При необходимости нажмите «Применить настройки» в списке каналов.`
+      : undefined;
+
     return NextResponse.json({
       success: true,
-      roomId: result.roomId,
+      roomId,
       name: normalizedName,
       isPrivate,
+      partial: postCreateWarnings.length > 0,
+      ...(warningText ? { warning: warningText } : {}),
     });
   } catch (error) {
     console.error('Create channel error:', error);

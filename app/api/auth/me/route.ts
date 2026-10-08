@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { getCurrentUser, isUserEffectivelyBlocked } from '@/lib/auth';
+import { getCurrentUser, isUserEffectivelyBlocked, reissueSessionToken } from '@/lib/auth';
 
 export async function GET() {
   try {
@@ -13,6 +13,18 @@ export async function GET() {
       );
     }
 
+    // Синхронизация флага «нужна смена пароля» в JWT с БД (middleware опирается на флаг в токене):
+    // например, админ сбросил пароль при живой сессии или флаг сняли в БД.
+    const needsChange = user.requirePasswordChange === true;
+    if (user.sessionId && user.sessionExpiresAt && needsChange !== (user.tokenRequiresPasswordChange === true)) {
+      await reissueSessionToken({
+        user: { id: user.id, email: user.email, role: user.role },
+        sessionId: user.sessionId,
+        expiresAt: user.sessionExpiresAt,
+        requirePasswordChange: needsChange,
+      });
+    }
+
     const blocked = isUserEffectivelyBlocked(user);
     let adminContact: string | null = null;
     if (blocked) {
@@ -21,7 +33,8 @@ export async function GET() {
       });
       adminContact = row?.value?.trim() || null;
     }
-    const { sessionId, ...safeUser } = user;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { sessionId, sessionExpiresAt, tokenRequiresPasswordChange, ...safeUser } = user;
     return NextResponse.json({
       user: {
         ...safeUser,

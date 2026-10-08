@@ -1,15 +1,14 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { requireAuth } from '@/lib/auth';
-import yaml from 'js-yaml';
+import { workspaceTabForbiddenResponse } from '@/lib/workspace-tab-access';
+import { resolveWorkspaceForEmojiImport } from '@/lib/emoji-import-access';
+import { getSafeErrorMessage, isUnsafeId } from '@/lib/security';
+import { safeFetchPublic, SafeFetchError } from '@/lib/emoji-safe-fetch';
+import { parseEmojiCatalog, EMOJI_CATALOG_MAX_BYTES } from '@/lib/emoji-catalog';
 
 const DEFAULT_YAML_URL =
   'https://raw.githubusercontent.com/Programmerfd54/emoji/refs/heads/main/emojis.yaml';
-
-interface YamlEmoji {
-  name: string;
-  src: string;
-}
 
 export async function POST(
   request: Request,
@@ -18,28 +17,36 @@ export async function POST(
   try {
     const user = await requireAuth();
     const { id: workspaceId } = await params;
+    if (isUnsafeId(workspaceId)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
+    const tabDenied = await workspaceTabForbiddenResponse(user, 'emojiImport');
+    if (tabDenied) return tabDenied;
 
-    const workspace = await prisma.workspaceConnection.findFirst({
-      where: { id: workspaceId, userId: user.id },
-    });
+    const workspace = await resolveWorkspaceForEmojiImport(user.id, workspaceId);
     if (!workspace) {
       return NextResponse.json({ error: 'Workspace not found' }, { status: 404 });
     }
 
     const body = await request.json().catch(() => ({}));
-    const yamlUrl = (body.yamlUrl as string)?.trim() || DEFAULT_YAML_URL;
+    const yamlUrl = (typeof body.yamlUrl === 'string' ? body.yamlUrl.trim() : '') || DEFAULT_YAML_URL;
 
-    const yamlRes = await fetch(yamlUrl, { signal: AbortSignal.timeout(15000) });
+    // SSRF: только публичные http(s)-адреса, редиректы проверяются, размер ограничен.
+    let yamlRes;
+    try {
+      yamlRes = await safeFetchPublic(yamlUrl, { maxBytes: EMOJI_CATALOG_MAX_BYTES, timeoutMs: 15000 });
+    } catch (e) {
+      if (e instanceof SafeFetchError) {
+        return NextResponse.json({ error: e.message }, { status: 400 });
+      }
+      throw e;
+    }
     if (!yamlRes.ok) {
       return NextResponse.json(
-        { error: `Не удалось загрузить каталог: ${yamlRes.statusText}` },
+        { error: `Не удалось загрузить каталог: HTTP ${yamlRes.status}` },
         { status: 502 }
       );
     }
 
-    const yamlText = await yamlRes.text();
-    const parsed = yaml.load(yamlText) as { emojis?: YamlEmoji[] };
-    const emojis: YamlEmoji[] = Array.isArray(parsed?.emojis) ? parsed.emojis : [];
+    const { emojis } = parseEmojiCatalog(new TextDecoder('utf-8', { fatal: false }).decode(yamlRes.body));
     const names = emojis.map((e) => e.name);
 
     return NextResponse.json({
@@ -49,7 +56,7 @@ export async function POST(
   } catch (error: any) {
     console.error('Emoji preview error:', error);
     return NextResponse.json(
-      { error: error?.message || 'Не удалось загрузить каталог' },
+      { error: getSafeErrorMessage(error, 'Не удалось загрузить каталог') },
       { status: 500 }
     );
   }

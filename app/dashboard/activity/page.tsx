@@ -1,354 +1,252 @@
 "use client"
 
-import { useState, useEffect } from 'react'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { History, RefreshCw, SearchX } from 'lucide-react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select"
-import {
-  History,
-  User,
-  Server,
-  MessageSquare,
-  Settings,
-  Shield,
-  LogIn,
-  LogOut,
-  Plus,
-  Edit,
-  Trash2,
-  Send,
-  XCircle,
-  RefreshCw,
-  Filter
-} from 'lucide-react'
-import { toast } from 'sonner'
-import { formatRelativeTime } from '@/lib/utils'
+} from '@/components/ui/select'
+import { PageContainer, PageHeader } from '@/components/common/PageHeader'
 import { Breadcrumbs } from '@/components/common/Breadcrumbs'
+import { EmptyState } from '@/components/common/EmptyState'
+import {
+  ActivityFeed,
+  ActivityFeedSkeleton,
+  ACTIVITY_FILTER_GROUPS,
+  ACTIVITY_LABELS,
+  type ActivityLogEntry,
+} from '@/components/_components/activity'
 
-const activityIcons: Record<string, any> = {
-  USER_LOGIN: LogIn,
-  USER_LOGOUT: LogOut,
-  USER_REGISTER: User,
-  WORKSPACE_CREATED: Plus,
-  WORKSPACE_UPDATED: Edit,
-  WORKSPACE_DELETED: Trash2,
-  WORKSPACE_CONNECTED: Server,
-  MESSAGE_CREATED: Plus,
-  MESSAGE_UPDATED: Edit,
-  MESSAGE_DELETED: Trash2,
-  MESSAGE_SENT: Send,
-  MESSAGE_FAILED: XCircle,
-  SETTINGS_UPDATED: Settings,
-  PASSWORD_CHANGED: Shield,
-  ADMIN_ACTION: Shield,
-}
+type Scope = 'me' | 'vol' | 'all'
+type Period = 'all' | 'today' | '7d' | '30d'
 
-const activityColors: Record<string, string> = {
-  USER_LOGIN: 'bg-blue-500/10 text-blue-500',
-  USER_LOGOUT: 'bg-gray-500/10 text-gray-500',
-  USER_REGISTER: 'bg-green-500/10 text-green-500',
-  WORKSPACE_CREATED: 'bg-purple-500/10 text-purple-500',
-  WORKSPACE_UPDATED: 'bg-yellow-500/10 text-yellow-500',
-  WORKSPACE_DELETED: 'bg-red-500/10 text-red-500',
-  WORKSPACE_CONNECTED: 'bg-blue-500/10 text-blue-500',
-  MESSAGE_CREATED: 'bg-green-500/10 text-green-500',
-  MESSAGE_UPDATED: 'bg-yellow-500/10 text-yellow-500',
-  MESSAGE_DELETED: 'bg-red-500/10 text-red-500',
-  MESSAGE_SENT: 'bg-green-500/10 text-green-500',
-  MESSAGE_FAILED: 'bg-red-500/10 text-red-500',
-  SETTINGS_UPDATED: 'bg-blue-500/10 text-blue-500',
-  PASSWORD_CHANGED: 'bg-purple-500/10 text-purple-500',
-  ADMIN_ACTION: 'bg-red-500/10 text-red-500',
-}
+const PERIOD_OPTIONS: { value: Period; label: string }[] = [
+  { value: 'all', label: 'За всё время' },
+  { value: 'today', label: 'Сегодня' },
+  { value: '7d', label: 'Последние 7 дней' },
+  { value: '30d', label: 'Последние 30 дней' },
+]
 
-const activityLabels: Record<string, string> = {
-  USER_LOGIN: 'Вход в систему',
-  USER_LOGOUT: 'Выход из системы',
-  USER_REGISTER: 'Регистрация',
-  WORKSPACE_CREATED: 'Создано пространство',
-  WORKSPACE_UPDATED: 'Обновлено пространство',
-  WORKSPACE_DELETED: 'Удалено пространство',
-  WORKSPACE_CONNECTED: 'Подключение к пространству',
-  MESSAGE_CREATED: 'Создано сообщение',
-  MESSAGE_UPDATED: 'Обновлено сообщение',
-  MESSAGE_DELETED: 'Удалено сообщение',
-  MESSAGE_SENT: 'Отправлено сообщение',
-  MESSAGE_FAILED: 'Ошибка отправки',
-  SETTINGS_UPDATED: 'Обновлены настройки',
-  PASSWORD_CHANGED: 'Изменён пароль',
-  ADMIN_ACTION: 'Действие администратора',
+const API_LIMIT = 200
+
+function periodStart(period: Period): number | null {
+  const now = new Date()
+  if (period === 'today') return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  if (period === '7d') return now.getTime() - 7 * 86400000
+  if (period === '30d') return now.getTime() - 30 * 86400000
+  return null
 }
 
 export default function ActivityPage() {
-  const [logs, setLogs] = useState([])
+  const [logs, setLogs] = useState<ActivityLogEntry[]>([])
   const [loading, setLoading] = useState(true)
+  const [failed, setFailed] = useState(false)
   const [filterAction, setFilterAction] = useState('all')
-  const [scope, setScope] = useState<'me' | 'vol' | 'all'>('me')
+  const [period, setPeriod] = useState<Period>('all')
+  const [scope, setScope] = useState<Scope>('me')
   const [userRole, setUserRole] = useState<string | null>(null)
+  const requestId = useRef(0)
 
   useEffect(() => {
     fetch('/api/auth/me')
       .then((r) => (r.ok ? r.json() : {}))
       .then((d: { user?: { role?: string } }) => setUserRole(d?.user?.role ?? null))
+      .catch(() => setUserRole(null))
   }, [])
 
-  useEffect(() => {
-    loadLogs()
-  }, [filterAction, scope, userRole])
-
-  const loadLogs = async () => {
+  const loadLogs = useCallback(async () => {
+    const id = ++requestId.current
     setLoading(true)
+    setFailed(false)
     try {
       const params = new URLSearchParams()
       if (filterAction && filterAction !== 'all') params.set('action', filterAction)
-      if (scope === 'vol' && userRole === 'SUPPORT') params.set('scope', 'vol')
-      if (scope === 'all' && userRole === 'ADMIN') params.set('scope', 'all')
+      if (scope === 'vol' && userRole === 'SUP') params.set('scope', 'vol')
+      if (scope === 'all' && userRole === 'LEAD_SUP') params.set('scope', 'all')
       const url = `/api/activity${params.toString() ? `?${params}` : ''}`
       const response = await fetch(url)
-      if (response.ok) {
-        const data = await response.json()
-        setLogs(data.logs)
-      }
-    } catch (error) {
-      toast.error('Ошибка загрузки логов')
+      if (id !== requestId.current) return
+      if (!response.ok) throw new Error('bad status')
+      const data = await response.json()
+      setLogs(data.logs ?? [])
+    } catch {
+      if (id !== requestId.current) return
+      setFailed(true)
+      toast.error('Не удалось загрузить историю', { description: 'Проверьте соединение и нажмите «Обновить».' })
     } finally {
-      setLoading(false)
+      if (id === requestId.current) setLoading(false)
     }
+  }, [filterAction, scope, userRole])
+
+  useEffect(() => {
+    loadLogs()
+  }, [loadLogs])
+
+  const visibleLogs = useMemo(() => {
+    const from = periodStart(period)
+    if (from == null) return logs
+    return logs.filter((l) => new Date(l.createdAt).getTime() >= from)
+  }, [logs, period])
+
+  const counts = useMemo(
+    () => ({
+      messages: visibleLogs.filter((l) => l.action.startsWith('MESSAGE_')).length,
+      workspaces: visibleLogs.filter((l) => l.action.startsWith('WORKSPACE_')).length,
+      errors: visibleLogs.filter((l) => l.action === 'MESSAGE_FAILED').length,
+    }),
+    [visibleLogs],
+  )
+
+  const filtersActive = filterAction !== 'all' || period !== 'all'
+  const resetFilters = () => {
+    setFilterAction('all')
+    setPeriod('all')
   }
 
-  const groupLogsByDate = (logs: any[]) => {
-    const grouped: Record<string, any[]> = {}
-    
-    logs.forEach(log => {
-      const date = new Date(log.createdAt).toLocaleDateString('ru-RU', {
-        day: 'numeric',
-        month: 'long',
-        year: 'numeric',
-      })
-      
-      if (!grouped[date]) {
-        grouped[date] = []
-      }
-      grouped[date].push(log)
-    })
-    
-    return grouped
-  }
-
-  const groupedLogs = groupLogsByDate(logs)
+  const canChooseScope = userRole === 'SUP' || userRole === 'LEAD_SUP'
+  const showSkeleton = loading && logs.length === 0
 
   return (
-    <div className="p-6 space-y-6">
-      <Breadcrumbs
-        items={[
-          { label: 'Дашборд', href: '/dashboard' },
-          { label: 'История действий', current: true },
-        ]}
-        className="mb-2"
+    <PageContainer>
+      <PageHeader
+        breadcrumbs={
+          <Breadcrumbs
+            items={[
+              { label: 'Дашборд', href: '/dashboard' },
+              { label: 'История действий', current: true },
+            ]}
+          />
+        }
+        title="История действий"
+        description="Журнал входов, изменений и отправки сообщений."
+        actions={
+          <Button variant="outline" size="sm" onClick={loadLogs} disabled={loading}>
+            <RefreshCw className={loading ? 'animate-spin' : undefined} aria-hidden />
+            Обновить
+          </Button>
+        }
       />
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold">История действий</h1>
-          <p className="text-muted-foreground mt-1">
-            Все события и активность в системе
-          </p>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          {(userRole === 'SUPPORT' || userRole === 'ADMIN') && (
-            <Select value={scope} onValueChange={(v: 'me' | 'vol' | 'all') => setScope(v)}>
-              <SelectTrigger className="w-[180px]">
-                <User className="w-4 h-4 mr-2" />
+
+      {/* Фильтры */}
+      <div className="mb-4 flex flex-wrap items-end gap-3">
+        {canChooseScope && (
+          <div className="space-y-1.5">
+            <Label htmlFor="activity-scope" className="text-[13px] font-medium">Чьи события</Label>
+            <Select value={scope} onValueChange={(v: Scope) => setScope(v)}>
+              <SelectTrigger id="activity-scope" size="sm" className="w-[190px]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="me">Моя активность</SelectItem>
-                {userRole === 'SUPPORT' && <SelectItem value="vol">Волонтёры (VOL)</SelectItem>}
-                {userRole === 'ADMIN' && <SelectItem value="all">Вся активность</SelectItem>}
+                <SelectItem value="me">Только мои</SelectItem>
+                {userRole === 'SUP' && <SelectItem value="vol">Волонтёры</SelectItem>}
+                {userRole === 'LEAD_SUP' && <SelectItem value="all">Все пользователи</SelectItem>}
               </SelectContent>
             </Select>
-          )}
+          </div>
+        )}
+        <div className="space-y-1.5">
+          <Label htmlFor="activity-type" className="text-[13px] font-medium">Тип события</Label>
           <Select value={filterAction} onValueChange={setFilterAction}>
-            <SelectTrigger className="w-[200px]">
-              <Filter className="w-4 h-4 mr-2" />
-              <SelectValue placeholder="Все действия" />
+            <SelectTrigger id="activity-type" size="sm" className="w-[230px]">
+              <SelectValue placeholder="Все события" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">Все действия</SelectItem>
-              <SelectItem value="USER_LOGIN">Входы</SelectItem>
-              <SelectItem value="WORKSPACE_CREATED">Создание пространств</SelectItem>
-              <SelectItem value="MESSAGE_CREATED">Создание сообщений</SelectItem>
-              <SelectItem value="MESSAGE_SENT">Отправка сообщений</SelectItem>
-              <SelectItem value="MESSAGE_FAILED">Ошибки</SelectItem>
+              <SelectItem value="all">Все события</SelectItem>
+              {ACTIVITY_FILTER_GROUPS.map((group) => (
+                <SelectGroup key={group.label}>
+                  <SelectLabel>{group.label}</SelectLabel>
+                  {group.actions.map((a) => (
+                    <SelectItem key={a} value={a}>
+                      {ACTIVITY_LABELS[a] ?? a}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              ))}
             </SelectContent>
           </Select>
-          <Button variant="outline" onClick={loadLogs}>
-            <RefreshCw className="w-4 h-4" />
-          </Button>
         </div>
-      </div>
-
-      {/* Stats */}
-      <div className="grid gap-4 md:grid-cols-4">
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-blue-500/10 rounded-lg flex items-center justify-center">
-                <History className="w-5 h-5 text-blue-500" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold">{logs.length}</p>
-                <p className="text-xs text-muted-foreground">Всего событий</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-green-500/10 rounded-lg flex items-center justify-center">
-                <MessageSquare className="w-5 h-5 text-green-500" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold">
-                  {logs.filter((l: any) => l.action.startsWith('MESSAGE_')).length}
-                </p>
-                <p className="text-xs text-muted-foreground">Сообщения</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-purple-500/10 rounded-lg flex items-center justify-center">
-                <Server className="w-5 h-5 text-purple-500" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold">
-                  {logs.filter((l: any) => l.action.startsWith('WORKSPACE_')).length}
-                </p>
-                <p className="text-xs text-muted-foreground">Пространства</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-red-500/10 rounded-lg flex items-center justify-center">
-                <XCircle className="w-5 h-5 text-red-500" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold">
-                  {logs.filter((l: any) => l.action === 'MESSAGE_FAILED').length}
-                </p>
-                <p className="text-xs text-muted-foreground">Ошибки</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Activity Log */}
-      <Card className="border-muted">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <History className="w-5 h-5 text-primary" />
-            Лог событий
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {logs.length === 0 ? (
-            <div className="text-center py-16">
-              <History className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
-              <p className="text-muted-foreground">
-                {filterAction && filterAction !== 'all' ? 'Нет событий с выбранным фильтром' : 'Нет событий'}
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-8">
-              {Object.entries(groupedLogs).map(([date, dateLogs]) => (
-                <div key={date}>
-                  <h3 className="text-sm font-semibold text-muted-foreground mb-4 uppercase">
-                    {date}
-                  </h3>
-                  <div className="space-y-4">
-                    {dateLogs.map((log: any) => {
-                      const Icon = activityIcons[log.action] || History
-                      const colorClass = activityColors[log.action] || 'bg-gray-500/10 text-gray-500'
-                      
-                      let details = null
-                      try {
-                        details = log.details ? JSON.parse(log.details) : null
-                      } catch {
-                        details = { message: log.details }
-                      }
-                      
-                      return (
-                        <div
-                          key={log.id}
-                          className="flex items-start gap-4 p-4 border rounded-lg hover:bg-muted/50 transition-colors"
-                        >
-                          <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${colorClass}`}>
-                            <Icon className="w-5 h-5" />
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-start justify-between gap-2">
-                              <div className="flex-1">
-                                <p className="font-medium">
-                                  {activityLabels[log.action] || log.action}
-                                </p>
-                                {log.user && (
-                                  <p className="text-xs text-muted-foreground mt-1">
-                                    {log.user.name || log.user.email}
-                                    {log.user.role && (
-                                      <Badge variant="outline" className="ml-2 text-[10px] font-normal">
-                                        {log.user.role}
-                                      </Badge>
-                                    )}
-                                  </p>
-                                )}
-                                {details && details.message && (
-                                  <p className="text-sm text-muted-foreground mt-1">
-                                    {details.message}
-                                  </p>
-                                )}
-                              </div>
-                              <span className="text-xs text-muted-foreground whitespace-nowrap">
-                                {formatRelativeTime(log.createdAt)}
-                              </span>
-                            </div>
-                            {log.entityType && (
-                              <div className="flex items-center gap-2 mt-2">
-                                <Badge variant="secondary" className="text-xs">
-                                  {log.entityType}
-                                </Badge>
-                                {log.ipAddress && log.ipAddress !== 'unknown' && (
-                                  <span className="text-xs text-muted-foreground font-mono">
-                                    {log.ipAddress}
-                                  </span>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="activity-period" className="text-[13px] font-medium">Период</Label>
+          <Select value={period} onValueChange={(v: Period) => setPeriod(v)}>
+            <SelectTrigger id="activity-period" size="sm" className="w-[190px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {PERIOD_OPTIONS.map((o) => (
+                <SelectItem key={o.value} value={o.value}>
+                  {o.label}
+                </SelectItem>
               ))}
-            </div>
+            </SelectContent>
+          </Select>
+        </div>
+        {filtersActive && (
+          <Button variant="ghost" size="sm" onClick={resetFilters}>
+            Сбросить
+          </Button>
+        )}
+      </div>
+
+      {/* Сводка */}
+      {!showSkeleton && !failed && visibleLogs.length > 0 && (
+        <p className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-muted-foreground">
+          <span>
+            Событий: <span className="font-medium text-foreground">{visibleLogs.length}</span>
+          </span>
+          <span>
+            Сообщения: <span className="font-medium text-foreground">{counts.messages}</span>
+          </span>
+          <span>
+            Пространства: <span className="font-medium text-foreground">{counts.workspaces}</span>
+          </span>
+          {counts.errors > 0 && <Badge variant="danger">Ошибок отправки: {counts.errors}</Badge>}
+        </p>
+      )}
+
+      {/* Журнал */}
+      {showSkeleton ? (
+        <ActivityFeedSkeleton />
+      ) : failed && logs.length === 0 ? (
+        <EmptyState
+          icon={<History />}
+          title="Не удалось загрузить историю"
+          description="Проверьте соединение и попробуйте ещё раз."
+          action={{ label: 'Повторить', onClick: loadLogs }}
+        />
+      ) : visibleLogs.length === 0 ? (
+        filtersActive ? (
+          <EmptyState
+            icon={<SearchX />}
+            title="Ничего не найдено"
+            description="Нет событий с выбранными фильтрами. Измените тип события или период."
+            action={{ label: 'Сбросить фильтры', onClick: resetFilters }}
+          />
+        ) : (
+          <EmptyState
+            icon={<History />}
+            title="Пока нет событий"
+            description="Здесь появятся входы, действия с пространствами и отправленные сообщения."
+          />
+        )
+      ) : (
+        <div className={loading ? 'opacity-60 transition-opacity' : 'transition-opacity'}>
+          <ActivityFeed logs={visibleLogs} />
+          {logs.length >= API_LIMIT && (
+            <p className="mt-3 text-xs text-muted-foreground">
+              Показаны последние {API_LIMIT} событий. Чтобы найти более старые, уточните тип события.
+            </p>
           )}
-        </CardContent>
-      </Card>
-    </div>
+        </div>
+      )}
+    </PageContainer>
   )
 }

@@ -20,6 +20,12 @@ export function HelpHtmlContent({
     if (typeof window === 'undefined' || !ref.current) return
     const root = ref.current
     const origin = window.location.origin
+    root.querySelectorAll('img').forEach((img) => {
+      if (!img.hasAttribute('loading')) img.setAttribute('loading', 'lazy')
+    })
+    root.querySelectorAll('a[target="_blank"]').forEach((a) => {
+      a.setAttribute('rel', 'noopener noreferrer')
+    })
     root.querySelectorAll('img[src^="/"]').forEach((img) => {
       const src = img.getAttribute('src')
       if (src && src.startsWith('/') && !src.startsWith('//')) {
@@ -57,7 +63,7 @@ export function HelpHtmlContent({
   return (
     <div
       ref={ref}
-      className={cn('help-content prose prose-sm dark:prose-invert max-w-none', className)}
+      className={cn('help-content prose prose-sm dark:prose-invert max-w-none break-words', className)}
       dangerouslySetInnerHTML={{ __html: sanitized }}
     />
   )

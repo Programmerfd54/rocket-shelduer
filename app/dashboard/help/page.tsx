@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation'
 export default function HelpRedirectPage() {
   const router = useRouter()
   useEffect(() => {
-    router.replace('/dashboard/admin/help')
+    router.replace('/dashboard')
   }, [router])
   return null
 }

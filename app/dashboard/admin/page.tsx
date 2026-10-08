@@ -1,1347 +1,763 @@
 "use client"
 
-import { useState, useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
-import { Badge } from "@/components/ui/badge"
-import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar"
+import Link from 'next/link'
+import { toast } from 'sonner'
+import { Ban, CalendarPlus, Key, Loader2, MoreHorizontal, Pencil, Search, ShieldOff, SlidersHorizontal, UserPlus, Users, X } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import { toast } from 'sonner'
-import { Loader2, ArrowLeft, MoreVertical, Shield, ShieldOff, Key, Ban, Users, Activity, UserPlus, Pencil, CalendarPlus, Search, ClipboardCopy, FileText, Server, Archive, ShieldCheck, BookOpen, Heart } from 'lucide-react'
-import { CopyButton } from '@/components/common/CopyButton'
-import Link from 'next/link'
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+} from '@/components/ui/dropdown-menu'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Field } from '@/components/ui/field'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
 import { Checkbox } from '@/components/ui/checkbox'
-import { getInitials, generateAvatarColor, formatRelativeTime, formatDate } from '@/lib/utils'
-import { Breadcrumbs } from '@/components/common/Breadcrumbs'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { CopyButton } from '@/components/common/CopyButton'
+import { EmptyState } from '@/components/common/EmptyState'
+import { ConfirmDialog } from '@/components/common/ConfirmDialog'
+import { PageContainer, PageHeader } from '@/components/common/PageHeader'
+import { AddUserDialog } from '@/components/admin/AddUserDialog'
+import { cn, getInitials, generateAvatarColor, formatRelativeTime, formatDate } from '@/lib/utils'
+import { APP_ROLES, ROLE_LABELS, canManageUserWithRole, canSeeAdminPanel, inviteAssignableRoles, isVolunteerMember, type AppRole } from '@/lib/roles'
 
-const ROLES = [
-  { value: 'USER', label: 'USER' },
-  { value: 'SUPPORT', label: 'SUPPORT' },
-  { value: 'ADMIN', label: 'ADMIN' },
-  { value: 'ADM', label: 'ADM' },
-  { value: 'VOL', label: 'VOL' },
+type AdminUser = {
+  id: string
+  email: string
+  username: string | null
+  name: string | null
+  avatarUrl: string | null
+  role: string
+  restrictedFeatures: string[]
+  isBlocked: boolean
+  blockedReason: string | null
+  volunteerExpiresAt: string | null
+  volunteerIntensive: string | null
+  requirePasswordChange?: boolean
+  lastLoginAt: string | null
+  createdAt: string
+  _count?: { workspaces: number; scheduledMessages: number }
+}
+
+type CurrentUser = { id: string; role: string; restrictedFeatures?: string[] }
+
+const PAGE_SIZE = 20
+
+const RESTRICTIONS: { key: string; label: string; hint: string }[] = [
+  { key: 'sendAs', label: 'Запретить «Отправить от имени»', hint: 'Не сможет планировать сообщения от имени других' },
+  { key: 'activityView', label: 'Запретить просмотр чужой активности', hint: 'SUP не увидит активность волонтёров; ADM — чужую активность' },
+  { key: 'adminPanel', label: 'Запретить доступ в админ панель', hint: 'Скрыть раздел «Пользователи»' },
 ]
 
-export default function AdminPage() {
+const EXPIRING_DAYS = 7
+const DAY_MS = 24 * 60 * 60 * 1000
+
+/** Волонтёр, у которого доступ истёк или истекает в ближайшие 7 дней. */
+function isExpiringVolunteer(u: { role: string; volunteerExpiresAt: string | null }): boolean {
+  if (!isVolunteerMember(u) || !u.volunteerExpiresAt) return false
+  return new Date(u.volunteerExpiresAt).getTime() <= Date.now() + EXPIRING_DAYS * DAY_MS
+}
+
+function roleBadgeVariant(role: string): 'default' | 'info' | 'secondary' | 'muted' {
+  if (role === 'LEAD_SUP') return 'default'
+  if (role === 'SUP') return 'info'
+  if (role === 'ADM') return 'secondary'
+  return 'muted'
+}
+
+export default function AdminUsersPage() {
   const router = useRouter()
   const [loading, setLoading] = useState(true)
-  const [users, setUsers] = useState<any[]>([])
-  const [currentUser, setCurrentUser] = useState<any>(null)
+  const [loadError, setLoadError] = useState(false)
+  const [users, setUsers] = useState<AdminUser[]>([])
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null)
+  const [workspaceStats, setWorkspaceStats] = useState<{ active: number; archived: number } | null>(null)
 
-  const [createOpen, setCreateOpen] = useState(false)
-  const [createLoading, setCreateLoading] = useState(false)
-  const [createInviteLink, setCreateInviteLink] = useState<string | null>(null)
-  const [createForm, setCreateForm] = useState({
-    login: '',
-    role: 'USER',
-  })
-
-  const [editRoleUser, setEditRoleUser] = useState<any>(null)
-  const [editRoleLoading, setEditRoleLoading] = useState(false)
-  const [editRoleForm, setEditRoleForm] = useState({ role: 'USER', volunteerExpiresAt: '', volunteerIntensive: '' })
-
-  const [blockUser, setBlockUser] = useState<any>(null)
-  const [blockReason, setBlockReason] = useState('')
-  const [blockLoading, setBlockLoading] = useState(false)
+  const [addOpen, setAddOpen] = useState(false)
 
   const [searchQuery, setSearchQuery] = useState('')
   const [roleFilter, setRoleFilter] = useState<string>('all')
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [sortBy, setSortBy] = useState<string>('createdAt')
   const [page, setPage] = useState(1)
-  const [activeTab, setActiveTab] = useState<'all' | 'expiring'>('all')
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
-  const [bulkExtendLoading, setBulkExtendLoading] = useState(false)
-  const [editRoleConfirmSup, setEditRoleConfirmSup] = useState(false)
+
+  const [blockUser, setBlockUser] = useState<AdminUser | null>(null)
+  const [blockReason, setBlockReason] = useState('')
+  const [unblockUser, setUnblockUser] = useState<AdminUser | null>(null)
+  const [resetUser, setResetUser] = useState<AdminUser | null>(null)
+  const [actionLoading, setActionLoading] = useState(false)
   const [resetPasswordResult, setResetPasswordResult] = useState<{ email: string; newPassword: string } | null>(null)
 
-  const [systemSettings, setSystemSettings] = useState<Record<string, string>>({})
-  const [systemSettingsLoading, setSystemSettingsLoading] = useState(false)
-  const [restrictUser, setRestrictUser] = useState<any>(null)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [extendUser, setExtendUser] = useState<AdminUser | null>(null)
+  const [bulkExtendOpen, setBulkExtendOpen] = useState(false)
+
+  const [restrictUser, setRestrictUser] = useState<AdminUser | null>(null)
   const [restrictForm, setRestrictForm] = useState<string[]>([])
-  const [restrictLoading, setRestrictLoading] = useState(false)
-  const [workspaceStats, setWorkspaceStats] = useState<{ active: number; archived: number } | null>(null)
-  const [loadError, setLoadError] = useState(false)
-
-  const PAGE_SIZE = 20
-
-  const filteredUsers = useMemo(() => {
-    let list = [...users]
-    const q = searchQuery.trim().toLowerCase()
-    if (q) {
-      list = list.filter(
-        (u) =>
-          u.email?.toLowerCase().includes(q) ||
-          u.name?.toLowerCase().includes(q) ||
-          u.username?.toLowerCase().includes(q)
-      )
-    }
-    if (roleFilter !== 'all') list = list.filter((u) => u.role === roleFilter)
-    if (statusFilter === 'blocked') list = list.filter((u) => u.isBlocked)
-    if (statusFilter === 'active') list = list.filter((u) => !u.isBlocked)
-    if (activeTab === 'expiring') {
-      const now = new Date()
-      const in7Days = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000)
-      list = list.filter(
-        (u) =>
-          u.role === 'VOL' &&
-          u.volunteerExpiresAt &&
-          (new Date(u.volunteerExpiresAt) <= in7Days || new Date(u.volunteerExpiresAt) < now)
-      )
-    }
-    const order = sortBy === 'email' ? 'email' : sortBy === 'lastLogin' ? 'lastLoginAt' : 'createdAt'
-    list.sort((a, b) => {
-      const aVal = a[order] ? new Date(a[order]).getTime() : 0
-      const bVal = b[order] ? new Date(b[order]).getTime() : 0
-      if (sortBy === 'email') return (a.email || '').localeCompare(b.email || '')
-      return (bVal || 0) - (aVal || 0)
-    })
-    return list
-  }, [users, searchQuery, roleFilter, statusFilter, sortBy, activeTab])
-
-  const totalPages = Math.ceil(filteredUsers.length / PAGE_SIZE) || 1
-  const paginatedUsers = useMemo(
-    () => filteredUsers.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
-    [filteredUsers, page, PAGE_SIZE]
-  )
-
-  const expiringCount = useMemo(
-    () =>
-      users.filter((u) => {
-        if (u.role !== 'VOL' || !u.volunteerExpiresAt) return false
-        const exp = new Date(u.volunteerExpiresAt)
-        const now = new Date()
-        const in7 = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000)
-        return exp <= in7 || exp < now
-      }).length,
-    [users]
-  )
-
-  const isSup = currentUser?.role === 'SUPPORT' || currentUser?.role === 'ADMIN'
-
-  useEffect(() => {
-    loadData()
-  }, [])
 
   const loadData = async () => {
     try {
       setLoadError(false)
-      const userResponse = await fetch('/api/auth/me')
-      if (!userResponse.ok) {
+      const meRes = await fetch('/api/auth/me')
+      if (!meRes.ok) {
         router.push('/login')
         return
       }
-      const userData = await userResponse.json()
-      setCurrentUser(userData.user)
-
-      if (userData.user.role !== 'SUPPORT' && userData.user.role !== 'ADM' && userData.user.role !== 'ADMIN') {
+      const me = (await meRes.json()).user as CurrentUser | undefined
+      if (!me || !canSeeAdminPanel(me.role, me.restrictedFeatures ?? [])) {
         router.push('/dashboard')
-        toast.error('Недостаточно прав', {
-          description: 'Требуются права администратора'
-        })
         return
       }
-      const restricted = userData.user.restrictedFeatures ?? []
-      if (Array.isArray(restricted) && restricted.includes('adminPanel')) {
-        router.push('/dashboard')
-        toast.error('Доступ в админку ограничен')
-        return
-      }
+      setCurrentUser(me)
 
-      const [usersResponse, wsStatsRes] = await Promise.all([
-        fetch('/api/admin/users'),
-        fetch('/api/admin/workspace-stats'),
-      ])
-      const usersData = await usersResponse.json()
-      if (!usersResponse.ok) {
-        throw new Error(usersData.error || 'Failed to fetch users')
-      }
+      const [usersRes, statsRes] = await Promise.all([fetch('/api/admin/users'), fetch('/api/admin/workspace-stats')])
+      const usersData = await usersRes.json().catch(() => ({}))
+      if (!usersRes.ok) throw new Error(usersData.error || 'Не удалось загрузить пользователей')
       setUsers(usersData.users || [])
-
-      if (wsStatsRes.ok) {
-        const wsData = await wsStatsRes.json()
-        setWorkspaceStats({ active: wsData.active ?? 0, archived: wsData.archived ?? 0 })
-      } else {
-        setWorkspaceStats(null)
-      }
-
-      if (userData.user.role === 'ADMIN') {
-        const setRes = await fetch('/api/admin/settings')
-        if (setRes.ok) {
-          const setData = await setRes.json()
-          setSystemSettings({
-            sendAsEnabledSup: 'true',
-            sendAsEnabledAdm: 'true',
-            activityViewVolSup: 'true',
-            workspaceTabTemplatesSup: 'true',
-            workspaceTabEmojiImportSup: 'true',
-            workspaceTabUsersAddSup: 'true',
-            workspaceTabTemplatesAdm: 'true',
-            ...(setData.settings || {}),
-          })
-        }
+      if (statsRes.ok) {
+        const ws = await statsRes.json()
+        setWorkspaceStats({ active: ws.active ?? 0, archived: ws.archived ?? 0 })
       }
     } catch (error) {
-      console.error('Load data error:', error)
+      console.error('Load admin users error:', error)
       setLoadError(true)
-      toast.error('Ошибка загрузки данных', {
-        action: {
-          label: 'Повторить',
-          onClick: () => loadData(),
-        },
+      toast.error('Не удалось загрузить пользователей', {
+        description: 'Проверьте подключение и повторите.',
+        action: { label: 'Повторить', onClick: () => void loadData() },
       })
     } finally {
       setLoading(false)
     }
   }
 
-  const handleResetPassword = async (user: any) => {
-    if (!confirm('Вы уверены, что хотите сбросить пароль этого пользователя?')) {
-      return
+  useEffect(() => {
+    void loadData()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const filteredUsers = useMemo(() => {
+    let list = [...users]
+    const q = searchQuery.trim().toLowerCase()
+    if (q) {
+      list = list.filter(
+        (u) => u.email?.toLowerCase().includes(q) || u.name?.toLowerCase().includes(q) || u.username?.toLowerCase().includes(q)
+      )
     }
-
-    try {
-      const response = await fetch(`/api/admin/users/${user.id}/reset-password`, {
-        method: 'POST'
-      })
-
-      if (!response.ok) {
-        const data = await response.json()
-        throw new Error(data.error)
-      }
-
-      const data = await response.json()
-      setResetPasswordResult({ email: user.email, newPassword: data.newPassword })
-      toast.success('Пароль сброшен — скопируйте и передайте пользователю')
-    } catch (error: any) {
-      toast.error('Ошибка', {
-        description: error.message || 'Не удалось сбросить пароль'
-      })
-    }
-  }
-
-  const copyPasswordToClipboard = () => {
-    if (!resetPasswordResult) return
-    navigator.clipboard.writeText(resetPasswordResult.newPassword)
-    toast.success('Пароль скопирован в буфер обмена')
-  }
-
-  const handleCreateInvite = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!createForm.login.trim()) {
-      toast.error('Укажите логин')
-      return
-    }
-    setCreateLoading(true)
-    setCreateInviteLink(null)
-    try {
-      const res = await fetch('/api/admin/invite', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: createForm.login.trim().toLowerCase(),
-          role: createForm.role,
-        }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error)
-      setCreateInviteLink(data.link || '')
-      toast.success('Ссылка приглашения создана', { description: 'Ссылка активна 1 час' })
-      if (data.link) {
-        try {
-          await navigator.clipboard.writeText(data.link)
-          toast.success('Ссылка скопирована в буфер обмена')
-        } catch (_) {}
-      }
-    } catch (err: any) {
-      toast.error(err.message || 'Ошибка создания приглашения')
-    } finally {
-      setCreateLoading(false)
-    }
-  }
-
-  const closeCreateDialog = () => {
-    setCreateOpen(false)
-    setCreateForm({ login: '', role: 'USER' })
-    setCreateInviteLink(null)
-  }
-
-  const copyInviteLink = async () => {
-    if (!createInviteLink) return
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(createInviteLink)
-        toast.success('Ссылка скопирована')
-        return
-      }
-    } catch {
-      /* fallback */
-    }
-    const textarea = document.createElement('textarea')
-    textarea.value = createInviteLink
-    textarea.style.position = 'fixed'
-    textarea.style.left = '-9999px'
-    document.body.appendChild(textarea)
-    textarea.select()
-    try {
-      if (document.execCommand('copy')) toast.success('Ссылка скопирована')
-      else toast.error('Не удалось скопировать')
-    } catch {
-      toast.error('Не удалось скопировать')
-    } finally {
-      document.body.removeChild(textarea)
-    }
-  }
-
-  const openEditRole = (user: any) => {
-    setEditRoleUser(user)
-    setEditRoleForm({
-      role: user.role,
-      volunteerExpiresAt: user.volunteerExpiresAt ? user.volunteerExpiresAt.slice(0, 10) : '',
-      volunteerIntensive: user.volunteerIntensive || '',
+    if (roleFilter === 'VOLUNTEER') list = list.filter((u) => isVolunteerMember(u))
+    else if (roleFilter === 'EXPIRING') list = list.filter((u) => isExpiringVolunteer(u))
+    else if (roleFilter !== 'all') list = list.filter((u) => u.role === roleFilter)
+    if (statusFilter === 'blocked') list = list.filter((u) => u.isBlocked)
+    if (statusFilter === 'active') list = list.filter((u) => !u.isBlocked)
+    list.sort((a, b) => {
+      if (sortBy === 'email') return (a.email || '').localeCompare(b.email || '')
+      const key = sortBy === 'lastLogin' ? 'lastLoginAt' : 'createdAt'
+      const av = a[key] ? new Date(a[key] as string).getTime() : 0
+      const bv = b[key] ? new Date(b[key] as string).getTime() : 0
+      return bv - av
     })
+    return list
+  }, [users, searchQuery, roleFilter, statusFilter, sortBy])
+
+  const totalPages = Math.max(1, Math.ceil(filteredUsers.length / PAGE_SIZE))
+  const paginatedUsers = filteredUsers.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+
+  const canAddUsers = currentUser ? inviteAssignableRoles(currentUser.role).length > 0 : false
+  const isLeadSup = currentUser?.role === 'LEAD_SUP'
+
+  const resetFilters = () => {
+    setSearchQuery('')
+    setRoleFilter('all')
+    setStatusFilter('all')
+    setPage(1)
   }
 
-  const handleEditRoleSubmit = async () => {
-    if (!editRoleUser) return
-    setEditRoleLoading(true)
+  const isSelectable = (u: AdminUser) =>
+    !!currentUser && u.id !== currentUser.id && canManageUserWithRole(currentUser.role, u.role) && isVolunteerMember(u)
+  const selectablePageIds = paginatedUsers.filter(isSelectable).map((u) => u.id)
+  const allPageSelected = selectablePageIds.length > 0 && selectablePageIds.every((id) => selectedIds.has(id))
+  const somePageSelected = selectablePageIds.some((id) => selectedIds.has(id))
+
+  const toggleSelect = (id: string, checked: boolean) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (checked) next.add(id)
+      else next.delete(id)
+      return next
+    })
+
+  const toggleSelectPage = (checked: boolean) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      for (const id of selectablePageIds) {
+        if (checked) next.add(id)
+        else next.delete(id)
+      }
+      return next
+    })
+
+  const handleExtendOne = async () => {
+    if (!extendUser) return
+    setActionLoading(true)
     try {
-      const res = await fetch(`/api/admin/users/${editRoleUser.id}/role`, {
+      const res = await fetch(`/api/admin/users/${extendUser.id}/extend-vol`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          role: editRoleForm.role,
-          volunteerExpiresAt: editRoleForm.volunteerExpiresAt || undefined,
-          volunteerIntensive: editRoleForm.volunteerIntensive.trim() || undefined,
-        }),
+        body: JSON.stringify({ addDays: 30 }),
       })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error)
-      toast.success('Роль обновлена')
-      setEditRoleUser(null)
-      setEditRoleConfirmSup(false)
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Не удалось продлить доступ')
+      toast.success('Доступ продлён на 30 дней', { description: extendUser.email })
+      setExtendUser(null)
       await loadData()
-    } catch (err: any) {
-      toast.error(err.message || 'Ошибка обновления роли')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Не удалось продлить доступ', { description: 'Повторите попытку.' })
     } finally {
-      setEditRoleLoading(false)
-    }
-  }
-
-  const handleEditRole = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!editRoleUser) return
-    if (editRoleForm.role === 'SUPPORT') {
-      setEditRoleConfirmSup(true)
-      return
-    }
-    await handleEditRoleSubmit()
-  }
-
-  const handleBlock = async () => {
-    if (!blockUser) return
-    setBlockLoading(true)
-    try {
-      const res = await fetch(`/api/admin/users/${blockUser.id}/block`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason: blockReason.trim() || undefined }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error)
-      toast.success('Пользователь заблокирован')
-      setBlockUser(null)
-      setBlockReason('')
-      await loadData()
-    } catch (err: any) {
-      toast.error(err.message || 'Ошибка блокировки')
-    } finally {
-      setBlockLoading(false)
-    }
-  }
-
-  const handleUnblock = async (user: any) => {
-    try {
-      const res = await fetch(`/api/admin/users/${user.id}/unblock`, { method: 'PATCH' })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error)
-      toast.success('Пользователь разблокирован')
-      await loadData()
-    } catch (err: any) {
-      toast.error(err.message || 'Ошибка разблокировки')
-    }
-  }
-
-  const handleExtendVol = async (user: any, addDays: number) => {
-    try {
-      const res = await fetch(`/api/admin/users/${user.id}/extend-vol`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ addDays }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error)
-      toast.success(`Доступ продлён на ${addDays} дн.`)
-      await loadData()
-    } catch (err: any) {
-      toast.error(err.message || 'Ошибка продления')
+      setActionLoading(false)
     }
   }
 
   const handleBulkExtend = async () => {
     const ids = Array.from(selectedIds)
-    if (ids.length === 0) {
-      toast.error('Выберите пользователей')
-      return
-    }
-    setBulkExtendLoading(true)
+    if (ids.length === 0) return
+    setActionLoading(true)
     try {
       const res = await fetch('/api/admin/users/bulk-extend', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userIds: ids, addDays: 30 }),
       })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error)
-      toast.success(`Доступ продлён ${data.extended} пользователям`)
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Не удалось продлить доступ')
+      toast.success(`Доступ продлён на 30 дней: ${data.extended ?? ids.length}`)
       setSelectedIds(new Set())
+      setBulkExtendOpen(false)
       await loadData()
-    } catch (err: any) {
-      toast.error(err.message || 'Ошибка продления')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Не удалось продлить доступ', { description: 'Повторите попытку.' })
     } finally {
-      setBulkExtendLoading(false)
+      setActionLoading(false)
     }
   }
 
-  const toggleSelect = (id: string) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
+  const handleResetPassword = async () => {
+    if (!resetUser) return
+    setActionLoading(true)
+    try {
+      const res = await fetch(`/api/admin/users/${resetUser.id}/reset-password`, { method: 'POST' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Не удалось сбросить пароль')
+      setResetPasswordResult({ email: resetUser.email, newPassword: data.newPassword })
+      setResetUser(null)
+      toast.success('Пароль сброшен', { description: 'Скопируйте новый пароль и передайте пользователю.' })
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Не удалось сбросить пароль')
+    } finally {
+      setActionLoading(false)
+    }
   }
 
-  const toggleSelectAll = () => {
-    const volOnPage = paginatedUsers.filter((u) => u.role === 'VOL')
-    if (selectedIds.size >= volOnPage.length) {
-      setSelectedIds((prev) => {
-        const next = new Set(prev)
-        volOnPage.forEach((u) => next.delete(u.id))
-        return next
+  const handleBlock = async () => {
+    if (!blockUser) return
+    setActionLoading(true)
+    try {
+      const res = await fetch(`/api/admin/users/${blockUser.id}/block`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: blockReason.trim() || undefined }),
       })
-    } else {
-      setSelectedIds((prev) => {
-        const next = new Set(prev)
-        volOnPage.forEach((u) => next.add(u.id))
-        return next
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Не удалось заблокировать')
+      toast.success('Пользователь заблокирован', { description: blockUser.email })
+      setBlockUser(null)
+      setBlockReason('')
+      await loadData()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Не удалось заблокировать')
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  const handleUnblock = async () => {
+    if (!unblockUser) return
+    setActionLoading(true)
+    try {
+      const res = await fetch(`/api/admin/users/${unblockUser.id}/unblock`, { method: 'PATCH' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Не удалось разблокировать')
+      toast.success('Пользователь разблокирован', { description: unblockUser.email })
+      setUnblockUser(null)
+      await loadData()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Не удалось разблокировать')
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  const handleSaveRestrictions = async () => {
+    if (!restrictUser) return
+    setActionLoading(true)
+    try {
+      const res = await fetch(`/api/admin/users/${restrictUser.id}/restrictions`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ restrictedFeatures: restrictForm }),
       })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Ошибка сохранения')
+      setUsers((prev) => prev.map((u) => (u.id === restrictUser.id ? { ...u, restrictedFeatures: data.user.restrictedFeatures } : u)))
+      toast.success('Ограничения сохранены')
+      setRestrictUser(null)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Ошибка сохранения')
+    } finally {
+      setActionLoading(false)
     }
   }
 
-  const getRoleBadgeVariant = (role: string) => {
-    switch (role) {
-      case 'SUPPORT': return 'destructive'
-      case 'ADMIN': return 'default'
-      case 'ADM': return 'default'
-      case 'VOL': return 'secondary'
-      default: return 'secondary'
-    }
-  }
-
-  const resetFilters = () => {
-    setSearchQuery('')
-    setRoleFilter('all')
-    setStatusFilter('all')
-    setActiveTab('all')
-    setPage(1)
-  }
+  const header = (
+    <PageHeader
+      title="Пользователи"
+      description={
+        isLeadSup
+          ? 'Все пользователи системы: приглашения, роли, блокировки и сброс паролей.'
+          : 'Пользователи системы. Вы можете добавлять и управлять пользователями ADM и MEMBER.'
+      }
+      actions={
+        canAddUsers ? (
+          <Button onClick={() => setAddOpen(true)}>
+            <UserPlus className="size-4" aria-hidden />
+            Добавить пользователя
+          </Button>
+        ) : undefined
+      }
+    />
+  )
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-muted/30 w-full max-w-full overflow-x-hidden">
-        <div className="container max-w-6xl w-full px-3 sm:px-6 py-4 sm:py-8 mx-auto">
-          <header className="mb-6 sm:mb-8">
-            <div className="h-6 w-48 bg-muted animate-pulse rounded mb-4" />
-            <div className="h-9 w-64 bg-muted animate-pulse rounded mb-2" />
-            <div className="h-4 w-96 bg-muted animate-pulse rounded" />
-          </header>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4 mb-6">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="h-24 bg-muted animate-pulse rounded-lg" />
-            ))}
-          </div>
-          <div className="border rounded-lg overflow-hidden">
-            <div className="h-12 bg-muted/50 animate-pulse" />
-            {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
-              <div key={i} className="h-14 border-t border-border/50 bg-card animate-pulse" />
-            ))}
-          </div>
+      <PageContainer className="px-4 sm:px-6">
+        <div className="space-y-3 pb-5">
+          <Skeleton className="h-7 w-48" />
+          <Skeleton className="h-4 w-96 max-w-full" />
         </div>
-      </div>
+        <Skeleton className="mb-4 h-16 w-full" />
+        <div className="space-y-1">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <Skeleton key={i} className="h-12 w-full" />
+          ))}
+        </div>
+      </PageContainer>
     )
   }
 
   const totalUsers = users.length
-  const activeUsers = users.filter(u => !u.isBlocked).length
-  const adminUsers = users.filter(u => u.role === 'SUPPORT' || u.role === 'ADM' || u.role === 'ADMIN').length
+  const blockedUsers = users.filter((u) => u.isBlocked).length
+  const staffUsers = users.filter((u) => u.role === 'LEAD_SUP' || u.role === 'SUP').length
+  const volunteers = users.filter((u) => isVolunteerMember(u)).length
+
+  const stats: { label: string; value: number; hint?: string }[] = [
+    { label: 'Всего', value: totalUsers },
+    { label: 'Заблокировано', value: blockedUsers },
+    { label: 'Lead_SUP и SUP', value: staffUsers },
+    { label: 'Волонтёров', value: volunteers },
+    ...(workspaceStats ? [{ label: 'Пространств', value: workspaceStats.active, hint: `в архиве: ${workspaceStats.archived}` }] : []),
+  ]
+
+  const expiringVolunteers = users.filter((u) => isExpiringVolunteer(u)).length
+  const roleChips: { value: string; label: string; count: number }[] = [
+    { value: 'all', label: 'Все', count: totalUsers },
+    ...APP_ROLES.map((r) => ({ value: r as string, label: ROLE_LABELS[r], count: users.filter((u) => u.role === r).length })),
+    { value: 'VOLUNTEER', label: 'Волонтёры', count: volunteers },
+    ...(expiringVolunteers > 0 ? [{ value: 'EXPIRING', label: 'Доступ истекает', count: expiringVolunteers }] : []),
+  ]
 
   return (
-    <div className="min-h-screen bg-muted/30 w-full max-w-full overflow-x-hidden">
-      <div className="container max-w-6xl w-full px-3 sm:px-6 py-4 sm:py-8 mx-auto">
-        <header className="mb-6 sm:mb-8">
-          <Breadcrumbs
-            items={[
-              { label: 'Дашборд', href: '/dashboard' },
-              { label: 'Админ панель', current: true },
-            ]}
-            className="mb-4"
+    <PageContainer className="px-4 sm:px-6">
+      {header}
+
+      <dl className="mb-6 grid grid-cols-2 gap-px overflow-hidden rounded-lg border bg-border sm:grid-cols-3 lg:grid-cols-5">
+        {stats.map((s) => (
+          <div key={s.label} className="bg-card px-4 py-3">
+            <dt className="text-xs text-muted-foreground">{s.label}</dt>
+            <dd className="mt-0.5 text-xl font-semibold tabular-nums">{s.value}</dd>
+            {s.hint && <dd className="text-xs text-muted-foreground">{s.hint}</dd>}
+          </div>
+        ))}
+      </dl>
+
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row">
+        <div className="relative min-w-0 flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
+          <Input
+            placeholder="Поиск по логину, имени, username"
+            aria-label="Поиск пользователей"
+            value={searchQuery}
+            onChange={(e) => {
+              setSearchQuery(e.target.value)
+              setPage(1)
+            }}
+            className="pl-9"
           />
-          <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
-            <div>
-              <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Управление пользователями</h1>
-              <p className="text-muted-foreground text-sm mt-1">
-                Администрирование системы и пользователей
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {isSup && (
-                <>
-                  <Link href="/dashboard/admin/audit">
-                    <Button variant="outline" size="sm" className="gap-2">
-                      <FileText className="h-4 w-4" />
-                      Журнал действий
-                    </Button>
-                  </Link>
-                  {currentUser?.role === 'ADMIN' && (
-                    <Link href="/dashboard/admin/security">
-                      <Button variant="outline" size="sm" className="gap-2">
-                        <ShieldCheck className="h-4 w-4" />
-                        Защита
-                      </Button>
-                    </Link>
-                  )}
-                  <Button onClick={() => setCreateOpen(true)} size="sm" className="gap-2">
-                    <UserPlus className="h-4 w-4" />
-                    Создать приглашение
-                  </Button>
-                </>
-              )}
-            </div>
-          </div>
-        </header>
-
-        {/* Кнопки для ADMIN: Справка, Health, Шаблоны */}
-        {currentUser?.role === 'ADMIN' && (
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6 sm:mb-8">
-            <Link href="/dashboard/admin/help">
-              <Card className="border bg-card shadow-sm hover:shadow-md hover:border-primary/30 transition-all cursor-pointer h-full">
-                <CardContent className="p-5 flex flex-col items-start gap-3">
-                  <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
-                    <BookOpen className="h-5 w-5 text-primary" />
-                  </div>
-                  <div>
-                    <h3 className="font-semibold text-foreground">Справка</h3>
-                    <p className="text-xs text-muted-foreground mt-0.5">Инструкции и FAQ</p>
-                  </div>
-                </CardContent>
-              </Card>
-            </Link>
-            <Link href="/dashboard/admin/health">
-              <Card className="border bg-card shadow-sm hover:shadow-md hover:border-primary/30 transition-all cursor-pointer h-full">
-                <CardContent className="p-5 flex flex-col items-start gap-3">
-                  <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
-                    <Heart className="h-5 w-5 text-primary" />
-                  </div>
-                  <div>
-                    <h3 className="font-semibold text-foreground">Health</h3>
-                    <p className="text-xs text-muted-foreground mt-0.5">Состояние БД и приложения</p>
-                  </div>
-                </CardContent>
-              </Card>
-            </Link>
-            <Link href="/dashboard/admin/templates">
-              <Card className="border bg-card shadow-sm hover:shadow-md hover:border-primary/30 transition-all cursor-pointer h-full">
-                <CardContent className="p-5 flex flex-col items-start gap-3">
-                  <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
-                    <FileText className="h-5 w-5 text-primary" />
-                  </div>
-                  <div>
-                    <h3 className="font-semibold text-foreground">Шаблоны</h3>
-                    <p className="text-xs text-muted-foreground mt-0.5">Шаблоны анонсов</p>
-                  </div>
-                </CardContent>
-              </Card>
-            </Link>
-          </div>
-        )}
-
-        {/* Статистика — компактные карточки */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4 mb-6 sm:mb-8">
-          <Card className="border bg-card shadow-sm">
-            <CardContent className="p-4 sm:p-5">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-muted-foreground">Всего</span>
-                <Users className="h-4 w-4 text-muted-foreground/80" />
-              </div>
-              <p className="text-2xl font-bold mt-1">{totalUsers}</p>
-              <p className="text-xs text-muted-foreground mt-0.5">пользователей</p>
-            </CardContent>
-          </Card>
-          <Card className="border bg-card shadow-sm">
-            <CardContent className="p-4 sm:p-5">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-muted-foreground">Активных</span>
-                <Activity className="h-4 w-4 text-green-600/80" />
-              </div>
-              <p className="text-2xl font-bold text-green-600 mt-1">{activeUsers}</p>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                {totalUsers ? Math.round((activeUsers / totalUsers) * 100) : 0}%
-              </p>
-            </CardContent>
-          </Card>
-          <Card className="border bg-card shadow-sm">
-            <CardContent className="p-4 sm:p-5">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-muted-foreground">Админов</span>
-                <Shield className="h-4 w-4 text-destructive/80" />
-              </div>
-              <p className="text-2xl font-bold text-destructive mt-1">{adminUsers}</p>
-              <p className="text-xs text-muted-foreground mt-0.5">SUPPORT + ADMIN + ADM</p>
-            </CardContent>
-          </Card>
-          {workspaceStats !== null && (
-            <>
-              <Card className="border bg-card shadow-sm">
-                <CardContent className="p-4 sm:p-5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium text-muted-foreground">Пространств</span>
-                    <Server className="h-4 w-4 text-muted-foreground/80" />
-                  </div>
-                  <p className="text-2xl font-bold mt-1">{workspaceStats.active}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">активных</p>
-                </CardContent>
-              </Card>
-              <Card className="border bg-card shadow-sm">
-                <CardContent className="p-4 sm:p-5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium text-muted-foreground">В архиве</span>
-                    <Archive className="h-4 w-4 text-muted-foreground/80" />
-                  </div>
-                  <p className="text-2xl font-bold mt-1">{workspaceStats.archived}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">пространств</p>
-                </CardContent>
-              </Card>
-            </>
-          )}
         </div>
-
-        {/* Настройки системы — только ADMIN */}
-        {currentUser?.role === 'ADMIN' && (
-          <Card className="border bg-card shadow-sm mb-6 sm:mb-8">
-            <CardHeader>
-              <CardTitle className="text-lg">Настройки системы</CardTitle>
-              <CardDescription>Включение/отключение возможностей для SUPPORT и ADM</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex items-center justify-between rounded-lg border p-4">
-                <div>
-                  <p className="font-medium">«Отправить от имени» для SUPPORT</p>
-                  <p className="text-xs text-muted-foreground">Разрешить SUPPORT выбирать отправителя при планировании сообщения</p>
-                </div>
-                <Checkbox
-                  checked={systemSettings.sendAsEnabledSup !== 'false'}
-                  onCheckedChange={async (checked) => {
-                    setSystemSettingsLoading(true)
-                    const v = checked === true ? 'true' : 'false'
-                    try {
-                      const r = await fetch('/api/admin/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sendAsEnabledSup: v }) })
-                      const d = await r.json().catch(() => ({}))
-                      if (r.ok && d.settings) {
-                        setSystemSettings((prev) => ({ ...prev, ...d.settings }))
-                        toast.success('Настройка сохранена')
-                      } else if (!r.ok) toast.error(d.error || 'Ошибка сохранения')
-                    } finally {
-                      setSystemSettingsLoading(false)
-                    }
-                  }}
-                  disabled={systemSettingsLoading}
-                />
-              </div>
-              <div className="flex items-center justify-between rounded-lg border p-4">
-                <div>
-                  <p className="font-medium">«Отправить от имени» для ADM</p>
-                  <p className="text-xs text-muted-foreground">Разрешить ADM отправлять от имени ADM и VOL</p>
-                </div>
-                <Checkbox
-                  checked={systemSettings.sendAsEnabledAdm !== 'false'}
-                  onCheckedChange={async (checked) => {
-                    setSystemSettingsLoading(true)
-                    const v = checked === true ? 'true' : 'false'
-                    try {
-                      const r = await fetch('/api/admin/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sendAsEnabledAdm: v }) })
-                      const d = await r.json().catch(() => ({}))
-                      if (r.ok && d.settings) {
-                        setSystemSettings((prev) => ({ ...prev, ...d.settings }))
-                        toast.success('Настройка сохранена')
-                      } else if (!r.ok) toast.error(d.error || 'Ошибка сохранения')
-                    } finally {
-                      setSystemSettingsLoading(false)
-                    }
-                  }}
-                  disabled={systemSettingsLoading}
-                />
-              </div>
-              <div className="flex items-center justify-between rounded-lg border p-4">
-                <div>
-                  <p className="font-medium">SUPPORT видит активность VOL</p>
-                  <p className="text-xs text-muted-foreground">Разрешить SUPPORT просматривать активность волонтёров</p>
-                </div>
-                <Checkbox
-                  checked={systemSettings.activityViewVolSup !== 'false'}
-                  onCheckedChange={async (checked) => {
-                    setSystemSettingsLoading(true)
-                    const v = checked === true ? 'true' : 'false'
-                    try {
-                      const r = await fetch('/api/admin/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ activityViewVolSup: v }) })
-                      const d = await r.json().catch(() => ({}))
-                      if (r.ok && d.settings) {
-                        setSystemSettings((prev) => ({ ...prev, ...d.settings }))
-                        toast.success('Настройка сохранена')
-                      } else if (!r.ok) toast.error(d.error || 'Ошибка сохранения')
-                    } finally {
-                      setSystemSettingsLoading(false)
-                    }
-                  }}
-                  disabled={systemSettingsLoading}
-                />
-              </div>
-              <div className="border-t border-border/60 pt-4 mt-4">
-                <p className="font-medium text-sm mb-3">Ограничение вкладок пространства (для SUPPORT и ADM)</p>
-                <p className="text-xs text-muted-foreground mb-3">Снимите галочку, чтобы скрыть вкладку у указанной роли.</p>
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between rounded-lg border p-3">
-                    <span className="text-sm">SUPPORT: вкладка «Шаблоны»</span>
-                    <Checkbox
-                      checked={systemSettings.workspaceTabTemplatesSup !== 'false'}
-                      onCheckedChange={async (checked) => {
-                        setSystemSettingsLoading(true)
-                        const v = checked === true ? 'true' : 'false'
-                        try {
-                          const r = await fetch('/api/admin/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workspaceTabTemplatesSup: v }) })
-                          const d = await r.json().catch(() => ({}))
-                          if (r.ok && d.settings) { setSystemSettings((prev) => ({ ...prev, ...d.settings })); toast.success('Сохранено') }
-                          else if (!r.ok) toast.error(d.error || 'Ошибка')
-                        } finally { setSystemSettingsLoading(false) }
-                      }}
-                      disabled={systemSettingsLoading}
-                    />
-                  </div>
-                  <div className="flex items-center justify-between rounded-lg border p-3">
-                    <span className="text-sm">SUPPORT: вкладка «Настройка пространства»</span>
-                    <Checkbox
-                      checked={systemSettings.workspaceTabEmojiImportSup !== 'false'}
-                      onCheckedChange={async (checked) => {
-                        setSystemSettingsLoading(true)
-                        const v = checked === true ? 'true' : 'false'
-                        try {
-                          const r = await fetch('/api/admin/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workspaceTabEmojiImportSup: v }) })
-                          const d = await r.json().catch(() => ({}))
-                          if (r.ok && d.settings) { setSystemSettings((prev) => ({ ...prev, ...d.settings })); toast.success('Сохранено') }
-                          else if (!r.ok) toast.error(d.error || 'Ошибка')
-                        } finally { setSystemSettingsLoading(false) }
-                      }}
-                      disabled={systemSettingsLoading}
-                    />
-                  </div>
-                  <div className="flex items-center justify-between rounded-lg border p-3">
-                    <span className="text-sm">SUPPORT: вкладка «Добавление пользователей»</span>
-                    <Checkbox
-                      checked={systemSettings.workspaceTabUsersAddSup !== 'false'}
-                      onCheckedChange={async (checked) => {
-                        setSystemSettingsLoading(true)
-                        const v = checked === true ? 'true' : 'false'
-                        try {
-                          const r = await fetch('/api/admin/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workspaceTabUsersAddSup: v }) })
-                          const d = await r.json().catch(() => ({}))
-                          if (r.ok && d.settings) { setSystemSettings((prev) => ({ ...prev, ...d.settings })); toast.success('Сохранено') }
-                          else if (!r.ok) toast.error(d.error || 'Ошибка')
-                        } finally { setSystemSettingsLoading(false) }
-                      }}
-                      disabled={systemSettingsLoading}
-                    />
-                  </div>
-                  <div className="flex items-center justify-between rounded-lg border p-3">
-                    <span className="text-sm">ADM: вкладка «Шаблоны»</span>
-                    <Checkbox
-                      checked={systemSettings.workspaceTabTemplatesAdm !== 'false'}
-                      onCheckedChange={async (checked) => {
-                        setSystemSettingsLoading(true)
-                        const v = checked === true ? 'true' : 'false'
-                        try {
-                          const r = await fetch('/api/admin/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workspaceTabTemplatesAdm: v }) })
-                          const d = await r.json().catch(() => ({}))
-                          if (r.ok && d.settings) { setSystemSettings((prev) => ({ ...prev, ...d.settings })); toast.success('Сохранено') }
-                          else if (!r.ok) toast.error(d.error || 'Ошибка')
-                        } finally { setSystemSettingsLoading(false) }
-                      }}
-                      disabled={systemSettingsLoading}
-                    />
-                  </div>
-                </div>
-              </div>
-              <div className="border-t border-border/60 pt-4 mt-4">
-                <p className="font-medium text-sm mb-2">Контакт на странице «Заблокирован»</p>
-                <p className="text-xs text-muted-foreground mb-2">Email, ссылка или текст — отображается заблокированным пользователям для связи с администратором.</p>
-                <div className="flex gap-2 flex-wrap">
-                  <Input
-                    value={systemSettings.adminContact ?? ''}
-                    onChange={(e) => setSystemSettings((prev) => ({ ...prev, adminContact: e.target.value }))}
-                    placeholder="admin@example.com или контакт для связи"
-                    className="max-w-sm"
-                  />
-                  <Button
-                    size="sm"
-                    disabled={systemSettingsLoading}
-                    onClick={async () => {
-                      setSystemSettingsLoading(true)
-                      try {
-                        const r = await fetch('/api/admin/settings', {
-                          method: 'PATCH',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ adminContact: systemSettings.adminContact ?? '' }),
-                        })
-                        const d = await r.json().catch(() => ({}))
-                        if (r.ok && d.settings) {
-                          setSystemSettings((prev) => ({ ...prev, ...d.settings }))
-                          toast.success('Контакт сохранён')
-                        } else if (!r.ok) toast.error(d.error || 'Ошибка')
-                      } finally {
-                        setSystemSettingsLoading(false)
-                      }
-                    }}
-                  >
-                    {systemSettingsLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Сохранить'}
-                  </Button>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Блок пользователей */}
-        <Card className="border bg-card shadow-sm overflow-hidden">
-          <CardHeader className="pb-4 border-b bg-muted/30">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <div>
-                <CardTitle className="text-lg flex items-center gap-2">
-                  <Users className="h-5 w-5 text-primary" />
-                  Пользователи
-                </CardTitle>
-                <CardDescription className="mt-0.5">
-                  Поиск и фильтры ниже
-                </CardDescription>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent className="p-4 sm:p-6 space-y-4">
-            <Tabs value={activeTab} onValueChange={(v) => { setActiveTab(v as 'all' | 'expiring'); setPage(1) }}>
-              <TabsList className="grid w-full grid-cols-2 sm:w-auto sm:inline-grid mb-4">
-                <TabsTrigger value="all" className="text-sm">Все</TabsTrigger>
-                <TabsTrigger value="expiring" className="text-sm gap-1.5">
-                  Истекает доступ
-                  {expiringCount > 0 && (
-                    <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-xs">{expiringCount}</Badge>
-                  )}
-                </TabsTrigger>
-              </TabsList>
-
-              {/* Панель фильтров */}
-              <div className="rounded-lg border bg-muted/20 p-3 space-y-3">
-                <div className="flex flex-col sm:flex-row gap-2 sm:gap-3">
-                  <div className="relative flex-1 min-w-0">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
-                    <Input
-                      placeholder="Поиск по логину, имени..."
-                      value={searchQuery}
-                      onChange={(e) => { setSearchQuery(e.target.value); setPage(1) }}
-                      className="pl-9 h-9"
-                    />
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Select value={roleFilter} onValueChange={(v) => { setRoleFilter(v); setPage(1) }}>
-                      <SelectTrigger className="w-full sm:w-[130px] h-9">
-                        <SelectValue placeholder="Роль" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">Все роли</SelectItem>
-                        {ROLES.map((r) => (
-                          <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); setPage(1) }}>
-                      <SelectTrigger className="w-full sm:w-[130px] h-9">
-                        <SelectValue placeholder="Статус" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">Все</SelectItem>
-                        <SelectItem value="active">Активен</SelectItem>
-                        <SelectItem value="blocked">Заблокирован</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <Select value={sortBy} onValueChange={(v) => { setSortBy(v); setPage(1) }}>
-                      <SelectTrigger className="w-full sm:w-[180px] h-9">
-                        <SelectValue placeholder="Сортировка" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="createdAt">По дате регистрации</SelectItem>
-                        <SelectItem value="lastLogin">По последнему входу</SelectItem>
-                        <SelectItem value="email">По логину</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-                {isSup && selectedIds.size > 0 && (
-                  <div className="flex flex-wrap items-center gap-2 pt-1">
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={handleBulkExtend}
-                      disabled={bulkExtendLoading}
-                      className="gap-1.5"
-                    >
-                      {bulkExtendLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarPlus className="h-4 w-4" />}
-                      Продлить выбранным на 30 дн. ({selectedIds.size})
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={() => setSelectedIds(new Set())}>
-                      Снять выбор
-                    </Button>
-                  </div>
-                )}
-              </div>
-            </Tabs>
-
-            {filteredUsers.length === 0 ? (
-              <div className="rounded-md border bg-card p-8 text-center">
-                <p className="text-muted-foreground mb-4">Нет пользователей по выбранным фильтрам</p>
-                <Button variant="outline" size="sm" onClick={resetFilters}>
-                  Сбросить фильтры
-                </Button>
-              </div>
-            ) : (
-            <div className="rounded-md border overflow-auto max-h-[min(70vh,600px)] min-w-0">
-              <div className="overflow-x-auto min-w-0">
-                <Table className="min-w-[800px]">
-                  <TableHeader>
-                    <TableRow className="hover:bg-transparent">
-                      {isSup && (
-                        <TableHead className="w-10">
-                          {paginatedUsers.some((u) => u.role === 'VOL') && (
-                            <Checkbox
-                              checked={selectedIds.size > 0 && paginatedUsers.filter((u) => u.role === 'VOL').every((u) => selectedIds.has(u.id))}
-                              onCheckedChange={toggleSelectAll}
-                            />
-                          )}
-                        </TableHead>
-                      )}
-                      <TableHead>Пользователь</TableHead>
-                      <TableHead>Логин</TableHead>
-                      <TableHead>Роль</TableHead>
-                      <TableHead>Статус</TableHead>
-                      <TableHead>Пространства</TableHead>
-                      <TableHead>Последний вход</TableHead>
-                      <TableHead>Создан</TableHead>
-                      <TableHead className="text-right">Действия</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {paginatedUsers.map((user) => (
-                      <TableRow key={user.id} className="hover:bg-muted/50 transition-colors">
-                        {isSup && (
-                          <TableCell>
-                            {user.role === 'VOL' && (
-                              <Checkbox
-                                checked={selectedIds.has(user.id)}
-                                onCheckedChange={() => toggleSelect(user.id)}
-                              />
-                            )}
-                          </TableCell>
-                        )}
-                        <TableCell className="py-3">
-                          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-                            <Avatar className="h-8 w-8 sm:h-9 sm:w-9 shrink-0">
-                              {user.avatarUrl && <AvatarImage src={user.avatarUrl} alt="" />}
-                              <AvatarFallback className={`${generateAvatarColor(user.email)} text-white text-xs sm:text-sm font-semibold`}>
-                                {getInitials(user.name || user.email)}
-                              </AvatarFallback>
-                            </Avatar>
-                            <div className="min-w-0">
-                              <div className="font-medium truncate">{user.name || 'Без имени'}</div>
-                              {user.username && (
-                                <div className="text-xs text-muted-foreground truncate">@{user.username}</div>
-                              )}
-                            </div>
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-sm font-mono py-3 max-w-[180px] truncate" title={user.email}>{user.email}</TableCell>
-                        <TableCell>
-                          <Badge variant={getRoleBadgeVariant(user.role)}>
-                            {user.role}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="align-top sm:align-middle">
-                          <div className="flex flex-col gap-1">
-                            {user.isBlocked ? (
-                              <Badge variant="destructive" className="w-fit">Заблокирован</Badge>
-                            ) : (
-                              <Badge variant="default" className="w-fit bg-green-600 hover:bg-green-700 text-white">
-                                Активен
-                              </Badge>
-                            )}
-                            {user.role === 'VOL' && user.volunteerExpiresAt && (
-                              <span className="text-xs text-muted-foreground">
-                                до {formatDate(user.volunteerExpiresAt, { day: '2-digit', month: '2-digit', year: 'numeric' })}
-                              </span>
-                            )}
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-sm text-muted-foreground py-3">{user._count?.workspaces ?? 0}</TableCell>
-                        <TableCell className="text-sm text-muted-foreground py-3 whitespace-nowrap">
-                          {user.lastLoginAt ? formatRelativeTime(user.lastLoginAt) : '—'}
-                        </TableCell>
-                        <TableCell className="text-sm text-muted-foreground py-3 whitespace-nowrap">
-                          {user.createdAt ? formatRelativeTime(user.createdAt) : '—'}
-                        </TableCell>
-                        <TableCell className="text-right py-3">
-                          {user.id !== currentUser?.id && (user.role !== 'ADMIN' || currentUser?.role === 'ADMIN') && (isSup || (currentUser?.role === 'ADM' && user.role === 'VOL')) && (
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
-                                  <MoreVertical className="h-4 w-4" />
-                                </Button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end" className="w-48">
-                                <DropdownMenuLabel>Действия</DropdownMenuLabel>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem
-                                  onClick={() => router.push(`/dashboard/admin/users/${user.id}`)}
-                                  className="cursor-pointer"
-                                >
-                                  <Shield className="mr-2 h-4 w-4" />
-                                  Просмотр активности
-                                </DropdownMenuItem>
-                                {isSup && (
-                                  <>
-                                    <DropdownMenuItem
-                                      onClick={() => router.push(`/dashboard/admin/users/${user.id}`)}
-                                      className="cursor-pointer"
-                                    >
-                                      <Pencil className="mr-2 h-4 w-4" />
-                                      Редактировать профиль
-                                    </DropdownMenuItem>
-                                    <DropdownMenuItem
-                                      onClick={() => openEditRole(user)}
-                                      className="cursor-pointer"
-                                    >
-                                      <Pencil className="mr-2 h-4 w-4" />
-                                      Изменить роль
-                                    </DropdownMenuItem>
-                                    <DropdownMenuItem
-                                      onClick={() => handleResetPassword(user)}
-                                      className="cursor-pointer"
-                                    >
-                                      <Key className="mr-2 h-4 w-4" />
-                                      Сбросить пароль
-                                    </DropdownMenuItem>
-                                    {user.role === 'VOL' && (
-                                      <DropdownMenuItem
-                                        onClick={() => handleExtendVol(user, 30)}
-                                        className="cursor-pointer"
-                                      >
-                                        <CalendarPlus className="mr-2 h-4 w-4" />
-                                        Продлить доступ (30 дн.)
-                                      </DropdownMenuItem>
-                                    )}
-                                    <DropdownMenuSeparator />
-                                    {user.isBlocked ? (
-                                      <DropdownMenuItem
-                                        onClick={() => handleUnblock(user)}
-                                        className="cursor-pointer"
-                                      >
-                                        <ShieldOff className="mr-2 h-4 w-4" />
-                                        Разблокировать
-                                      </DropdownMenuItem>
-                                    ) : (
-                                      <DropdownMenuItem
-                                        onClick={() => { setBlockUser(user); setBlockReason(''); }}
-                                        className="cursor-pointer text-red-600 focus:text-red-600"
-                                      >
-                                        <Ban className="mr-2 h-4 w-4" />
-                                        Заблокировать
-                                      </DropdownMenuItem>
-                                    )}
-                                  </>
-                                )}
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            </div>
-            )}
-            {filteredUsers.length > 0 && totalPages > 1 && (
-                <div className="flex flex-col sm:flex-row items-center justify-between gap-2 pt-4 border-t mt-4">
-                  <p className="text-xs sm:text-sm text-muted-foreground order-2 sm:order-1">
-                    {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, filteredUsers.length)} из {filteredUsers.length}
-                  </p>
-                  <div className="flex gap-2 order-1 sm:order-2">
-                    <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
-                      Назад
-                    </Button>
-                    <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>
-                      Вперёд
-                    </Button>
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
+        <div className="grid grid-cols-2 gap-2 sm:flex">
+          <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); setPage(1) }}>
+            <SelectTrigger className="w-full sm:w-[150px]" aria-label="Фильтр по статусу">
+              <SelectValue placeholder="Статус" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Все статусы</SelectItem>
+              <SelectItem value="active">Активен</SelectItem>
+              <SelectItem value="blocked">Заблокирован</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={sortBy} onValueChange={(v) => { setSortBy(v); setPage(1) }}>
+            <SelectTrigger className="w-full sm:w-[180px]" aria-label="Сортировка">
+              <SelectValue placeholder="Сортировка" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="createdAt">По дате создания</SelectItem>
+              <SelectItem value="lastLogin">По последнему входу</SelectItem>
+              <SelectItem value="email">По логину</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
-      {/* Create Invite Dialog */}
-      <Dialog open={createOpen} onOpenChange={(open) => { if (!open) closeCreateDialog(); setCreateOpen(open); }}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Создать приглашение</DialogTitle>
-            <DialogDescription>
-              {createInviteLink
-                ? 'Ссылка приглашения создана. Действует 1 час.'
-                : 'Укажите логин (для кого приглашение) и роль. Будет создана ссылка на регистрацию (1 час).'}
-            </DialogDescription>
-          </DialogHeader>
-          {createInviteLink ? (
-            <div className="space-y-4">
-              <p className="text-sm text-amber-600 dark:text-amber-500 font-medium">
-                Сгенерированную ссылку нельзя никому передавать. Если по ссылке уже зарегистрировались, повторный переход по ней приведёт к ошибке.
-              </p>
-              <div className="flex items-center gap-2 rounded-lg border bg-muted/50 p-3 break-all text-sm">
-                <span className="flex-1 min-w-0">{createInviteLink}</span>
-                <CopyButton text={createInviteLink} successMessage="Ссылка скопирована" variant="outline" size="icon" aria-label="Копировать ссылку" />
-              </div>
-              <div className="flex gap-2">
-                <Button type="button" onClick={copyInviteLink} className="flex-1">
-                  <ClipboardCopy className="mr-2 h-4 w-4" />
-                  Копировать ссылку
-                </Button>
-                <Button type="button" variant="outline" onClick={() => { closeCreateDialog(); setCreateOpen(false); }}>
-                  Готово
-                </Button>
-              </div>
-            </div>
-          ) : (
-          <form onSubmit={handleCreateInvite} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="create-login">Логин *</Label>
-              <Input
-                id="create-login"
-                type="text"
-                value={createForm.login}
-                onChange={(e) => setCreateForm((f) => ({ ...f, login: e.target.value }))}
-                placeholder="d.solyanov"
-                required
-              />
-              <p className="text-xs text-muted-foreground">Логин, под которым пользователь зарегистрируется по ссылке</p>
-            </div>
-            <div className="space-y-2">
-              <Label>Роль</Label>
-              <Select value={createForm.role} onValueChange={(v) => setCreateForm((f) => ({ ...f, role: v }))}>
-                <SelectTrigger className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {ROLES.filter((r) => r.value !== 'ADMIN' || currentUser?.role === 'ADMIN').map((r) => (
-                    <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={closeCreateDialog}>
-                Отмена
-              </Button>
-              <Button type="submit" disabled={createLoading}>
-                {createLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                Сгенерировать ссылку
-              </Button>
-            </DialogFooter>
-          </form>
-          )}
-        </DialogContent>
-      </Dialog>
-
-      {/* Edit Role Dialog */}
-      <Dialog open={!!editRoleUser} onOpenChange={(open) => !open && setEditRoleUser(null)}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Изменить роль</DialogTitle>
-            <DialogDescription>
-              {editRoleUser && <>Логин: {editRoleUser.email}</>}
-            </DialogDescription>
-          </DialogHeader>
-          <form onSubmit={handleEditRole} className="space-y-4">
-            <div className="space-y-2">
-              <Label>Роль</Label>
-              <Select value={editRoleForm.role} onValueChange={(v) => setEditRoleForm((f) => ({ ...f, role: v }))}>
-                <SelectTrigger className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {ROLES.filter((r) => r.value !== 'ADMIN' || currentUser?.role === 'ADMIN').map((r) => (
-                    <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            {editRoleForm.role === 'VOL' && (
-              <>
-                <div className="space-y-2">
-                  <Label htmlFor="edit-vol-expires">Дата окончания доступа</Label>
-                  <Input
-                    id="edit-vol-expires"
-                    type="date"
-                    value={editRoleForm.volunteerExpiresAt}
-                    onChange={(e) => setEditRoleForm((f) => ({ ...f, volunteerExpiresAt: e.target.value }))}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="edit-vol-intensive">Интенсив</Label>
-                  <Input
-                    id="edit-vol-intensive"
-                    value={editRoleForm.volunteerIntensive}
-                    onChange={(e) => setEditRoleForm((f) => ({ ...f, volunteerIntensive: e.target.value }))}
-                    placeholder="feb-26"
-                  />
-                </div>
-              </>
-            )}
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setEditRoleUser(null)}>
-                Отмена
-              </Button>
-              <Button type="submit" disabled={editRoleLoading}>
-                {editRoleLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                Сохранить
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      {/* Block User AlertDialog */}
-      <AlertDialog open={!!blockUser} onOpenChange={(open) => !open && setBlockUser(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Заблокировать пользователя?</AlertDialogTitle>
-            <AlertDialogDescription>
-              {blockUser && (
-                <>
-                  Пользователь <strong>{blockUser.email}</strong> будет заблокирован и не сможет войти в систему до разблокировки. Причина (необязательно):
-                </>
+      <div className="mb-4 flex gap-1.5 overflow-x-auto pb-1 [scrollbar-width:none]" role="group" aria-label="Фильтр по роли">
+        {roleChips.map((chip) => {
+          const active = roleFilter === chip.value
+          return (
+            <button
+              key={chip.value}
+              type="button"
+              aria-pressed={active}
+              onClick={() => {
+                setRoleFilter(chip.value)
+                setPage(1)
+              }}
+              className={cn(
+                'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40',
+                active ? 'border-foreground/20 bg-muted font-medium text-foreground' : 'border-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground',
               )}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          {blockUser && (
-            <div className="py-2">
-              <Textarea
-                placeholder="Причина блокировки"
-                value={blockReason}
-                onChange={(e) => setBlockReason(e.target.value)}
-                className="min-h-[80px]"
-              />
+            >
+              {chip.label}
+              <span className="tabular-nums text-xs text-muted-foreground">{chip.count}</span>
+            </button>
+          )
+        })}
+      </div>
+
+      {selectedIds.size > 0 && (
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border bg-muted/50 px-3 py-2" role="status">
+          <p className="text-sm">
+            Выбрано: <span className="font-medium tabular-nums">{selectedIds.size}</span>
+          </p>
+          <div className="flex items-center gap-2">
+            <Button size="sm" onClick={() => setBulkExtendOpen(true)}>
+              <CalendarPlus className="size-4" aria-hidden />
+              Продлить доступ на 30 дн.
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setSelectedIds(new Set())}>
+              <X className="size-4" aria-hidden />
+              Снять выбор
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {loadError && users.length === 0 ? (
+        <EmptyState
+          icon={<Users className="size-6 text-muted-foreground" />}
+          title="Не удалось загрузить пользователей"
+          description="Проверьте подключение и повторите."
+          action={{ label: 'Повторить', onClick: () => void loadData() }}
+        />
+      ) : filteredUsers.length === 0 ? (
+        users.length === 0 ? (
+          <EmptyState
+            icon={<Users className="size-6 text-muted-foreground" />}
+            title="Пока нет пользователей"
+            description="Пригласите коллег по ссылке или создайте учётную запись."
+            action={canAddUsers ? { label: 'Добавить пользователя', onClick: () => setAddOpen(true) } : undefined}
+          />
+        ) : (
+          <EmptyState
+            icon={<Search className="size-6 text-muted-foreground" />}
+            title="Никого не нашли"
+            description="Измените запрос или сбросьте фильтры."
+            action={{ label: 'Сбросить фильтры', onClick: resetFilters }}
+          />
+        )
+      ) : (
+        <div className="overflow-x-auto rounded-lg border bg-card">
+          <Table className="min-w-[820px]">
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="w-10 pr-0">
+                  {selectablePageIds.length > 0 && (
+                    <Checkbox
+                      aria-label="Выбрать всех волонтёров на странице"
+                      checked={allPageSelected ? true : somePageSelected ? 'indeterminate' : false}
+                      onCheckedChange={(c) => toggleSelectPage(c === true)}
+                    />
+                  )}
+                </TableHead>
+                <TableHead>Пользователь</TableHead>
+                <TableHead>Логин</TableHead>
+                <TableHead>Роль</TableHead>
+                <TableHead>Статус</TableHead>
+                <TableHead className="text-right">Пространства</TableHead>
+                <TableHead>Последний вход</TableHead>
+                <TableHead className="w-12">
+                  <span className="sr-only">Действия</span>
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {paginatedUsers.map((u) => {
+                const manageable = !!currentUser && u.id !== currentUser.id && canManageUserWithRole(currentUser.role, u.role)
+                return (
+                  <TableRow key={u.id} className="hover:bg-muted/40" data-state={selectedIds.has(u.id) ? 'selected' : undefined}>
+                    <TableCell className="w-10 py-2 pr-0">
+                      {isSelectable(u) && (
+                        <Checkbox
+                          aria-label={`Выбрать ${u.email}`}
+                          checked={selectedIds.has(u.id)}
+                          onCheckedChange={(c) => toggleSelect(u.id, c === true)}
+                        />
+                      )}
+                    </TableCell>
+                    <TableCell className="py-2">
+                      <Link href={`/dashboard/admin/users/${u.id}`} className="flex min-w-0 items-center gap-2.5 hover:underline">
+                        <Avatar className="size-8 shrink-0">
+                          {u.avatarUrl && <AvatarImage src={u.avatarUrl} alt="" />}
+                          <AvatarFallback className={`${generateAvatarColor(u.email)} text-xs font-semibold text-white`}>
+                            {getInitials(u.name || u.email)}
+                          </AvatarFallback>
+                        </Avatar>
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-medium">{u.name || 'Без имени'}</div>
+                          {u.username && <div className="truncate text-xs text-muted-foreground">@{u.username}</div>}
+                        </div>
+                      </Link>
+                    </TableCell>
+                    <TableCell className="max-w-[200px] truncate py-2 font-mono text-sm" title={u.email}>
+                      {u.email}
+                    </TableCell>
+                    <TableCell className="py-2">
+                      <Badge variant={roleBadgeVariant(u.role)}>{ROLE_LABELS[u.role as AppRole] ?? u.role}</Badge>
+                    </TableCell>
+                    <TableCell className="py-2">
+                      <div className="flex flex-col gap-0.5">
+                        {u.isBlocked ? (
+                          <Badge variant="danger">Заблокирован</Badge>
+                        ) : u.requirePasswordChange ? (
+                          <Badge variant="warning">Ждёт смены пароля</Badge>
+                        ) : (
+                          <Badge variant="success">Активен</Badge>
+                        )}
+                        {isVolunteerMember(u) && u.volunteerExpiresAt && (
+                          <span className={cn('text-xs', isExpiringVolunteer(u) ? 'text-amber-700 dark:text-amber-300' : 'text-muted-foreground')}>
+                            волонтёр до {formatDate(u.volunteerExpiresAt, { day: '2-digit', month: '2-digit', year: 'numeric' })}
+                          </span>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell className="py-2 text-right text-sm tabular-nums text-muted-foreground">
+                      {u._count?.workspaces ?? 0}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap py-2 text-sm text-muted-foreground">
+                      {u.lastLoginAt ? formatRelativeTime(u.lastLoginAt) : '—'}
+                    </TableCell>
+                    <TableCell className="py-2 text-right">
+                      {manageable && (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="icon" className="size-8" aria-label={`Действия: ${u.email}`}>
+                              <MoreHorizontal className="size-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="w-56">
+                            <DropdownMenuItem onClick={() => router.push(`/dashboard/admin/users/${u.id}`)}>
+                              <Pencil className="size-4" />
+                              Профиль и роль
+                            </DropdownMenuItem>
+                            {isVolunteerMember(u) && (
+                              <DropdownMenuItem onClick={() => setExtendUser(u)}>
+                                <CalendarPlus className="size-4" />
+                                Продлить доступ на 30 дн.
+                              </DropdownMenuItem>
+                            )}
+                            <DropdownMenuItem onClick={() => setResetUser(u)}>
+                              <Key className="size-4" />
+                              Сбросить пароль
+                            </DropdownMenuItem>
+                            {isLeadSup && (u.role === 'SUP' || u.role === 'ADM') && (
+                              <DropdownMenuItem
+                                onClick={() => {
+                                  setRestrictUser(u)
+                                  setRestrictForm(u.restrictedFeatures ?? [])
+                                }}
+                              >
+                                <SlidersHorizontal className="size-4" />
+                                Ограничения
+                              </DropdownMenuItem>
+                            )}
+                            <DropdownMenuSeparator />
+                            {u.isBlocked ? (
+                              <DropdownMenuItem onClick={() => setUnblockUser(u)}>
+                                <ShieldOff className="size-4" />
+                                Разблокировать
+                              </DropdownMenuItem>
+                            ) : (
+                              <DropdownMenuItem
+                                variant="destructive"
+                                onClick={() => {
+                                  setBlockUser(u)
+                                  setBlockReason('')
+                                }}
+                              >
+                                <Ban className="size-4" />
+                                Заблокировать
+                              </DropdownMenuItem>
+                            )}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
+            </TableBody>
+          </Table>
+          {totalPages > 1 && (
+            <div className="flex flex-col items-center justify-between gap-2 border-t px-4 py-3 sm:flex-row">
+              <p className="text-sm text-muted-foreground">
+                {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, filteredUsers.length)} из {filteredUsers.length}
+              </p>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+                  Назад
+                </Button>
+                <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>
+                  Вперёд
+                </Button>
+              </div>
             </div>
           )}
-          <AlertDialogFooter>
-            <AlertDialogCancel>Отмена</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={(e) => { e.preventDefault(); handleBlock(); }}
-              disabled={blockLoading}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              {blockLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Заблокировать
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        </div>
+      )}
 
-      {/* Reset Password Result Dialog */}
-      <Dialog open={!!resetPasswordResult} onOpenChange={(open) => !open && setResetPasswordResult(null)}>
+      {currentUser && (
+        <AddUserDialog open={addOpen} onOpenChange={setAddOpen} actorRole={currentUser.role} onCreated={() => void loadData()} />
+      )}
+
+      <ConfirmDialog
+        open={!!resetUser}
+        onOpenChange={(o) => !o && setResetUser(null)}
+        title="Сбросить пароль?"
+        description={
+          <>
+            Для <span className="font-mono">{resetUser?.email}</span> будет создан новый пароль, все активные сессии завершатся. Старый пароль
+            перестанет работать.
+          </>
+        }
+        confirmLabel="Сбросить пароль"
+        loading={actionLoading}
+        onConfirm={handleResetPassword}
+      />
+
+      <ConfirmDialog
+        open={!!blockUser}
+        onOpenChange={(o) => !o && setBlockUser(null)}
+        title="Заблокировать пользователя?"
+        description={
+          <>
+            <span className="font-mono">{blockUser?.email}</span> не сможет войти в систему до разблокировки. Запланированные им сообщения
+            останутся.
+          </>
+        }
+        confirmLabel="Заблокировать"
+        destructive
+        loading={actionLoading}
+        onConfirm={handleBlock}
+      >
+        <Field label="Причина" htmlFor="block-reason" hint="Необязательно — увидит пользователь.">
+          <Textarea
+            id="block-reason"
+            value={blockReason}
+            maxLength={500}
+            onChange={(e) => setBlockReason(e.target.value)}
+            className="min-h-[80px]"
+          />
+        </Field>
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        open={!!unblockUser}
+        onOpenChange={(o) => !o && setUnblockUser(null)}
+        title="Разблокировать пользователя?"
+        description={
+          <>
+            <span className="font-mono">{unblockUser?.email}</span> снова сможет входить в систему.
+          </>
+        }
+        confirmLabel="Разблокировать"
+        loading={actionLoading}
+        onConfirm={handleUnblock}
+      />
+
+      <ConfirmDialog
+        open={!!extendUser}
+        onOpenChange={(o) => !o && setExtendUser(null)}
+        title="Продлить доступ волонтёра?"
+        description={
+          <>
+            Срок доступа <span className="font-mono">{extendUser?.email}</span> увеличится на 30 дней. Если доступ был закрыт из-за окончания
+            срока, пользователь будет разблокирован.
+          </>
+        }
+        confirmLabel="Продлить на 30 дн."
+        loading={actionLoading}
+        onConfirm={handleExtendOne}
+      />
+
+      <ConfirmDialog
+        open={bulkExtendOpen}
+        onOpenChange={setBulkExtendOpen}
+        title={`Продлить доступ: ${selectedIds.size}`}
+        description="Срок доступа выбранных волонтёров увеличится на 30 дней. Заблокированные из-за окончания срока будут разблокированы."
+        confirmLabel="Продлить на 30 дн."
+        loading={actionLoading}
+        onConfirm={handleBulkExtend}
+      />
+
+      {/* Новый пароль после сброса */}
+      <Dialog open={!!resetPasswordResult} onOpenChange={(o) => !o && setResetPasswordResult(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Пароль сброшен</DialogTitle>
             <DialogDescription>
-              Логин: {resetPasswordResult?.email} — скопируйте пароль и передайте пользователю. После закрытия пароль больше не будет показан.
+              Логин: <span className="font-mono">{resetPasswordResult?.email}</span>. Скопируйте пароль и передайте пользователю — после
+              закрытия он больше не будет показан.
             </DialogDescription>
           </DialogHeader>
-          <div className="flex gap-2 py-2">
-            <Input
-              readOnly
-              value={resetPasswordResult?.newPassword ?? ''}
-              className="font-mono"
-            />
-            <Button variant="outline" size="icon" onClick={copyPasswordToClipboard} title="Скопировать">
-              <ClipboardCopy className="h-4 w-4" />
-            </Button>
+          <div className="flex items-center gap-2">
+            <Input readOnly value={resetPasswordResult?.newPassword ?? ''} className="font-mono" aria-label="Новый пароль" />
+            <CopyButton text={resetPasswordResult?.newPassword ?? ''} successMessage="Пароль скопирован" variant="outline" size="icon" aria-label="Копировать пароль" />
           </div>
           <DialogFooter>
             <Button onClick={() => setResetPasswordResult(null)}>Закрыть</Button>
@@ -1349,102 +765,46 @@ export default function AdminPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Confirm SUPPORT role */}
-      <AlertDialog open={editRoleConfirmSup} onOpenChange={(open) => !open && setEditRoleConfirmSup(false)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Выдать права главного администратора?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Пользователь получит полный доступ: админ-панель, создание пользователей, блокировка, смена ролей. Продолжить?
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Отмена</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={(e) => { e.preventDefault(); handleEditRoleSubmit(); }}
-              disabled={editRoleLoading}
-            >
-              {editRoleLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Подтвердить
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      {/* Restrictions — только ADMIN */}
-      <Dialog open={!!restrictUser} onOpenChange={(open) => !open && setRestrictUser(null)}>
+      {/* Ограничения — Lead_SUP */}
+      <Dialog open={!!restrictUser} onOpenChange={(o) => !o && !actionLoading && setRestrictUser(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Ограничения пользователя</DialogTitle>
             <DialogDescription>
-              Логин: {restrictUser?.email} — запретить отдельные возможности (применяется к SUPPORT/ADM).
+              <span className="font-mono">{restrictUser?.email}</span> — запретить отдельные возможности.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-3 py-2">
-            <div className="flex items-center justify-between rounded-lg border p-3">
-              <div>
-                <p className="font-medium text-sm">Запретить «Отправить от имени»</p>
-                <p className="text-xs text-muted-foreground">Пользователь не сможет планировать сообщения от имени других</p>
-              </div>
-              <Checkbox
-                checked={restrictForm.includes('sendAs')}
-                onCheckedChange={(checked) => setRestrictForm((prev) => checked ? [...prev, 'sendAs'] : prev.filter((k) => k !== 'sendAs'))}
-              />
-            </div>
-            <div className="flex items-center justify-between rounded-lg border p-3">
-              <div>
-                <p className="font-medium text-sm">Запретить просмотр активности других</p>
-                <p className="text-xs text-muted-foreground">SUPPORT не увидит активность VOL; ADM не видит чужую активность</p>
-              </div>
-              <Checkbox
-                checked={restrictForm.includes('activityView')}
-                onCheckedChange={(checked) => setRestrictForm((prev) => checked ? [...prev, 'activityView'] : prev.filter((k) => k !== 'activityView'))}
-              />
-            </div>
-            <div className="flex items-center justify-between rounded-lg border p-3">
-              <div>
-                <p className="font-medium text-sm">Запретить доступ в админку</p>
-                <p className="text-xs text-muted-foreground">Скрыть раздел «Управление пользователями»</p>
-              </div>
-              <Checkbox
-                checked={restrictForm.includes('adminPanel')}
-                onCheckedChange={(checked) => setRestrictForm((prev) => checked ? [...prev, 'adminPanel'] : prev.filter((k) => k !== 'adminPanel'))}
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setRestrictUser(null)}>Отмена</Button>
-            <Button
-              disabled={restrictLoading}
-              onClick={async () => {
-                if (!restrictUser) return
-                setRestrictLoading(true)
-                try {
-                  const r = await fetch(`/api/admin/users/${restrictUser.id}/restrictions`, {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ restrictedFeatures: restrictForm }),
-                  })
-                  if (r.ok) {
-                    const d = await r.json()
-                    setUsers((prev) => prev.map((u) => u.id === restrictUser.id ? { ...u, restrictedFeatures: d.user.restrictedFeatures } : u))
-                    toast.success('Ограничения сохранены')
-                    setRestrictUser(null)
-                  } else {
-                    const d = await r.json()
-                    toast.error(d.error || 'Ошибка сохранения')
+          <ul className="divide-y rounded-md border">
+            {RESTRICTIONS.map((r) => (
+              <li key={r.key} className="flex items-start gap-3 px-3 py-2.5">
+                <Checkbox
+                  id={`restrict-${r.key}`}
+                  className="mt-0.5"
+                  checked={restrictForm.includes(r.key)}
+                  onCheckedChange={(c) =>
+                    setRestrictForm((prev) => (c === true ? [...prev, r.key] : prev.filter((k) => k !== r.key)))
                   }
-                } finally {
-                  setRestrictLoading(false)
-                }
-              }}
-            >
-              {restrictLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                />
+                <div>
+                  <Label htmlFor={`restrict-${r.key}`} className="text-sm font-medium">
+                    {r.label}
+                  </Label>
+                  <p className="text-xs text-muted-foreground">{r.hint}</p>
+                </div>
+              </li>
+            ))}
+          </ul>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRestrictUser(null)} disabled={actionLoading}>
+              Отмена
+            </Button>
+            <Button onClick={() => void handleSaveRestrictions()} disabled={actionLoading}>
+              {actionLoading && <Loader2 className="size-4 animate-spin" aria-hidden />}
               Сохранить
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </PageContainer>
   )
 }

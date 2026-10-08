@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { requireAuth } from '@/lib/auth';
+import { getSafeErrorMessage, isUnsafeId } from '@/lib/security';
+import { requireAuth } from '@/lib/api-auth';
+import { assertWorkspaceBulkUsersAccess } from '@/lib/workspace-bulk-users-access';
 
 export async function DELETE(
   _request: Request,
@@ -17,12 +19,13 @@ export async function DELETE(
       throw authError;
     }
     const { id: workspaceId, addedUserId } = await params;
+    if (isUnsafeId(addedUserId)) {
+      return NextResponse.json({ error: 'Bad request' }, { status: 400 });
+    }
 
-    const workspace = await prisma.workspaceConnection.findFirst({
-      where: { id: workspaceId, userId: user.id },
-    });
-    if (!workspace) {
-      return NextResponse.json({ error: 'Workspace not found' }, { status: 404 });
+    const access = await assertWorkspaceBulkUsersAccess(user.id, workspaceId);
+    if (!access.ok) {
+      return NextResponse.json({ error: access.error }, { status: access.status });
     }
 
     const deleted = await prisma.workspaceAddedUser.deleteMany({
@@ -40,7 +43,7 @@ export async function DELETE(
   } catch (error: any) {
     console.error('Remove added user error:', error);
     return NextResponse.json(
-      { error: error?.message || 'Не удалось удалить запись' },
+      { error: getSafeErrorMessage(error, 'Не удалось удалить запись') },
       { status: 500 }
     );
   }

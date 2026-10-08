@@ -1,20 +1,25 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { requireAdmin, isForbiddenError } from '@/lib/auth';
+import { isForbiddenError } from '@/lib/auth';
+import { requireAdmin } from '@/lib/api-auth';
 
 const FEATURE_KEYS = [
   'sendAsEnabledSup',
   'sendAsEnabledAdm',
   'activityViewVolSup',
-  // Ограничение вкладок пространства для SUP/ADM (ADMIN может отключать)
+  // Ограничение вкладок пространства для SUP/ADM (Lead_SUP в админке может отключать)
   'workspaceTabTemplatesSup',
   'workspaceTabEmojiImportSup',
   'workspaceTabUsersAddSup',
   'workspaceTabTemplatesAdm',
-  // Видимость разделов для пользователей (ADMIN может скрывать)
-  'templatesTabVisible',   // false = только ADMIN видит вкладку «Шаблоны», остальные — «обновляет»
+  'workspaceTabEmojiImportAdm',
+  // Видимость разделов для пользователей (Lead_SUP может скрывать)
+  'templatesTabVisible',   // false = только Lead_SUP видит вкладку «Шаблоны», остальные — «обновляет»
   'helpMainVisible',       // false = вкладка «Основные моменты» скрыта, пользователи видят «обновляет»
   'helpAdminVisible',      // false = вкладка «От Администратора» скрыта, пользователи видят «обновляет»
+  // Интенсивы и годовой календарь (docs/intensives-api.md): false = новые API отвечают 404, данные не удаляются,
+  // запланированные сообщения продолжают отправляться
+  'feature:intensives',
 ] as const;
 
 /** Строковые настройки (не true/false), например контакт для страницы «Заблокирован» */

@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { requireAuth } from '@/lib/auth';
+import { requireAuth } from '@/lib/api-auth';
 import { resolveR2RcAuth } from '@/lib/r2d2-rc-auth';
 import { assertWorkspaceR2Access } from '@/lib/workspace-r2-access';
+import { getSafeErrorMessage } from '@/lib/security';
+import { compileUserRegex, MAX_PATTERN_LENGTH, MAX_SUBJECT_LENGTH } from '@/lib/safe-regex';
 
 const EMAIL_DOMAIN = '@student.21-school.ru';
 /** Как в «Добавление пользователей» (импорт) */
@@ -97,14 +99,18 @@ export async function POST(
 
       case 'bad_nicknames': {
         const patternRaw = typeof body.pattern === 'string' ? body.pattern : '';
-        let re: RegExp;
-        try {
-          re = patternRaw.trim() ? new RegExp(patternRaw) : DEFAULT_VALID_USERNAME;
-        } catch {
-          return NextResponse.json({ error: 'Некорректное регулярное выражение' }, { status: 400 });
+        // Пользовательский regex: защита от ReDoS (вложенные квантификаторы, длина шаблона и строк)
+        const re: RegExp | null = patternRaw.trim() ? compileUserRegex(patternRaw) : DEFAULT_VALID_USERNAME;
+        if (!re) {
+          return NextResponse.json(
+            { error: `Некорректное или слишком сложное регулярное выражение (до ${MAX_PATTERN_LENGTH} символов, без вложенных квантификаторов)` },
+            { status: 400 }
+          );
         }
         const users = await rc.listAllUsers(authToken, rcAdminId);
-        const bad = users.filter((u) => u.username && !re.test(u.username));
+        const bad = users.filter(
+          (u) => u.username && (u.username.length > MAX_SUBJECT_LENGTH || !re.test(u.username))
+        );
         await logR2(workspaceId, user.id, 'bad_nicknames', { count: bad.length, pattern: patternRaw || 'default' });
         return NextResponse.json({
           ok: true,
@@ -186,6 +192,9 @@ export async function POST(
         if (!channelName || ids.length === 0) {
           return NextResponse.json({ error: 'Укажите channelName и логины пользователей' }, { status: 400 });
         }
+        if (ids.length > MAX_BATCH) {
+          return NextResponse.json({ error: `Максимум ${MAX_BATCH}` }, { status: 400 });
+        }
         const channels = await rc.getChannels(authToken, rcAdminId);
         const room = channels.find((c) => (c.name || '').toLowerCase() === channelName.toLowerCase());
         if (!room?._id) {
@@ -211,6 +220,9 @@ export async function POST(
         const ids = parseIdentifiers(body.identifiers);
         if (!channelName || ids.length === 0) {
           return NextResponse.json({ error: 'Укажите channelName и логины' }, { status: 400 });
+        }
+        if (ids.length > MAX_BATCH) {
+          return NextResponse.json({ error: `Максимум ${MAX_BATCH}` }, { status: 400 });
         }
         const channels = await rc.getChannels(authToken, rcAdminId);
         const room = channels.find((c) => (c.name || '').toLowerCase() === channelName.toLowerCase());
@@ -238,7 +250,7 @@ export async function POST(
   } catch (error: any) {
     console.error('[r2d2]', error);
     return NextResponse.json(
-      { error: error?.message || 'Ошибка R2D2' },
+      { error: getSafeErrorMessage(error, 'Ошибка R2D2') },
       { status: 500 }
     );
   }
