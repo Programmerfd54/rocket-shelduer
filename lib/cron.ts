@@ -6,12 +6,15 @@ let cronJob: ScheduledTask | null = null;
 
 export function startCronJob() {
   if (cronJob) return;
-  // В development: всегда запускаем внутренний cron.
-  // В production: запускаем, если CRON_SECRET не задан (нет внешнего cron — Docker без отдельного cron-контейнера).
-  const runInternalCron =
-    process.env.NODE_ENV === 'development' ||
-    (process.env.NODE_ENV === 'production' && !process.env.CRON_SECRET);
-  if (!runInternalCron) return;
+  // Внутренний cron запускается ВСЕГДА (dev и production), независимо от CRON_SECRET: он вызывает отправку напрямую
+  // из процесса приложения, без HTTP и секрета. Раньше при заданном CRON_SECRET он отключался в расчёте на внешний
+  // cron-контейнер — если контейнера нет (корневой docker-compose.yml) или секрет отклонялся, сообщения не уходили.
+  // Совместная работа с внешним cron (/api/cron/send-messages) безопасна: сообщение перед отправкой атомарно
+  // «захватывается» (compare-and-swap), поэтому дубликатов не будет. Отключить: DISABLE_INTERNAL_CRON=true.
+  if (process.env.DISABLE_INTERNAL_CRON === 'true') {
+    console.log('ℹ️ Internal cron is disabled (DISABLE_INTERNAL_CRON=true) — scheduled messages need an external cron.');
+    return;
+  }
 
   console.log('🚀 Starting internal cron job for scheduled messages...');
 

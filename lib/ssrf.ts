@@ -241,7 +241,10 @@ export function assertSafeWorkspaceUrl(url: string | null | undefined): void {
 export class SsrfBlockedError extends Error {
   /** Код для сетевого стека (undici прокидывает ошибку lookup в error.cause). */
   readonly code = 'ESSRFBLOCKED';
-  constructor(message = 'Outbound request blocked: internal or private addresses are not allowed') {
+  constructor(
+    message = 'Outbound request blocked: internal or private addresses are not allowed. ' +
+      'Если Rocket.Chat находится во внутренней сети/VPN — добавьте его хост в SSRF_ALLOWED_HOSTS в .env и перезапустите приложение.'
+  ) {
     super(message);
     this.name = 'SsrfBlockedError';
   }
