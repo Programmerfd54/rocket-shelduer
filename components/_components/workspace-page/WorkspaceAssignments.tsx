@@ -53,10 +53,13 @@ export function WorkspaceAssignments({
   workspaceId,
   currentUserRole,
   canSee,
+  expandSignal = 0,
 }: {
   workspaceId: string
   currentUserRole: string
   canSee: boolean
+  /** Увеличение значения раскрывает блок (ссылка «Участники пространства» из графика интенсивов) */
+  expandSignal?: number
 }) {
   const roleCanManage = currentUserRole === 'SUP' || currentUserRole === 'LEAD_SUP'
   // Сервер уточняет право: SUP не управляет назначениями в пространствах Lead_SUP и в чужих пространствах
@@ -66,6 +69,11 @@ export function WorkspaceAssignments({
   const [owner, setOwner] = useState<PersonRef | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [collapsed, setCollapsed] = useState(true)
+  const [seenExpandSignal, setSeenExpandSignal] = useState(expandSignal)
+  if (expandSignal !== seenExpandSignal) {
+    setSeenExpandSignal(expandSignal)
+    if (expandSignal > 0) setCollapsed(false)
+  }
 
   const [assignOpen, setAssignOpen] = useState(false)
   const [selectedUserId, setSelectedUserId] = useState('')
@@ -182,7 +190,7 @@ export function WorkspaceAssignments({
   const total = assignments.length + (owner ? 1 : 0)
 
   return (
-    <section className="space-y-3">
+    <section id="workspace-members" className="scroll-mt-20 space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <button
           type="button"

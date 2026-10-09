@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { requireAuth } from '@/lib/api-auth';
 import { isUnsafeId } from '@/lib/security';
-import { encryptPassword } from '@/lib/encryption';
+import { encryptSettingsSecret, workspaceSettingsAad } from '@/lib/encryption';
+import { safeErrorForLog } from '@/lib/sensitive-data';
 import { isStudentIntensiveWorkspaceUrl } from '@/lib/workspace-url-flags';
 import { isGlobalStaffRole } from '@/lib/roles';
 
@@ -37,6 +38,23 @@ async function resolveLdapSmtpWorkspace(userId: string, role: string, workspaceI
   return { ok: true as const, workspace: ws };
 }
 
+/**
+ * Пароли LDAP bind / SMTP: только запись (приложение их не расшифровывает и не использует),
+ * хранятся зашифрованными v2 (подключ 'workspace-settings-secret', привязка к подключению).
+ * Клиенту отдаётся только маска '********' и флаг «задан» — никогда не значение и не шифртекст.
+ */
+const MASK = '********';
+const MAX_SECRET_LENGTH = 4096;
+function maskSettings<T extends { ldapBindPass: string | null; smtpPass: string | null }>(settings: T) {
+  return {
+    ...settings,
+    ldapBindPass: settings.ldapBindPass ? MASK : null,
+    smtpPass: settings.smtpPass ? MASK : null,
+    ldapBindPassSet: !!settings.ldapBindPass,
+    smtpPassSet: !!settings.smtpPass,
+  };
+}
+
 /** GET — LDAP/SMTP/приглашения (секреты маскируются) */
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -52,15 +70,9 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
       });
     }
 
-    return NextResponse.json({
-      settings: {
-        ...settings,
-        ldapBindPass: settings.ldapBindPass ? '********' : null,
-        smtpPass: settings.smtpPass ? '********' : null,
-      },
-    });
+    return NextResponse.json({ settings: maskSettings(settings) });
   } catch (e) {
-    console.error('ldap-smtp GET', e);
+    console.error('ldap-smtp GET', safeErrorForLog(e));
     return NextResponse.json({ error: 'Failed' }, { status: 500 });
   }
 }
@@ -82,8 +94,15 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
     if (typeof body.ldapBaseDN === 'string') data.ldapBaseDN = body.ldapBaseDN || null;
     if (typeof body.ldapBindDN === 'string') data.ldapBindDN = body.ldapBindDN || null;
     if (typeof body.ldapUserFilter === 'string') data.ldapUserFilter = body.ldapUserFilter || null;
-    if (typeof body.ldapBindPass === 'string' && body.ldapBindPass !== '********') {
-      data.ldapBindPass = body.ldapBindPass ? encryptPassword(body.ldapBindPass) : null;
+    const secretAad = workspaceSettingsAad(workspaceId);
+    if (
+      (typeof body.ldapBindPass === 'string' && body.ldapBindPass.length > MAX_SECRET_LENGTH) ||
+      (typeof body.smtpPass === 'string' && body.smtpPass.length > MAX_SECRET_LENGTH)
+    ) {
+      return NextResponse.json({ error: 'Invalid input' }, { status: 400 });
+    }
+    if (typeof body.ldapBindPass === 'string' && body.ldapBindPass !== MASK) {
+      data.ldapBindPass = body.ldapBindPass ? encryptSettingsSecret(body.ldapBindPass, secretAad) : null;
     }
 
     if (typeof body.smtpEnabled === 'boolean') data.smtpEnabled = body.smtpEnabled;
@@ -92,8 +111,8 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
     if (typeof body.smtpUser === 'string') data.smtpUser = body.smtpUser || null;
     if (typeof body.smtpFromName === 'string') data.smtpFromName = body.smtpFromName || null;
     if (typeof body.smtpFromAddr === 'string') data.smtpFromAddr = body.smtpFromAddr || null;
-    if (typeof body.smtpPass === 'string' && body.smtpPass !== '********') {
-      data.smtpPass = body.smtpPass ? encryptPassword(body.smtpPass) : null;
+    if (typeof body.smtpPass === 'string' && body.smtpPass !== MASK) {
+      data.smtpPass = body.smtpPass ? encryptSettingsSecret(body.smtpPass, secretAad) : null;
     }
 
     if (typeof body.inviteEnabled === 'boolean') data.inviteEnabled = body.inviteEnabled;
@@ -106,15 +125,9 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
       update: data as object,
     });
 
-    return NextResponse.json({
-      settings: {
-        ...settings,
-        ldapBindPass: settings.ldapBindPass ? '********' : null,
-        smtpPass: settings.smtpPass ? '********' : null,
-      },
-    });
+    return NextResponse.json({ settings: maskSettings(settings) });
   } catch (e) {
-    console.error('ldap-smtp PUT', e);
+    console.error('ldap-smtp PUT', safeErrorForLog(e));
     return NextResponse.json({ error: 'Failed' }, { status: 500 });
   }
 }

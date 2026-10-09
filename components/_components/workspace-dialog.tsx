@@ -27,6 +27,7 @@ import {
 import { toast } from 'sonner'
 import { Plus, CircleHelp, CircleAlert, TriangleAlert, Loader2 } from 'lucide-react'
 import { checkWorkspaceUrl, checkDateRange } from '@/lib/workspace-validation'
+import { CredentialStorageNote } from '@/components/_components/workspace/CredentialStorageNote'
 
 interface WorkspaceDialogProps {
   onSuccess: () => void
@@ -75,6 +76,10 @@ export function WorkspaceDialog({
   const isControlled = controlledOpen !== undefined && onControlledOpenChange !== undefined
   const open = isControlled ? controlledOpen! : internalOpen
   const setDialogOpen = (v: boolean) => {
+    if (!v) {
+      setFormData((f) => (f.password || f.personalToken ? { ...f, password: '', personalToken: '' } : f))
+      setTotpCode('')
+    }
     if (isControlled) onControlledOpenChange!(v)
     else setInternalOpen(v)
   }
@@ -107,6 +112,13 @@ export function WorkspaceDialog({
     endDate: checkDateRange(formData.startDate, formData.endDate),
   }
   const visibleError = (k: FieldKey) => (touched[k] ? errors[k] : undefined)
+
+  // Секреты не держим в состоянии дольше нужного: стираются при закрытии диалога (в т.ч. кнопкой «Отмена»)
+  // и после неудачной отправки
+  const clearSecrets = () => {
+    setFormData((f) => ({ ...f, password: '', personalToken: '' }))
+    setTotpCode('')
+  }
 
   const resetAll = () => {
     setFormData(EMPTY_FORM)
@@ -164,7 +176,11 @@ export function WorkspaceDialog({
 
       const data = await response.json()
 
+      // Код 2FA одноразовый — после отправки не храним
+      setTotpCode('')
+
       if (response.status === 400 && data.requiresTotp) {
+        // Пароль остаётся только до ввода кода 2FA (он нужен для повторной отправки вместе с кодом)
         setNeedsTotp(true)
         toast.message('Нужен код 2FA', {
           id: toastId,
@@ -186,6 +202,7 @@ export function WorkspaceDialog({
       })
       onSuccess()
     } catch (error) {
+      clearSecrets()
       const message = (error instanceof Error && error.message) || 'Ошибка при подключении пространства'
       setFormError(message)
       toast.error('Не удалось подключить пространство', {
@@ -349,8 +366,9 @@ export function WorkspaceDialog({
                       (в том числе LDAP). Если включена 2FA, может понадобиться одноразовый код.
                     </p>
                     <p>
-                      <strong>Личный токен</strong> — создаётся в Rocket.Chat в разделе «Токены для личного доступа».
-                      Нужны токен и ваш User ID из профиля. При выпуске токена можно разрешить использование без 2FA.
+                      <strong>Личный токен</strong> (рекомендуется) — создаётся в Rocket.Chat в разделе «Токены для
+                      личного доступа». Нужны токен и ваш User ID из профиля. Пароль тогда не нужен и не хранится, а токен
+                      можно отозвать в Rocket.Chat в любой момент.
                     </p>
                   </TooltipContent>
                 </Tooltip>
@@ -389,7 +407,6 @@ export function WorkspaceDialog({
                     htmlFor="password"
                     required
                     error={visibleError('password')}
-                    hint="Пароль хранится в зашифрованном виде и нужен только для подключения к Rocket.Chat."
                   >
                     <PasswordInput
                       id="password"
@@ -401,6 +418,7 @@ export function WorkspaceDialog({
                       autoComplete="new-password"
                     />
                   </Field>
+                  <CredentialStorageNote method="password" />
 
                   <div className="flex items-center gap-2">
                     <Checkbox
@@ -473,6 +491,7 @@ export function WorkspaceDialog({
                       autoComplete="off"
                     />
                   </Field>
+                  <CredentialStorageNote method="personal_token" />
                 </TabsContent>
               </Tabs>
             </fieldset>

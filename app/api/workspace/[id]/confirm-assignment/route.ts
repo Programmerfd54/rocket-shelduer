@@ -2,9 +2,21 @@ import { NextResponse } from 'next/server';
 import { getSafeErrorMessage, isUnsafeId } from '@/lib/security';
 import prisma from '@/lib/prisma';
 import { requireAuth } from '@/lib/api-auth';
-import { encryptPassword, encryptAuthToken } from '@/lib/encryption';
+import { connectionAad, encryptPassword, encryptAuthToken } from '@/lib/encryption';
 import { RocketChatClient } from '@/lib/rocketchat';
-import { logSecurityEvent, getClientIp, isSuspiciousInput, SecurityEventType } from '@/lib/security';
+import {
+  logSecurityEvent,
+  getClientIp,
+  isSuspiciousInput,
+  SecurityEventType,
+  hitRcConnectRateLimit,
+  recordRcConnectFailure,
+  isRcNetworkErrorMessage,
+  RC_CONNECT_RATE_LIMIT_MESSAGE,
+  RC_LOGIN_FAILED_MESSAGE,
+} from '@/lib/security';
+import { parseRcCredentialFields } from '@/lib/credentials';
+import { safeErrorForLog } from '@/lib/sensitive-data';
 
 /**
  * POST — подтвердить назначение: войти в Rocket.Chat (логин/пароль или личный токен)
@@ -71,9 +83,20 @@ export async function POST(
       }
     }
 
+    // Формат кредов RC (zod)
+    if (
+      !parseRcCredentialFields({
+        username: typeof username === 'string' ? username : undefined,
+        password: authMethod === 'password' ? password : undefined,
+        personalToken,
+        rcUserId: rcUserIdBody,
+      })
+    ) {
+      return NextResponse.json({ error: 'Invalid input' }, { status: 400 });
+    }
+
     if (
       (username && isSuspiciousInput(username)) ||
-      (typeof password === 'string' && password && isSuspiciousInput(password)) ||
       (personalToken && isSuspiciousInput(personalToken)) ||
       (rcUserIdBody && isSuspiciousInput(rcUserIdBody))
     ) {
@@ -127,25 +150,56 @@ export async function POST(
       );
     }
 
+    // Лимит попыток проверки кредов RC (защита от перебора паролей через приложение)
+    if (await hitRcConnectRateLimit(user.id, getClientIp(request))) {
+      return NextResponse.json({ error: RC_CONNECT_RATE_LIMIT_MESSAGE }, { status: 429 });
+    }
+
     const rcClient = new RocketChatClient(normalizedUrl);
     let encryptedPassword: string;
     let encryptedToken: string;
     let rcUserId: string;
+    // Новое подключение принадлежит текущему пользователю — привязка шифртекста к нему
+    const credAad = connectionAad(user.id);
 
-    if (authMethod === 'personal_token') {
-      await RocketChatClient.validatePersonalAccessToken(
-        normalizedUrl,
-        personalToken,
-        rcUserIdBody,
-      );
-      encryptedPassword = encryptPassword('');
-      encryptedToken = encryptAuthToken(personalToken);
-      rcUserId = rcUserIdBody;
-    } else {
-      const login = await rcClient.login(username.trim(), password);
-      encryptedPassword = encryptPassword(password);
-      encryptedToken = encryptAuthToken(login.authToken);
-      rcUserId = login.userId;
+    try {
+      if (authMethod === 'personal_token') {
+        await RocketChatClient.validatePersonalAccessToken(
+          normalizedUrl,
+          personalToken,
+          rcUserIdBody,
+        );
+        encryptedPassword = '';
+        encryptedToken = encryptAuthToken(personalToken, credAad);
+        rcUserId = rcUserIdBody;
+      } else {
+        const login = await rcClient.login(username.trim(), password);
+        // Пароль хранится только зашифрованным — для автоматического обновления сессии RC
+        encryptedPassword = encryptPassword(password, credAad);
+        encryptedToken = encryptAuthToken(login.authToken, credAad);
+        rcUserId = login.userId;
+      }
+    } catch (authErr: unknown) {
+      const msg = authErr instanceof Error ? authErr.message : '';
+      const code = (authErr as { code?: string })?.code;
+      if (msg === 'TOTP_REQUIRED' || code === 'totp-required') {
+        return NextResponse.json(
+          {
+            error:
+              'Для этой учётной записи Rocket.Chat включена 2FA. Подключитесь через личный токен доступа.',
+          },
+          { status: 400 }
+        );
+      }
+      if (isRcNetworkErrorMessage(msg)) throw authErr;
+      await recordRcConnectFailure({
+        userId: user.id,
+        request,
+        path: `/api/workspace/${workspaceId}/confirm-assignment`,
+        method: 'POST',
+        reason: authMethod === 'personal_token' ? 'Rocket.Chat token check failed' : 'Rocket.Chat login failed',
+      });
+      return NextResponse.json({ error: RC_LOGIN_FAILED_MESSAGE }, { status: 400 });
     }
 
     const newConnection = await prisma.workspaceConnection.create({
@@ -173,7 +227,7 @@ export async function POST(
       workspaceId: newConnection.id,
     });
   } catch (error) {
-    console.error('Confirm assignment error:', error);
+    console.error('Confirm assignment error:', safeErrorForLog(error));
     const rawMessage = error instanceof Error ? error.message : 'Ошибка подключения к Rocket.Chat';
     const isNetworkError =
       /fetch failed|timeout|ECONNREFUSED|ECONNRESET|UND_ERR_CONNECT_TIMEOUT|ENOTFOUND|ETIMEDOUT/i.test(rawMessage);

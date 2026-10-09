@@ -7,7 +7,7 @@
  */
 import type { ReactionRatingSettings } from '@prisma/client';
 import prisma from '@/lib/prisma';
-import { decryptAuthToken } from '@/lib/encryption';
+import { connectionAad, decryptAuthToken } from '@/lib/encryption';
 import { RocketChatClient } from '@/lib/rocketchat';
 import { getEffectiveConnectionForRc } from '@/lib/workspace-rc';
 import { isStudentRcHostStrict } from '@/lib/workspace-url-flags';
@@ -73,9 +73,9 @@ async function resolveRcAuth(workspaceId: string, actingUserId?: string): Promis
   }
   const ws = await prisma.workspaceConnection.findUnique({
     where: { id: workspaceId },
-    select: { workspaceUrl: true, authToken: true, userId_RC: true, isActive: true },
+    select: { workspaceUrl: true, authToken: true, userId_RC: true, isActive: true, userId: true },
   });
-  const token = ws?.authToken ? decryptAuthToken(ws.authToken) : null;
+  const token = ws?.authToken ? decryptAuthToken(ws.authToken, connectionAad(ws.userId)) : null;
   if (!ws || !ws.isActive || !token || !ws.userId_RC) return null;
   return { rc: new RocketChatClient(ws.workspaceUrl), authToken: token, userIdRc: ws.userId_RC };
 }

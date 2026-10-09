@@ -33,6 +33,7 @@ import {
   type QueueView,
 } from '@/lib/message-queue'
 import { getTimeZoneLabel } from '@/lib/schedule-datetime'
+import { isLegacyPeriodEndingSoon } from '@/lib/intensives/archive-prompt'
 
 interface DashUser extends QueueUser {
   role?: string
@@ -196,18 +197,12 @@ export default function DashboardPage() {
         const list: DashWorkspace[] = workspacesData.workspaces ?? []
         setWorkspaces(list)
 
-        // Интенсивы, заканчивающиеся в ближайшие 7 дней
-        const now = new Date()
-        const sevenDaysLater = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000)
-        setExpiringWorkspaces(
-          list.filter(
-            (ws) =>
-              ws.endDate && new Date(ws.endDate) <= sevenDaysLater && new Date(ws.endDate) >= now && !ws.isArchived,
-          ),
-        )
+        // Период пространства заканчивается в ближайшие 7 дней (не показываем, если в графике есть
+        // предстоящий/идущий интенсив или Lead_SUP отключил предложение архивировать)
+        setExpiringWorkspaces(list.filter((ws) => isLegacyPeriodEndingSoon(ws, 7)))
 
-        // Завершённые интенсивы — напоминание об архиве
-        const ended = list.filter((ws) => ws.endDate && new Date(ws.endDate) < now && !ws.isArchived)
+        // Напоминание об архиве — только по серверному признаку archiveSuggested
+        const ended = list.filter((ws) => ws.archiveSuggested === true)
         if (ended.length > 0 && !isIntensiveArchiveToastDismissed()) {
           const id = toast.warning('Интенсивы завершены', {
             description: `${ended.length} ${ended.length === 1 ? 'интенсив завершен' : 'интенсива завершены'}. Рекомендуется заархивировать их.`,
@@ -227,13 +222,7 @@ export default function DashboardPage() {
         }
 
         // Интенсивы, заканчивающиеся в течение 3 дней
-        const endingSoon = list.filter(
-          (ws) =>
-            ws.endDate &&
-            new Date(ws.endDate) >= now &&
-            new Date(ws.endDate) <= new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000) &&
-            !ws.isArchived,
-        )
+        const endingSoon = list.filter((ws) => isLegacyPeriodEndingSoon(ws, 3))
         if (endingSoon.length > 0 && ended.length === 0) {
           toast.info('Интенсивы скоро завершатся', {
             description: `${endingSoon.length} ${endingSoon.length === 1 ? 'интенсив завершится' : 'интенсива завершатся'} в ближайшие 3 дня.`,

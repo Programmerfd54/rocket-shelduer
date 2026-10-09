@@ -1,11 +1,24 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { requireAuth } from '@/lib/api-auth';
-import { encryptPassword, encryptAuthToken } from '@/lib/encryption';
+import { connectionAad, encryptPassword, encryptAuthToken } from '@/lib/encryption';
+import { parseRcCredentialFields } from '@/lib/credentials';
 import { RocketChatClient } from '@/lib/rocketchat';
-import { logSecurityEvent, getClientIp, isSuspiciousInput, isUnsafeId, SecurityEventType } from '@/lib/security';
+import {
+  logSecurityEvent,
+  getClientIp,
+  isSuspiciousInput,
+  isUnsafeId,
+  SecurityEventType,
+  hitRcConnectRateLimit,
+  recordRcConnectFailure,
+  isRcNetworkErrorMessage,
+  RC_CONNECT_RATE_LIMIT_MESSAGE,
+  RC_LOGIN_FAILED_MESSAGE,
+} from '@/lib/security';
 import { sameRcInstanceUrl } from '@/lib/workspace-rc';
 import { isSsrfUrl } from '@/lib/ssrf';
+import { applySuppressArchivePromptPatch, archiveFieldsFor, getWorkspaceArchiveInfo } from '@/lib/intensives/workspace-schedule';
 
 // GET - получить workspace по ID (владелец или ADM с назначением)
 export async function GET(
@@ -46,6 +59,8 @@ export async function GET(
         isArchived: true,
         archivedAt: true,
         archiveDeleteAt: true,
+        orgSpaceId: true,
+        suppressArchivePrompt: true,
         createdAt: true,
         updatedAt: true,
       },
@@ -58,10 +73,18 @@ export async function GET(
       );
     }
 
+    // archiveSuggested / nextIntensive / upcomingIntensiveCount — то же правило, что в GET /api/workspace
+    const archiveFields = async () =>
+      archiveFieldsFor(
+        await getWorkspaceArchiveInfo([workspace], { includeDrafts: user.role === 'LEAD_SUP' }),
+        workspace.id,
+        user
+      );
+
     const isOwner = workspace.userId === user.id;
     if (isOwner) {
       const { userId: _u, ...rest } = workspace;
-      return NextResponse.json({ workspace: rest });
+      return NextResponse.json({ workspace: { ...rest, ...(await archiveFields()) } });
     }
 
     // Любая роль с назначением на это пространство
@@ -76,10 +99,12 @@ export async function GET(
       const ownConnection = ownList.find((c) =>
         sameRcInstanceUrl(c.workspaceUrl, workspace.workspaceUrl)
       );
-      const { userId: _u, ...rest } = workspace;
+      // Назначенному не отдаём RC User ID владельца (идентификатор чужой учётки RC)
+      const { userId: _u, userId_RC: _rc, ...rest } = workspace;
       return NextResponse.json({
         workspace: {
           ...rest,
+          ...(await archiveFields()),
           isAssigned: true,
           hasOwnConnection: !!ownConnection,
         },
@@ -115,6 +140,10 @@ export async function PATCH(
     if (isUnsafeId(id)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
     const body = await request.json();
 
+    // «Не предлагать архивировать» — только Lead_SUP (своё или назначенное пространство); остальные поля — владелец
+    const archivePrompt = await applySuppressArchivePromptPatch(user, id, body);
+    if (archivePrompt.response) return archivePrompt.response;
+
     const workspace = await prisma.workspaceConnection.findFirst({
       where: {
         id,
@@ -148,7 +177,6 @@ export async function PATCH(
     if (
       (workspaceUrl && isSuspiciousInput(workspaceUrl)) ||
       (username && isSuspiciousInput(username)) ||
-      (password && isSuspiciousInput(password)) ||
       (personalToken && isSuspiciousInput(personalToken)) ||
       (rcUserIdPatch && isSuspiciousInput(rcUserIdPatch))
     ) {
@@ -189,6 +217,17 @@ export async function PATCH(
     ) {
       return NextResponse.json({ error: 'Invalid input' }, { status: 400 });
     }
+    // Формат кредов RC (zod)
+    const creds = parseRcCredentialFields({
+      username,
+      password: password || undefined,
+      totpCode,
+      personalToken,
+      rcUserId: rcUserIdPatch,
+    });
+    if (!creds) {
+      return NextResponse.json({ error: 'Invalid input' }, { status: 400 });
+    }
 
     // SSRF: новый адрес сервера проверяется так же, как при создании пространства
     // (раньше PATCH позволял сменить URL на внутренний адрес, и все запросы RC уходили туда).
@@ -212,6 +251,7 @@ export async function PATCH(
       has2FA,
       color,
       updatedAt: new Date(),
+      ...archivePrompt.data,
     };
 
     if (personalToken && password) {
@@ -222,6 +262,34 @@ export async function PATCH(
         { status: 400 }
       );
     }
+
+    // Сменили адрес сервера или логин без нового пароля — сохранённый пароль больше не отправляем никуда:
+    // иначе автоматический повторный вход отправил бы его на новый адрес (например, после угона сессии).
+    const usernameChanged =
+      typeof username === 'string' && username.trim() !== (workspace.username || '').trim();
+    if ((urlChanged || usernameChanged) && !password) {
+      updateData.encryptedPassword = '';
+    }
+
+    // Креды проверяются в Rocket.Chat — лимит попыток (защита от перебора паролей через приложение)
+    if (personalToken || password) {
+      if (await hitRcConnectRateLimit(user.id, getClientIp(request))) {
+        return NextResponse.json({ error: RC_CONNECT_RATE_LIMIT_MESSAGE }, { status: 429 });
+      }
+    }
+    // Шифрование v2 с привязкой к владельцу подключения
+    const credAad = connectionAad(workspace.userId);
+    const rcAuthFailed = async (err: unknown, reason: string) => {
+      const msg = err instanceof Error ? err.message : '';
+      if (isRcNetworkErrorMessage(msg)) {
+        return NextResponse.json(
+          { error: 'Сервер Rocket.Chat недоступен. Проверьте адрес сервера и подключение, затем повторите попытку.' },
+          { status: 503 }
+        );
+      }
+      await recordRcConnectFailure({ userId: user.id, request, path: `/api/workspace/${id}`, method: 'PATCH', reason });
+      return NextResponse.json({ error: RC_LOGIN_FAILED_MESSAGE }, { status: 400 });
+    };
 
     if (personalToken) {
       const rcUser = (rcUserIdPatch || workspace.userId_RC || '').trim();
@@ -237,18 +305,16 @@ export async function PATCH(
       }
       try {
         await RocketChatClient.validatePersonalAccessToken(rcUrl, personalToken, rcUser);
-        updateData.authToken = encryptAuthToken(personalToken);
+        updateData.authToken = encryptAuthToken(personalToken, credAad);
         updateData.userId_RC = rcUser;
-        updateData.encryptedPassword = encryptPassword('');
+        // Вход по токену: сохранённый пароль больше не нужен — удаляем
+        updateData.encryptedPassword = '';
         updateData.rcAuthMethod = 'personal_token';
         updateData.has2FA = false;
         updateData.isActive = true;
         updateData.lastConnected = new Date();
       } catch (e) {
-        return NextResponse.json(
-          { error: e instanceof Error ? e.message : 'Не удалось проверить токен' },
-          { status: 400 }
-        );
+        return rcAuthFailed(e, 'Rocket.Chat token check failed');
       }
     }
 
@@ -264,11 +330,13 @@ export async function PATCH(
       }
       const rcClient = new RocketChatClient(rcUrl);
       try {
-        const totp =
-          typeof totpCode === 'string' && totpCode.trim() ? totpCode.trim() : undefined;
+        const totp = creds.totpCode ? creds.totpCode : undefined;
         const loginResult = await rcClient.login(rcUser, password, totp);
-        updateData.encryptedPassword = encryptPassword(password);
-        updateData.authToken = encryptAuthToken(loginResult.authToken);
+        // Пароль хранится только зашифрованным — для автоматического обновления сессии RC
+        updateData.encryptedPassword = encryptPassword(password, credAad);
+        updateData.authToken = encryptAuthToken(loginResult.authToken, credAad);
+        // Вход потребовал код 2FA → автоматический повторный вход для этого подключения не выполняется
+        if (totp) updateData.has2FA = true;
         updateData.userId_RC = loginResult.userId;
         updateData.rcAuthMethod = 'password';
         updateData.isActive = true;
@@ -285,13 +353,7 @@ export async function PATCH(
             { status: 400 }
           );
         }
-        return NextResponse.json(
-          {
-            error:
-              'Не удалось войти в Rocket.Chat с указанным паролем. Проверьте адрес сервера, логин и пароль.',
-          },
-          { status: 400 }
-        );
+        return rcAuthFailed(loginErr, 'Rocket.Chat login failed');
       }
     }
 
@@ -320,6 +382,7 @@ export async function PATCH(
         endDate: true,
         color: true,
         isArchived: true,
+        suppressArchivePrompt: true,
         createdAt: true,
         updatedAt: true,
       },

@@ -154,15 +154,23 @@ function Content() {
   return (
     <PageContainer size="default" className="px-4 sm:px-6">
       <PageHeader
-        title="Пространства (организационные)"
-        description="Постоянные объекты, внутри которых проходят интенсивы. Подключения сотрудников привязываются вручную; секреты подключений здесь не показываются."
-        breadcrumbs={<Breadcrumbs items={[{ label: 'Админ панель', href: '/dashboard/admin' }, { label: 'Пространства (орг.)', current: true }]} />}
+        title="Организационные пространства"
+        description="Дополнительная настройка: обычно не нужна — график интенсивов создаётся автоматически при добавлении интенсива в пространство (вкладка «Интенсивы» на странице пространства). Здесь можно вручную объединить несколько подключений в один график."
+        breadcrumbs={
+          <Breadcrumbs
+            items={[
+              { label: 'Админ панель', href: '/dashboard/admin' },
+              { label: 'Интенсивы', href: '/dashboard/admin/intensives' },
+              { label: 'Организационные пространства', current: true },
+            ]}
+          />
+        }
         actions={
           <>
             <Button type="button" variant="ghost" size="icon-sm" aria-label="Обновить" title="Обновить" onClick={() => void refreshAll()} disabled={loading || sugg.loading}>
               <RefreshCw className={loading || sugg.loading ? 'animate-spin' : undefined} aria-hidden />
             </Button>
-            <Button size="sm" onClick={() => setFormState({ open: true })}>
+            <Button size="sm" variant="outline" onClick={() => setFormState({ open: true })}>
               <Plus aria-hidden />
               Создать пространство
             </Button>

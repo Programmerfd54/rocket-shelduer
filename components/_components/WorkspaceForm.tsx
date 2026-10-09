@@ -27,6 +27,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { formatRelativeTime, cn } from '@/lib/utils'
+import { isLegacyPeriodEndingSoon, legacyDaysLeft, type WorkspaceNextIntensive } from '@/lib/intensives/archive-prompt'
 
 export interface Workspace {
   id: string
@@ -52,6 +53,12 @@ export interface Workspace {
   messageDueToday?: boolean
   nextAnnouncementDay?: number
   nextAnnouncementChannels?: string[]
+  /** Сервер: предлагать ли архивировать (единый признак для бейджей, фильтров, баннеров) */
+  archiveSuggested?: boolean
+  suppressArchivePrompt?: boolean
+  canEditArchivePrompt?: boolean
+  nextIntensive?: WorkspaceNextIntensive | null
+  upcomingIntensiveCount?: number
 }
 
 interface WorkspaceFormProps {
@@ -87,29 +94,46 @@ function formatIntensiveDates(start?: Date | string | null, end?: Date | string 
   return `${s.toLocaleDateString('ru-RU')} – ${e.toLocaleDateString('ru-RU')}`
 }
 
-function getEndDateStatus(endDate?: Date | string | null): { label: string; warning: boolean } | null {
-  if (!endDate) return null
-  const end = new Date(endDate)
-  const now = new Date()
-  if (end < now) {
-    const days = Math.ceil((now.getTime() - end.getTime()) / (1000 * 60 * 60 * 24))
-    return { label: `Завершён ${days} ${pluralDays(days)} назад`, warning: true }
+function ymdShort(ymd: string) {
+  const [y, m, d] = ymd.split('-')
+  return `${d}.${m}.${y}`
+}
+
+/** Подпись справа: ближайший интенсив графика или старый период пространства (предупреждение — по серверному признаку). */
+function getEndDateStatus(workspace: Workspace): { label: string; warning: boolean } | null {
+  const next = workspace.nextIntensive
+  if (next) {
+    return { label: `Интенсив ${ymdShort(next.startDate)} – ${ymdShort(next.endDate)}`, warning: false }
   }
-  const days = Math.ceil((end.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
-  if (days <= 7) return { label: `Завершится через ${days} ${pluralDays(days)}`, warning: true }
-  return { label: `До ${end.toLocaleDateString('ru-RU')}`, warning: false }
+  if (!workspace.endDate) return null
+  const days = legacyDaysLeft(workspace.endDate)
+  if (days === null) return null
+  if (days < 0) {
+    return { label: `Завершён ${-days} ${pluralDays(-days)} назад`, warning: workspace.archiveSuggested === true }
+  }
+  if (days <= 7) {
+    return {
+      label: days === 0 ? 'Завершается сегодня' : `Завершится через ${days} ${pluralDays(days)}`,
+      warning: isLegacyPeriodEndingSoon(workspace, 7),
+    }
+  }
+  return { label: `До ${new Date(workspace.endDate).toLocaleDateString('ru-RU')}`, warning: false }
+}
+
+/** «В архив» в меню списка: когда сервер предлагает архивировать или старый период уже прошёл (ручное действие доступно). */
+function canArchiveFromList(workspace: Workspace): boolean {
+  if (workspace.isArchived) return false
+  if (workspace.archiveSuggested === true) return true
+  const days = legacyDaysLeft(workspace.endDate)
+  return days !== null && days < 0
 }
 
 type WsStatus = 'active' | 'expiring' | 'expired' | 'inactive'
 
 function getWorkspaceStatus(workspace: Workspace): WsStatus {
+  if (workspace.archiveSuggested === true) return 'expired'
+  if (isLegacyPeriodEndingSoon(workspace, 7)) return 'expiring'
   if (!workspace.endDate) return workspace.isActive ? 'active' : 'inactive'
-  const now = new Date()
-  const endDate = new Date(workspace.endDate)
-  const daysUntilEnd = Math.ceil((endDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
-
-  if (endDate < now) return 'expired'
-  if (daysUntilEnd <= 7) return 'expiring'
   return 'active'
 }
 
@@ -417,9 +441,8 @@ export default function WorkspaceForm({
       {viewMode === 'compact' ? (
         <div className="divide-y overflow-hidden rounded-lg border bg-card">
           {workspaces.map((workspace) => {
-            const endStatus = getEndDateStatus(workspace.endDate)
-            const isEnded = !!workspace.endDate && new Date(workspace.endDate) < new Date()
-            const showArchive = canArchive && isEnded
+            const endStatus = getEndDateStatus(workspace)
+            const showArchive = canArchive && canArchiveFromList(workspace)
             const groupName = groupNamesByWorkspaceId[workspace.id]
             const isMyIntensive =
               !!(isVol && volunteerIntensive && workspace.workspaceUrl?.toLowerCase().includes(volunteerIntensive.toLowerCase()))
@@ -484,10 +507,9 @@ export default function WorkspaceForm({
       ) : (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {workspaces.map((workspace) => {
-            const endStatus = getEndDateStatus(workspace.endDate)
+            const endStatus = getEndDateStatus(workspace)
             const intensiveDates = formatIntensiveDates(workspace.startDate, workspace.endDate)
-            const isEnded = !!workspace.endDate && new Date(workspace.endDate) < new Date()
-            const showArchive = canArchive && isEnded
+            const showArchive = canArchive && canArchiveFromList(workspace)
             const groupName = groupNamesByWorkspaceId[workspace.id]
             const isMyIntensive =
               !!(isVol && volunteerIntensive && workspace.workspaceUrl?.toLowerCase().includes(volunteerIntensive.toLowerCase()))

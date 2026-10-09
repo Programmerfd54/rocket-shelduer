@@ -15,7 +15,7 @@ import { cn } from '@/lib/utils'
 import { apiFetch, formatTimezone, pluralize } from '@/lib/intensives/ui'
 import type { IntensiveSummary } from '@/lib/intensives/types'
 import { FeatureGate } from './FeatureGate'
-import { useOrgSpaces } from './hooks'
+import { useWorkspaceTargets } from './hooks'
 import { IntensiveFormDialog } from './IntensiveFormDialog'
 import { IntensiveBadges, LoadError, ProgressSummary, daysLabel, errText, overlapText, periodLabel, useDeferredEffect, useSeq } from './kit'
 
@@ -35,8 +35,8 @@ const PHASE_FILTERS = [
   { value: 'finished', label: 'Завершённые' },
 ] as const
 
-type Filters = { year: string; orgSpace: string; status: string; phase: string }
-const DEFAULT_FILTERS: Filters = { year: 'all', orgSpace: 'all', status: 'active', phase: 'all' }
+type Filters = { year: string; workspace: string; status: string; phase: string }
+const DEFAULT_FILTERS: Filters = { year: 'all', workspace: 'all', status: 'active', phase: 'all' }
 
 function ListSkeleton() {
   return (
@@ -113,11 +113,11 @@ function IntensiveRow({ item }: { item: IntensiveSummary }) {
 function ListContent() {
   const router = useRouter()
   const params = useSearchParams()
-  const { orgSpaces, error: spacesError, loading: spacesLoading, reload: reloadSpaces } = useOrgSpaces()
+  const { workspaces, error: spacesError, loading: spacesLoading, reload: reloadSpaces } = useWorkspaceTargets()
 
   const [filters, setFilters] = useState<Filters>(() => ({
     year: params.get('year') ?? DEFAULT_FILTERS.year,
-    orgSpace: params.get('orgSpace') ?? DEFAULT_FILTERS.orgSpace,
+    workspace: params.get('workspace') ?? DEFAULT_FILTERS.workspace,
     status: params.get('status') ?? DEFAULT_FILTERS.status,
     phase: params.get('phase') ?? DEFAULT_FILTERS.phase,
   }))
@@ -137,7 +137,7 @@ function ListContent() {
       setError(null)
       const q = new URLSearchParams()
       if (f.year !== 'all') q.set('year', f.year)
-      if (f.orgSpace !== 'all') q.set('orgSpaceId', f.orgSpace)
+      if (f.workspace !== 'all') q.set('workspaceId', f.workspace)
       if (f.phase !== 'all') q.set('phase', f.phase)
       else q.set('status', (STATUS_FILTERS.find((s) => s.value === f.status) ?? STATUS_FILTERS[0]).query)
       try {
@@ -171,37 +171,42 @@ function ListContent() {
 
   const filtersChanged = (Object.keys(filters) as (keyof Filters)[]).some((k) => filters[k] !== DEFAULT_FILTERS[k])
 
+  const spaceRefs = useMemo(() => workspaces ?? [], [workspaces])
+  /** Название группы — пространства (подключения) Lead_SUP, привязанные к OrgSpace интенсива; иначе имя OrgSpace */
+  const groupNameByOrgSpace = useMemo(() => {
+    const m = new Map<string, string[]>()
+    for (const w of spaceRefs) {
+      if (!w.orgSpaceId) continue
+      m.set(w.orgSpaceId, [...(m.get(w.orgSpaceId) ?? []), w.name])
+    }
+    return m
+  }, [spaceRefs])
+
   const groups = useMemo(() => {
     const map = new Map<string, { id: string; name: string; list: IntensiveSummary[] }>()
     for (const it of items ?? []) {
-      const g = map.get(it.orgSpace.id) ?? { id: it.orgSpace.id, name: it.orgSpace.name, list: [] }
+      const names = groupNameByOrgSpace.get(it.orgSpace.id)
+      const g = map.get(it.orgSpace.id) ?? { id: it.orgSpace.id, name: names?.join(', ') ?? it.orgSpace.name, list: [] }
       g.list.push(it)
       map.set(it.orgSpace.id, g)
     }
     const arr = Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name, 'ru'))
     for (const g of arr) g.list.sort((a, b) => b.startDate.localeCompare(a.startDate))
     return arr
-  }, [items])
+  }, [items, groupNameByOrgSpace])
 
-  const spaceRefs = useMemo(() => (orgSpaces ?? []).map((o) => ({ id: o.id, name: o.name })), [orgSpaces])
   const noSpaces = !spacesLoading && !spacesError && spaceRefs.length === 0
 
   return (
     <PageContainer size="default" className="px-4 sm:px-6">
       <PageHeader
         title="Интенсивы"
-        description="Запуски внутри организационных пространств: период, часовой пояс, план анонсов и прогресс. Создание и публикация ничего не отправляют."
+        description="График интенсивов ваших пространств: период, часовой пояс, план анонсов и прогресс. Создание и публикация ничего не отправляют."
         breadcrumbs={
           <Breadcrumbs items={[{ label: 'Админ панель', href: '/dashboard/admin' }, { label: 'Интенсивы', current: true }]} />
         }
         actions={
           <>
-            <Button asChild variant="outline" size="sm">
-              <Link href="/dashboard/admin/org-spaces">
-                <Layers aria-hidden />
-                Пространства
-              </Link>
-            </Button>
             <Button size="sm" onClick={() => setCreateOpen(true)} disabled={spacesLoading || !!spacesError || noSpaces}>
               <Plus aria-hidden />
               Создать интенсив
@@ -226,7 +231,7 @@ function ListContent() {
             ))}
           </SelectContent>
         </Select>
-        <Select value={filters.orgSpace} onValueChange={(v) => changeFilter({ orgSpace: v })} disabled={spaceRefs.length === 0 && filters.orgSpace === 'all'}>
+        <Select value={filters.workspace} onValueChange={(v) => changeFilter({ workspace: v })} disabled={spaceRefs.length === 0 && filters.workspace === 'all'}>
           <SelectTrigger size="sm" className="w-full sm:w-52" aria-label="Пространство">
             <SelectValue />
           </SelectTrigger>
@@ -309,9 +314,9 @@ function ListContent() {
             ) : noSpaces ? (
               <EmptyState
                 icon={<Layers />}
-                title="Сначала создайте пространство"
-                description="Интенсивы создаются внутри организационного пространства."
-                action={{ label: 'Перейти к пространствам', href: '/dashboard/admin/org-spaces' }}
+                title="Сначала добавьте пространство"
+                description="Интенсивы создаются в графике пространства (подключения к Rocket.Chat)."
+                action={{ label: 'Перейти к пространствам', href: '/dashboard/workspaces' }}
               />
             ) : (
               <EmptyState
@@ -342,12 +347,19 @@ function ListContent() {
         </div>
       )}
 
+      <p className="mt-8 text-xs text-muted-foreground">
+        Дополнительно:{' '}
+        <Link href="/dashboard/admin/org-spaces" className="underline-offset-2 hover:text-foreground hover:underline focus-visible:underline">
+          организационные пространства
+        </Link>{' '}
+        — ручная привязка нескольких подключений к одному графику (обычно не нужна: график создаётся автоматически).
+      </p>
+
       <IntensiveFormDialog
         open={createOpen}
         onOpenChange={setCreateOpen}
         mode="create"
-        orgSpaces={spaceRefs}
-        defaultOrgSpaceId={filters.orgSpace !== 'all' ? filters.orgSpace : undefined}
+        workspaces={spaceRefs}
         siblings={items ?? []}
         onSaved={({ intensive }) => {
           router.push(`/dashboard/admin/intensives/${intensive.id}`)

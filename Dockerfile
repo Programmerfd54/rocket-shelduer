@@ -50,6 +50,10 @@ COPY --from=builder /app/package.json ./
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/scripts ./scripts
+# scripts/*.ts запускаются через tsx прямо в контейнере (create-superuser, reencrypt-secrets) и импортируют lib/*
+# (в т.ч. по алиасу @/ из tsconfig.json) — без этих двух копий скрипты падают с «Cannot find module».
+COPY --from=builder /app/lib ./lib
+COPY --from=builder /app/tsconfig.json ./
 
 # Каталоги загрузок существуют в образе: при первом монтировании пустого named volume Docker копирует
 # туда содержимое образа (уже загруженные файлы) с владельцем nextjs.
@@ -69,4 +73,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
 
 # create-superuser создаёт LEAD_SUP только если его ещё нет (случайный пароль печатается один раз в лог,
 # либо SUPERUSER_PASSWORD из env); при первом входе требуется смена пароля.
-CMD ["sh", "-c", "npx prisma migrate deploy && npx tsx scripts/create-superuser.ts && exec npm start"]
+# reencrypt-secrets (best-effort, идемпотентно): переводит токены/пароли RC и секреты LDAP/SMTP в формат v2
+# текущим ENCRYPTION_KEY; печатает только счётчики. Отключить: AUTO_REENCRYPT_SECRETS=false. Запуск приложения
+# от его результата не зависит.
+CMD ["sh", "-c", "npx prisma migrate deploy && npx tsx scripts/create-superuser.ts && { if [ \"${AUTO_REENCRYPT_SECRETS:-true}\" != \"false\" ]; then npx tsx scripts/reencrypt-secrets.ts || echo 'reencrypt skipped'; fi; } && exec npm start"]

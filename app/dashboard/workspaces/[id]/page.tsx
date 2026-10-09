@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
-import { Calendar, ClipboardList, FileText, Hash, MessageSquare, Search, ServerCog, Smile, Trophy } from 'lucide-react'
+import { Calendar, CalendarRange, ClipboardList, FileText, Hash, MessageSquare, Search, ServerCog, Smile, Trophy } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -51,6 +51,8 @@ import { IntensiveSelector } from '@/components/intensives/shared/IntensiveSelec
 import { PlanItemDetailsSheet } from '@/components/intensives/shared/PlanItemDetailsSheet'
 import type { PlanItemRowHandlers } from '@/components/intensives/shared/PlanItemRow'
 import type { QueueMessage } from '@/components/dashboard/types'
+import { isLegacyPeriodEndingSoon, legacyDaysLeft } from '@/lib/intensives/archive-prompt'
+import { WorkspaceScheduleTab } from '@/components/intensives/workspace/WorkspaceScheduleTab'
 
 type ExternalStatus = 'SYNCHRONIZED' | 'EDITED_IN_RC' | 'DELETED_IN_RC' | 'UNKNOWN'
 
@@ -134,6 +136,9 @@ function WorkspaceDetailContent() {
   const [messageSheet, setMessageSheet] = useState<{ id: string; fallback?: Partial<QueueMessage> } | null>(null)
   /** Чип «Только этого интенсива» на вкладках «Сообщения» и «Календарь» (по умолчанию выключен) */
   const [onlyIntensiveMessages, setOnlyIntensiveMessages] = useState(false)
+
+  /** Раскрыть блок «Участники пространства» (ссылка из графика интенсивов) */
+  const [membersSignal, setMembersSignal] = useState(0)
 
   const emoji = useEmojiImport(workspaceId)
   const addUsers = useAddUsers(workspaceId)
@@ -248,10 +253,12 @@ function WorkspaceDetailContent() {
 
   const allowedTabsList = useMemo(() => {
     const t = [...baseAllowedTabs]
+    // «Интенсивы» — график интенсивов пространства (если функция включена)
+    if (intensiveCtx.featureEnabled === true) t.push('intensives')
     if (showLdapSmtpTab) t.push('ldap-smtp')
     if (showReactionsTab) t.push('reactions')
     return t
-  }, [baseAllowedTabs, showLdapSmtpTab, showReactionsTab])
+  }, [baseAllowedTabs, showLdapSmtpTab, showReactionsTab, intensiveCtx.featureEnabled])
 
   useEffect(() => {
     if (!allowedTabsList.includes(activeTab)) setActiveTab('channels')
@@ -490,14 +497,14 @@ function WorkspaceDetailContent() {
 
   useEffect(() => {
     if (!workspace?.endDate) return
-    const endDate = new Date(workspace.endDate)
-    const daysUntilEnd = Math.ceil((endDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24))
-    if (endDate < new Date() && !workspace.isArchived) {
+    // Подсказка об архиве — только по серверному признаку (график интенсивов, «Не предлагать архивировать»)
+    const daysUntilEnd = legacyDaysLeft(workspace.endDate) ?? 0
+    if (workspace.archiveSuggested === true) {
       toast.warning('Интенсив завершён', {
         description: `Пространство «${workspace.workspaceName}» завершилось ${Math.abs(daysUntilEnd)} дн. назад. Рекомендуем заархивировать его.`,
         duration: 10000,
       })
-    } else if (daysUntilEnd > 0 && daysUntilEnd <= 7 && !workspace.isArchived) {
+    } else if (daysUntilEnd > 0 && isLegacyPeriodEndingSoon(workspace, 7)) {
       toast.info('Интенсив скоро завершится', {
         description: `Пространство «${workspace.workspaceName}» завершится через ${daysUntilEnd} дн.`,
         duration: 8000,
@@ -735,6 +742,34 @@ function WorkspaceDetailContent() {
     intensiveCtx.select(id)
   }
 
+  /** Только поля пространства (archiveSuggested, suppressArchivePrompt…) — без перезагрузки каналов и сообщений */
+  const reloadWorkspaceInfo = async () => {
+    try {
+      const res = await fetch(`/api/workspace/${workspaceId}`)
+      if (!res.ok) return
+      const data = await res.json()
+      if (data?.workspace) setWorkspace((prev: typeof workspace) => (prev ? { ...prev, ...data.workspace } : data.workspace))
+    } catch {
+      /* второстепенно: данные обновятся при следующей загрузке */
+    }
+  }
+
+  /** «Открыть план» в графике → вкладка «Шаблоны» с выбранным интенсивом (?intensive=) */
+  const openIntensivePlan = (id: string) => {
+    if (!intensiveCtx.intensives.some((i) => i.id === id)) {
+      intensiveCtx.reloadList()
+      toast.info('Список интенсивов обновляется', { description: 'Повторите через секунду.' })
+      return
+    }
+    selectIntensive(id)
+    handleTabChange('templates')
+  }
+
+  const showMembers = () => {
+    setMembersSignal((n) => n + 1)
+    setTimeout(() => document.getElementById('workspace-members')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0)
+  }
+
   const planHandlers: PlanItemRowHandlers = {
     onSchedule: (item, repeat) => {
       const current = plan.data && plan.data.intensive.id === item.intensiveId ? plan.data.intensive : null
@@ -819,6 +854,7 @@ function WorkspaceDetailContent() {
     { value: 'channels', label: 'Каналы', icon: <Hash />, count: channels.length },
     { value: 'messages', label: 'Сообщения', icon: <MessageSquare />, count: messages.length },
     { value: 'calendar', label: 'Календарь', icon: <Calendar /> },
+    ...(allowedTabsList.includes('intensives') ? [{ value: 'intensives', label: 'Интенсивы', icon: <CalendarRange /> }] : []),
     ...(allowedTabsList.includes('templates') ? [{ value: 'templates', label: 'Шаблоны', icon: <FileText /> }] : []),
     ...(allowedTabsList.includes('emoji-import')
       ? [{ value: 'emoji-import', label: currentUserRole === 'LEAD_SUP' ? 'Настройки системы' : 'Настройка пространства', icon: <Smile /> }]
@@ -896,7 +932,12 @@ function WorkspaceDetailContent() {
             </dl>
           )}
 
-          <WorkspaceAssignments workspaceId={workspaceId} currentUserRole={currentUserRole} canSee={canSeeAssignments} />
+          <WorkspaceAssignments
+            workspaceId={workspaceId}
+            currentUserRole={currentUserRole}
+            canSee={canSeeAssignments}
+            expandSignal={membersSignal}
+          />
 
           {intensiveCtx.featureEnabled === true && (
             <IntensiveSelector
@@ -977,6 +1018,24 @@ function WorkspaceDetailContent() {
                     </Section>
                   </div>
                 </TabsContent>
+
+                {allowedTabsList.includes('intensives') && (
+                  <TabsContent value="intensives" className="mt-0">
+                    <WorkspaceScheduleTab
+                      workspaceId={workspaceId}
+                      workspace={workspace}
+                      currentUserRole={currentUserRole}
+                      canOpenPlan={allowedTabsList.includes('templates')}
+                      onOpenPlan={openIntensivePlan}
+                      onChanged={() => {
+                        intensiveCtx.reloadList()
+                        void reloadWorkspaceInfo()
+                      }}
+                      canSeeMembers={canSeeAssignments}
+                      onShowMembers={showMembers}
+                    />
+                  </TabsContent>
+                )}
 
                 {allowedTabsList.includes('templates') && (
                   <TabsContent value="templates" className="mt-0">

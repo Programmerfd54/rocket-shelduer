@@ -22,9 +22,9 @@ export interface User {
     workspaceName: string;
     workspaceUrl: string;
     username: string;
-    encryptedPassword: string;
+    // encryptedPassword / authToken намеренно отсутствуют: секреты подключения никогда не попадают на клиент
+    // (см. lib/sensitive-data.ts). encryptedPassword на сервере может быть '' (вход по токену / пароль не сохранён).
     has2FA: boolean;
-    authToken: string | null;
     userId_RC: string | null;
     isActive: boolean;
     lastConnected: Date | null;

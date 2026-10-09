@@ -19,6 +19,10 @@ const PasswordInput = React.forwardRef<
         type={visible ? "text" : "password"}
         disabled={disabled}
         className={cn("pr-10", className)}
+        // Секреты: без автозамены/автокапитализации/проверки орфографии (в т.ч. отправки текста в облачные словари)
+        autoCapitalize="off"
+        autoCorrect="off"
+        spellCheck={false}
         {...props}
       />
       <button

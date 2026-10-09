@@ -1,5 +1,6 @@
 import prisma from '@/lib/prisma';
-import { decryptAuthToken } from '@/lib/encryption';
+import { connectionAad, decryptAuthToken } from '@/lib/encryption';
+import { tryRefreshRcSession } from '@/lib/rc-session-refresh';
 
 const normalizeUrl = (u: string) => (u || '').trim().replace(/\/+$/, '').toLowerCase();
 
@@ -31,9 +32,49 @@ export function sameRcInstanceUrl(a: string, b: string): boolean {
   return ka != null && kb != null && ka === kb;
 }
 
+type ConnRow = {
+  id: string;
+  workspaceUrl: string;
+  authToken: string | null;
+  userId_RC: string | null;
+  userId: string;
+  username: string;
+  isActive: boolean;
+  isArchived: boolean;
+};
+
+const CONN_SELECT = {
+  id: true,
+  workspaceUrl: true,
+  authToken: true,
+  userId_RC: true,
+  userId: true,
+  username: true,
+  isActive: true,
+  isArchived: true,
+} as const;
+
+/**
+ * Токен подключения. Если сессия заведомо мертва (подключение деактивировано после 401 или токен
+ * не читается) — одна попытка обновить её по сохранённому паролю (lib/rc-session-refresh: только
+ * логин/пароль без 2FA, не чаще раза в 30 минут). Иначе — как раньше.
+ */
+async function resolveConnectionToken(row: ConnRow): Promise<string | null> {
+  let token = row.authToken ? decryptAuthToken(row.authToken, connectionAad(row.userId)) : null;
+  if (!row.isArchived && (!token || !row.isActive)) {
+    const refreshed = await tryRefreshRcSession(row.id);
+    if (refreshed) {
+      token = refreshed.authToken;
+      row.userId_RC = refreshed.userId_RC;
+      row.isActive = true;
+    }
+  }
+  return token;
+}
+
 /**
  * Возвращает подключение для вызовов RC API.
- * authToken расшифровывается при чтении (хранится зашифрованным).
+ * authToken расшифровывается при чтении (хранится зашифрованным, привязан к владельцу подключения).
  */
 export async function getEffectiveConnectionForRc(
   userId: string,
@@ -46,14 +87,21 @@ export async function getEffectiveConnectionForRc(
   userId: string;
   rcUsername: string;
 } | null> {
-  const workspace = await prisma.workspaceConnection.findUnique({
+  const workspace: ConnRow | null = await prisma.workspaceConnection.findUnique({
     where: { id: workspaceId },
-    select: { id: true, workspaceUrl: true, authToken: true, userId_RC: true, userId: true, username: true },
+    select: CONN_SELECT,
   });
-  const decrypted = workspace?.authToken ? decryptAuthToken(workspace.authToken) : null;
-  if (!decrypted || !workspace?.userId_RC) return null;
+  if (!workspace) return null;
+  // Сессию обновляем только для своего подключения (у чужого — креды владельца, их не трогаем)
+  const decrypted =
+    workspace.userId === userId
+      ? await resolveConnectionToken(workspace)
+      : workspace.authToken
+        ? decryptAuthToken(workspace.authToken, connectionAad(workspace.userId))
+        : null;
+  if (!decrypted || !workspace.userId_RC) return null;
 
-  const toConnection = (w: typeof workspace, token: string) => ({
+  const toConnection = (w: ConnRow, token: string) => ({
     id: w.id,
     userId: w.userId,
     workspaceUrl: w.workspaceUrl,
@@ -70,15 +118,15 @@ export async function getEffectiveConnectionForRc(
   // Назначенное: есть ли у пользователя своё подключение к тому же инстансу RC?
   const ownList = await prisma.workspaceConnection.findMany({
     where: { userId },
-    select: { id: true, workspaceUrl: true, authToken: true, userId_RC: true, userId: true, username: true },
+    select: CONN_SELECT,
   });
   const own = ownList.find(
     (c) =>
       sameRcInstanceUrl(c.workspaceUrl, workspace.workspaceUrl) && c.authToken && c.userId_RC
   );
   if (own) {
-    const ownDecrypted = decryptAuthToken(own.authToken);
-    if (ownDecrypted) return toConnection(own, ownDecrypted);
+    const ownDecrypted = await resolveConnectionToken(own);
+    if (ownDecrypted && own.userId_RC) return toConnection(own, ownDecrypted);
   }
 
   // Назначенный без своего подключения: не используем креды владельца (RC вернёт 401), чтобы фронт показал форму «Подключиться»

@@ -70,7 +70,10 @@ export const draftFromWorkspaceSchema = z.object({
 
 export const createIntensiveSchema = z
   .object({
-    orgSpaceId: safeIdSchema,
+    /** Организационное пространство (старый способ) */
+    orgSpaceId: safeIdSchema.optional(),
+    /** Пространство (подключение): OrgSpace подбирается/создаётся автоматически */
+    workspaceId: safeIdSchema.optional(),
     name: nameSchema('название', 200),
     description: optionalText(5000),
     startDate: ymdSchema,
@@ -78,7 +81,14 @@ export const createIntensiveSchema = z
     timezone: timezoneSchema.default('Europe/Moscow'),
     templateIds: z.array(officialIdSchema).max(500).optional(),
   })
-  .superRefine(checkPeriod);
+  .superRefine((v, ctx) => {
+    if (!v.orgSpaceId && !v.workspaceId) {
+      ctx.addIssue({ code: 'custom', path: ['workspaceId'], message: 'Выберите пространство' });
+    } else if (v.orgSpaceId && v.workspaceId) {
+      ctx.addIssue({ code: 'custom', path: ['workspaceId'], message: 'Укажите либо пространство, либо организационное пространство' });
+    }
+    checkPeriod(v, ctx);
+  });
 
 export const updateIntensiveSchema = z
   .object({

@@ -189,7 +189,7 @@ interface RocketChatLoginResponse {
 
         return response.ok;
       } catch (error) {
-        console.error('RocketChat connection test error:', error);
+        console.error('RocketChat connection test error:', error instanceof Error ? error.message : 'Unknown error');
         return false;
       }
     }
@@ -271,7 +271,12 @@ interface RocketChatLoginResponse {
   
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.error || `Failed to send message: ${response.statusText}`);
+          // Статус сохраняем (401 → автоматическое обновление сессии в lib/rc-session-refresh)
+          throw new RocketChatApiError(
+            errorData.error || `Failed to send message: ${response.statusText || response.status}`,
+            response.status,
+            '/api/v1/chat.postMessage'
+          );
         }
 
         const data = await response.json();
@@ -279,8 +284,12 @@ interface RocketChatLoginResponse {
           messageId: data.message?._id || data.messageId,
         };
       } catch (error) {
-        console.error('RocketChat send message error:', error);
-        throw new Error(`Failed to send message: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        console.error('RocketChat send message error:', error instanceof Error ? error.message : 'Unknown error');
+        const message = `Failed to send message: ${error instanceof Error ? error.message : 'Unknown error'}`;
+        if (error instanceof RocketChatApiError) {
+          throw new RocketChatApiError(message, error.status, error.endpoint, error.code);
+        }
+        throw new Error(message);
       }
     }
 

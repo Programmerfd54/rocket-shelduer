@@ -320,15 +320,25 @@ function DetailContent({ id }: { id: string }) {
       <section className="mb-6 rounded-lg border bg-card px-4 py-2 sm:px-5" aria-label="Сведения об интенсиве">
         <dl className="divide-y">
           <Fact label="Пространство">
-            <Link href="/dashboard/admin/org-spaces" className="inline-flex items-center gap-1 underline-offset-2 hover:underline focus-visible:underline">
-              {detail.orgSpace.name}
-              <ExternalLink className="size-3 text-muted-foreground" aria-hidden />
-            </Link>
-          </Fact>
-          <Fact label="Подключения">
-            {detail.workspaces.length > 0
-              ? detail.workspaces.map((w) => `${w.workspaceName}${w.isArchived ? ' (архив)' : ''}`).join(', ')
-              : <span className="text-muted-foreground">Нет привязанных подключений — планировать сообщения будет некому</span>}
+            {detail.workspaces.length > 0 ? (
+              <span className="flex flex-wrap gap-x-3 gap-y-1">
+                {detail.workspaces.map((w) => (
+                  <Link
+                    key={w.id}
+                    href={`/dashboard/workspaces/${w.id}#intensives`}
+                    className="inline-flex items-center gap-1 underline-offset-2 hover:underline focus-visible:underline"
+                  >
+                    {w.workspaceName}
+                    {w.isArchived ? ' (архив)' : ''}
+                    <ExternalLink className="size-3 text-muted-foreground" aria-hidden />
+                  </Link>
+                ))}
+              </span>
+            ) : (
+              <span className="text-muted-foreground">
+                {detail.orgSpace.name} — нет привязанных пространств, планировать сообщения будет некому
+              </span>
+            )}
           </Fact>
           <Fact label="План">
             Пунктов: {detail.planItemCount} · связанных сообщений: {detail.linkedMessageCount}

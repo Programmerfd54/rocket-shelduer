@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { Archive, Calendar, ExternalLink, LogIn, MoreHorizontal, RefreshCw } from 'lucide-react'
+import { Archive, BellOff, Calendar, ExternalLink, LogIn, MoreHorizontal, RefreshCw } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -150,6 +150,12 @@ export function WorkspaceHeader({
           {!isVolMember && !workspace.isArchived && (
             <>
               <DropdownMenuSeparator />
+              {workspace.suppressArchivePrompt === true && (
+                <DropdownMenuItem disabled className="text-xs">
+                  <BellOff />
+                  Архивирование не предлагается
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem variant="destructive" onSelect={onArchiveRequest}>
                 <Archive />
                 Архивировать

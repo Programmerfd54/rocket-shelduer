@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { Activity, CalendarRange, FileText, Layers, ListChecks, PanelLeft, PanelLeftClose, Settings, ShieldCheck, Users, type LucideIcon } from 'lucide-react';
+import { Activity, CalendarRange, FileText, ListChecks, PanelLeft, PanelLeftClose, Settings, ShieldCheck, Users, type LucideIcon } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { canSeeAdminPanel } from '@/lib/roles';
@@ -54,14 +54,8 @@ const NAV: NavItem[] = [
     label: 'Интенсивы',
     icon: CalendarRange,
     roles: ['LEAD_SUP'],
-    match: (p) => p.startsWith('/dashboard/admin/intensives'),
-  },
-  {
-    href: '/dashboard/admin/org-spaces',
-    label: 'Пространства (орг.)',
-    icon: Layers,
-    roles: ['LEAD_SUP'],
-    match: (p) => p.startsWith('/dashboard/admin/org-spaces'),
+    // «Организационные пространства» (/dashboard/admin/org-spaces) — не в меню: ссылка «Дополнительно» на странице интенсивов
+    match: (p) => p.startsWith('/dashboard/admin/intensives') || p.startsWith('/dashboard/admin/org-spaces'),
   },
   {
     href: '/dashboard/admin/settings',

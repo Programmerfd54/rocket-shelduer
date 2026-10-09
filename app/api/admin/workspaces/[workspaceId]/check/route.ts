@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import { isUnsafeId } from '@/lib/security';
 import prisma from '@/lib/prisma';
 import { requireAuth } from '@/lib/api-auth';
-import { decryptAuthToken } from '@/lib/encryption';
+import { connectionAad, decryptAuthToken } from '@/lib/encryption';
+import { tryRefreshRcSession } from '@/lib/rc-session-refresh';
 import { RocketChatClient } from '@/lib/rocketchat';
 
 /** SUP может проверить подключение любого workspace (в т.ч. другого пользователя). */
@@ -24,6 +25,7 @@ export async function POST(
 
     const workspace = await prisma.workspaceConnection.findUnique({
       where: { id: workspaceId },
+      select: { id: true, userId: true, workspaceUrl: true, authToken: true, userId_RC: true },
     });
 
     if (!workspace) {
@@ -33,8 +35,17 @@ export async function POST(
       );
     }
 
-    const decryptedToken = decryptAuthToken(workspace.authToken);
-    if (!decryptedToken || !workspace.userId_RC) {
+    let decryptedToken = decryptAuthToken(workspace.authToken, connectionAad(workspace.userId));
+    let rcUserId = workspace.userId_RC;
+    // Токен не читается — одна попытка восстановить сессию по сохранённому паролю (логин/пароль без 2FA)
+    if (!decryptedToken) {
+      const refreshed = await tryRefreshRcSession(workspace.id);
+      if (refreshed) {
+        decryptedToken = refreshed.authToken;
+        rcUserId = refreshed.userId_RC;
+      }
+    }
+    if (!decryptedToken || !rcUserId) {
       return NextResponse.json(
         { ok: false, error: 'Workspace not authenticated' },
         { status: 200 }
@@ -42,10 +53,12 @@ export async function POST(
     }
 
     const rcClient = new RocketChatClient(workspace.workspaceUrl);
-    const isConnected = await rcClient.testConnection(
-      decryptedToken,
-      workspace.userId_RC
-    );
+    let isConnected = await rcClient.testConnection(decryptedToken, rcUserId);
+    if (!isConnected) {
+      // Сессия истекла — один повторный вход по сохранённому паролю (не чаще раза в 30 минут)
+      const refreshed = await tryRefreshRcSession(workspace.id);
+      if (refreshed) isConnected = await rcClient.testConnection(refreshed.authToken, refreshed.userId_RC);
+    }
 
     if (!isConnected) {
       await prisma.workspaceConnection.update({

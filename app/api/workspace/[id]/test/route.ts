@@ -4,6 +4,7 @@ import prisma from '@/lib/prisma';
 import { requireAuth } from '@/lib/api-auth';
 import { RocketChatClient } from '@/lib/rocketchat';
 import { getEffectiveConnectionForRc } from '@/lib/workspace-rc';
+import { tryRefreshRcSession } from '@/lib/rc-session-refresh';
 import { rcNotConnectedResponse, rcUnauthorizedResponse } from '@/lib/rc-http';
 
 export async function POST(
@@ -39,10 +40,15 @@ export async function POST(
     }
 
     const rcClient = new RocketChatClient(effective.workspaceUrl);
-    const isConnected = await rcClient.testConnection(
+    let isConnected = await rcClient.testConnection(
       effective.authToken,
       effective.userId_RC
     );
+    if (!isConnected) {
+      // Сессия истекла — один повторный вход по сохранённому паролю (логин/пароль без 2FA, раз в 30 минут)
+      const refreshed = await tryRefreshRcSession(effective.id);
+      if (refreshed) isConnected = await rcClient.testConnection(refreshed.authToken, refreshed.userId_RC);
+    }
 
     if (!isConnected) {
       await prisma.workspaceConnection.update({

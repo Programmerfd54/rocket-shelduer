@@ -26,15 +26,14 @@ describe('encryption (AES-256-GCM)', () => {
     const b = encryptPassword('secret-пароль');
     expect(a).not.toBe(b);
     expect(decryptPassword(a)).toBe('secret-пароль');
-    expect(a.split(':')[0]).toHaveLength(32);
-    expect(a.split(':')[1]).toHaveLength(32);
+    expect(a.startsWith('enc2:')).toBe(true);
   });
 
   it('rejects tampered ciphertext and truncated auth tags', () => {
-    const [iv, tag, ct] = encryptPassword('hello').split(':');
-    const flipped = (parseInt(ct.slice(0, 2), 16) ^ 1).toString(16).padStart(2, '0') + ct.slice(2);
-    expect(() => decryptPassword(`${iv}:${tag}:${flipped}`)).toThrow('Failed to decrypt password');
-    expect(() => decryptPassword(`${iv}:${tag.slice(0, 8)}:${ct}`)).toThrow('Failed to decrypt password');
+    const [head, kid, flag, iv, tag, ct] = encryptPassword('hello').split(':');
+    const flipped = (ct[0] === 'A' ? 'B' : 'A') + ct.slice(1);
+    expect(() => decryptPassword(`${head}:${kid}:${flag}:${iv}:${tag}:${flipped}`)).toThrow('Failed to decrypt password');
+    expect(() => decryptPassword(`${head}:${kid}:${flag}:${iv}:${tag.slice(0, 8)}:${ct}`)).toThrow('Failed to decrypt password');
     expect(() => decryptPassword('garbage')).toThrow('Failed to decrypt password');
   });
 
@@ -55,7 +54,7 @@ describe('encryption (AES-256-GCM)', () => {
 
   it('auth token helpers keep legacy plaintext support and hide failures', () => {
     const enc = encryptAuthToken('rc-token');
-    expect(enc.startsWith('enc:')).toBe(true);
+    expect(enc.startsWith('enc2:')).toBe(true);
     expect(decryptAuthToken(enc)).toBe('rc-token');
     expect(decryptAuthToken('legacy-plain')).toBe('legacy-plain');
     expect(decryptAuthToken('enc:bad')).toBeNull();

@@ -12,8 +12,10 @@
  */
 
 import prisma from '../lib/prisma';
-import { decryptAuthToken } from '../lib/encryption';
+import { connectionAad, decryptAuthToken } from '../lib/encryption';
 import { RocketChatClient } from '../lib/rocketchat';
+import { isRcUnauthorizedError, tryRefreshRcSession } from '../lib/rc-session-refresh';
+import { safeErrorForLog } from '../lib/sensitive-data';
 import { recordSendTick } from '../lib/queue-heartbeat';
 
 /**
@@ -100,7 +102,7 @@ async function runSendTick() {
         // Если сообщение запланировано «от имени» другого пользователя (SUP), отправляем его
         // через подключение этого пользователя к тому же RC-серверу, чтобы в RC сообщение
         // отображалось от правильного отправителя.
-        let authToken = decryptAuthToken(workspace.authToken);
+        let authToken = decryptAuthToken(workspace.authToken, connectionAad(workspace.userId));
         let userId_RC = workspace.userId_RC;
         let connectionActive = workspace.isActive;
         connectionIdToDeactivate = message.workspaceId;
@@ -115,7 +117,9 @@ async function runSendTick() {
               userId_RC: { not: null },
             },
           });
-          const authorToken = authorConnection?.authToken ? decryptAuthToken(authorConnection.authToken) : null;
+          const authorToken = authorConnection?.authToken
+            ? decryptAuthToken(authorConnection.authToken, connectionAad(authorConnection.userId))
+            : null;
           if (authorToken && authorConnection?.userId_RC) {
             authToken = authorToken;
             userId_RC = authorConnection.userId_RC;
@@ -134,13 +138,23 @@ async function runSendTick() {
         }
 
         const rcClient = new RocketChatClient(workspace.workspaceUrl);
-        
-        const result = await rcClient.sendMessage(
-          authToken,
-          userId_RC,
-          message.channelId,
-          message.message
-        );
+
+        let result: { messageId?: string };
+        try {
+          result = await rcClient.sendMessage(authToken, userId_RC, message.channelId, message.message);
+        } catch (sendError) {
+          // 401: сессия RC истекла. Для подключения по логину/паролю без 2FA — один повторный вход
+          // по сохранённому паролю (не чаще раза в 30 минут) и повтор отправки; иначе — как раньше.
+          if (!isRcUnauthorizedError(sendError)) throw sendError;
+          const refreshed = await tryRefreshRcSession(connectionIdToDeactivate);
+          if (!refreshed) throw sendError;
+          result = await rcClient.sendMessage(
+            refreshed.authToken,
+            refreshed.userId_RC,
+            message.channelId,
+            message.message
+          );
+        }
 
         // Обновляем статус сообщения и сохраняем messageId из Rocket.Chat
         await prisma.scheduledMessage.update({
@@ -180,7 +194,7 @@ async function runSendTick() {
         });
 
         // Если токен истек, деактивируем то подключение, которым пытались отправить
-        if (errorMessage.includes('Unauthorized') || errorMessage.includes('401')) {
+        if (isRcUnauthorizedError(error)) {
           await prisma.workspaceConnection.update({
             where: { id: connectionIdToDeactivate },
             data: { isActive: false },
@@ -194,7 +208,7 @@ async function runSendTick() {
     return { sent: sentCount, failed: failedCount };
 
   } catch (error) {
-    console.error('Error in sendScheduledMessages:', error);
+    console.error('Error in sendScheduledMessages:', safeErrorForLog(error));
     throw error;
   }
 }
@@ -207,7 +221,7 @@ if (require.main === module) {
       process.exit(0);
     })
     .catch((error) => {
-      console.error('Fatal error:', error);
+      console.error('Fatal error:', safeErrorForLog(error));
       process.exit(1);
     });
 }

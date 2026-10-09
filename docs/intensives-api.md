@@ -159,6 +159,18 @@ owner {id,name}, isArchived, isActive, startDate, endDate`.
 templateIds?: string[] }` → `201 { intensive: IntensiveSummary, warnings: { overlaps }, plan: { created, alreadyInPlan } | null }`.
 Создаёт **черновик**; `templateIds` (официальные) сразу формируют план. Отправки не запускаются.
 Ошибки: `VALIDATION_ERROR` (окончание раньше начала, > 366 дней, неизвестный пояс), `404` OrgSpace, `400 UNKNOWN_TEMPLATE { unknownTemplateIds }`.
+Вместо `orgSpaceId` можно передать **`workspaceId`** (пространство-подключение, своё или назначенное): если у него ещё нет
+OrgSpace, сервер создаёт его (название = название пространства, при совпадении — с коротким суффиксом) и привязывает —
+идемпотентно, под `pg_advisory_xact_lock` (`lib/intensives/workspace-schedule.ts`). Передавать оба поля нельзя (`VALIDATION_ERROR`);
+недоступное пространство — `404 { fieldErrors.workspaceId }`. UI: вкладка «Интенсивы» на странице пространства, админка «Интенсивы».
+
+**Подсказка «архивировать пространство»** — `GET /api/workspace` и `GET /api/workspace/[id]` отдают для каждого пространства
+`archiveSuggested`, `suppressArchivePrompt`, `nextIntensive: { id, name, startDate, endDate, timezone, status } | null`,
+`upcomingIntensiveCount`, `canEditArchivePrompt` (один пакетный запрос к Intensive). `archiveSuggested = false`, если пространство
+в архиве, Lead_SUP включил «Не предлагать архивировать» (`PATCH /api/workspace/[id] { suppressArchivePrompt }`, только Lead_SUP)
+или в графике есть DRAFT/PUBLISHED интенсив с окончанием ≥ «сегодня» в его поясе; иначе — прошёл последний день старого периода
+`WorkspaceConnection.endDate`. Черновики защищают от подсказки всегда, но в `nextIntensive`/счётчике видны только Lead_SUP.
+Автоочистка архива (`/api/cron/cleanup-archives`) не удаляет подключения, чей OrgSpace содержит интенсивы (любой статус).
 
 **`GET /api/intensives/[id]`** → `{ intensive: IntensiveDetail }` (карточка + прогресс + `workspaces` — подключения OrgSpace,
 доступные вызывающему (Lead_SUP — все) + `planItemCount`, `linkedMessageCount`, `createdBy`, `updatedBy`, `cancelReason`).

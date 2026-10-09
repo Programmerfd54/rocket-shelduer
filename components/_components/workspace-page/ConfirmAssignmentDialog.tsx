@@ -15,6 +15,7 @@ import {
 import { Field } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
+import { CredentialStorageNote } from '@/components/_components/workspace/CredentialStorageNote'
 
 type Method = 'password' | 'personal_token'
 
@@ -95,6 +96,9 @@ export function ConfirmAssignmentDialog({
     } catch {
       toast.error('Не удалось подключиться', { id: toastId, description: 'Проверьте сеть и VPN, затем повторите.' })
     } finally {
+      // Секреты не держим в состоянии после отправки (успех или ошибка)
+      setPassword('')
+      setToken('')
       setLoading(false)
     }
   }
@@ -154,7 +158,10 @@ export function ConfirmAssignmentDialog({
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                autoComplete="current-password"
+                autoComplete="new-password"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
                 aria-invalid={!!show('password')}
                 disabled={busy}
               />
@@ -192,12 +199,16 @@ export function ConfirmAssignmentDialog({
                   onChange={(e) => setToken(e.target.value)}
                   className="font-mono"
                   autoComplete="off"
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  spellCheck={false}
                   aria-invalid={!!show('token')}
                   disabled={busy}
                 />
               </Field>
             </>
           )}
+          <CredentialStorageNote method={method} />
 
           <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-between">
             <Button type="button" variant="outline" disabled={busy} onClick={onLeave}>

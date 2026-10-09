@@ -4,6 +4,7 @@
 import { NextResponse } from 'next/server';
 import { verifyCronRequest } from '@/lib/security';
 import prisma from '@/lib/prisma';
+import { workspaceIdsWithIntensives } from '@/lib/intensives/workspace-schedule';
 
 export async function GET(request: Request) {
   try {
@@ -16,7 +17,7 @@ export async function GET(request: Request) {
     const now = new Date();
 
     // Находим workspace, у которых истёк срок хранения
-    const expiredWorkspaces = await prisma.workspaceConnection.findMany({
+    const candidates = await prisma.workspaceConnection.findMany({
       where: {
         isArchived: true,
         archiveDeleteAt: {
@@ -28,14 +29,24 @@ export async function GET(request: Request) {
         workspaceName: true,
         userId: true,
         archiveDeleteAt: true,
+        orgSpaceId: true,
       },
     });
+
+    // Подключения, у которых в графике есть интенсивы (любой статус), автоматически не удаляем никогда:
+    // история интенсивов и связанные сообщения важнее срока хранения архива. Только пишем количество.
+    const protectedIds = await workspaceIdsWithIntensives(candidates);
+    if (protectedIds.size > 0) {
+      console.info(`[cleanup-archives] skipped ${protectedIds.size} archived workspace(s) with intensives`);
+    }
+    const expiredWorkspaces = candidates.filter((ws) => !protectedIds.has(ws.id));
 
     if (expiredWorkspaces.length === 0) {
       return NextResponse.json({
         success: true,
         message: 'No expired archives to delete',
         deleted: 0,
+        skippedWithIntensives: protectedIds.size,
       });
     }
 
@@ -43,9 +54,15 @@ export async function GET(request: Request) {
     const deleteResults = await Promise.all(
       expiredWorkspaces.map(async (ws) => {
         try {
-          await prisma.workspaceConnection.delete({
-            where: { id: ws.id },
+          // Условие повторяет проверку выше атомарно: интенсив мог появиться между выборкой и удалением
+          const del = await prisma.workspaceConnection.deleteMany({
+            where: {
+              id: ws.id,
+              isArchived: true,
+              OR: [{ orgSpaceId: null }, { orgSpace: { intensives: { none: {} } } }],
+            },
           });
+          if (del.count === 0) return { success: false, skipped: true, id: ws.id, name: ws.workspaceName };
 
           // Логируем удаление
           await prisma.activityLog.create({
@@ -75,13 +92,14 @@ export async function GET(request: Request) {
     );
 
     const successCount = deleteResults.filter((r) => r.success).length;
-    const failedCount = deleteResults.filter((r) => !r.success).length;
+    const failedCount = deleteResults.filter((r) => !r.success && !('skipped' in r)).length;
 
     return NextResponse.json({
       success: true,
       message: `Deleted ${successCount} expired archives`,
       deleted: successCount,
       failed: failedCount,
+      skippedWithIntensives: protectedIds.size,
       details: deleteResults,
     });
   } catch (error) {

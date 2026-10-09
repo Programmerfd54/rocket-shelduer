@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getClientIp } from '@/lib/security';
 import { createFixedWindowLimiter } from '@/lib/http-security';
+import { redactString } from '@/lib/sensitive-data';
 
 /**
  * POST — логирование ошибки с клиента (для админ-информации на страницах ошибок).
@@ -13,7 +14,8 @@ const errorLogLimiter = createFixedWindowLimiter({ windowMs: 60 * 1000, max: 20 
 function clean(value: unknown, max: number): string | undefined {
   if (value == null) return undefined;
   const s = typeof value === 'string' ? value : String(value);
-  return s.replace(/[\u0000-\u0008\u000b-\u001f\u007f\u2028\u2029]/g, ' ').slice(0, max);
+  // Клиентский текст ошибки может содержать токены/пароли (сообщение fetch, URL с query) — вырезаем
+  return redactString(s.replace(/[\u0000-\u0008\u000b-\u001f\u007f\u2028\u2029]/g, ' ')).slice(0, max);
 }
 
 export async function POST(request: Request) {

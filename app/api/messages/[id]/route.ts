@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { requireAuth } from '@/lib/api-auth';
-import { decryptAuthToken } from '@/lib/encryption';
+import { connectionAad, decryptAuthToken } from '@/lib/encryption';
 import { RocketChatClient } from '@/lib/rocketchat';
 import { getSafeErrorMessage, isUnsafeId } from '@/lib/security';
 import { buildRcPermalink } from '@/lib/rc-permalink';
@@ -98,10 +98,12 @@ export async function GET(
       message.status === 'SENT' && message.messageId_RC
         ? await prisma.workspaceConnection.findUnique({
             where: { id: message.workspaceId },
-            select: { workspaceUrl: true, authToken: true, userId_RC: true },
+            select: { workspaceUrl: true, authToken: true, userId_RC: true, userId: true },
           })
         : null;
-    const decryptedToken = rcConnection?.authToken ? decryptAuthToken(rcConnection.authToken) : null;
+    const decryptedToken = rcConnection?.authToken
+      ? decryptAuthToken(rcConnection.authToken, connectionAad(rcConnection.userId))
+      : null;
     if (
       message.status === 'SENT' &&
       message.messageId_RC &&
@@ -274,10 +276,12 @@ export async function PATCH(
           id: message.workspaceId,
           userId: user.id,
         },
-        select: { workspaceUrl: true, authToken: true, userId_RC: true },
+        select: { workspaceUrl: true, authToken: true, userId_RC: true, userId: true },
       });
 
-      const editToken = workspace?.authToken ? decryptAuthToken(workspace.authToken) : null;
+      const editToken = workspace?.authToken
+        ? decryptAuthToken(workspace.authToken, connectionAad(workspace.userId))
+        : null;
       if (!workspace || !editToken || !workspace.userId_RC) {
         return NextResponse.json(
           { error: 'Workspace not authenticated', code: 'RC_NOT_CONNECTED' },

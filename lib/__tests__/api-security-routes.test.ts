@@ -22,7 +22,10 @@ vi.mock('@/lib/auth', () => ({
 }));
 vi.mock('@/lib/prisma', () => ({ default: mocks.prisma }));
 vi.mock('@/lib/rocketchat', () => ({ RocketChatClient: class { constructor() { return mocks.rc; } } }));
-vi.mock('@/lib/encryption', () => ({ decryptAuthToken: (v: string | null) => (v ? `plain-${v}` : null) }));
+vi.mock('@/lib/encryption', () => ({
+  decryptAuthToken: (v: string | null) => (v ? `plain-${v}` : null),
+  connectionAad: (userId: string) => `ws:${userId}`,
+}));
 
 import { GET as getMessage } from '@/app/api/messages/[id]/route';
 import { POST as resetUserPassword } from '@/app/api/workspace/[id]/admin/reset-user-password/route';

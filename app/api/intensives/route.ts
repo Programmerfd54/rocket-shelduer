@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
 import { withIntensives } from '@/lib/intensives/route-context';
-import { parseOrThrow, readJsonBody } from '@/lib/intensives/http';
+import { ApiError, parseOrThrow, readJsonBody } from '@/lib/intensives/http';
 import { createIntensiveSchema } from '@/lib/intensives/schemas';
 import { createIntensive, listIntensives, parseListFilters } from '@/lib/intensives/service';
 import { computeProgressForIntensives, toIntensiveSummary } from '@/lib/intensives/progress';
+import { ensureOrgSpaceForWorkspace } from '@/lib/intensives/workspace-schedule';
 
 /**
  * GET /api/intensives?year=&orgSpaceId=&workspaceId=&phase=&status=&progress=
@@ -17,13 +18,26 @@ export async function GET(request: Request) {
   });
 }
 
-/** POST /api/intensives — создать черновик (Lead_SUP). Отправки не запускаются. */
+/**
+ * POST /api/intensives — создать черновик (Lead_SUP). Отправки не запускаются.
+ * Тело: { workspaceId | orgSpaceId, name, startDate, endDate, timezone, description?, templateIds? }.
+ * С workspaceId организационное пространство подбирается (или создаётся) автоматически; пространство
+ * должно быть доступно вызывающему (своё или назначенное).
+ */
 export async function POST(request: Request) {
   return withIntensives(
     'create intensive',
     async ({ user, viewer }) => {
-      const input = parseOrThrow(createIntensiveSchema, await readJsonBody(request));
-      const { intensive, overlaps, plan } = await createIntensive(user, input);
+      const { workspaceId, orgSpaceId: rawOrgSpaceId, ...rest } = parseOrThrow(createIntensiveSchema, await readJsonBody(request));
+      let orgSpaceId = rawOrgSpaceId;
+      if (workspaceId) {
+        if (!viewer.accessibleWorkspaceIds.has(workspaceId)) {
+          throw new ApiError(404, 'NOT_FOUND', 'Пространство не найдено', { fieldErrors: { workspaceId: 'Не найдено или нет доступа' } });
+        }
+        orgSpaceId = (await ensureOrgSpaceForWorkspace(workspaceId, user.id)).orgSpaceId;
+      }
+      if (!orgSpaceId) throw new ApiError(400, 'VALIDATION_ERROR', 'Выберите пространство', { fieldErrors: { workspaceId: 'Выберите пространство' } });
+      const { intensive, overlaps, plan } = await createIntensive(user, { ...rest, orgSpaceId });
       const progress = await computeProgressForIntensives(viewer, [intensive.id]);
       const p = progress.get(intensive.id);
       return NextResponse.json(

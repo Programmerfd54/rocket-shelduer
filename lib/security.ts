@@ -5,6 +5,7 @@ import {
   createFixedWindowLimiter,
   getClientIpFromHeaders,
 } from './http-security';
+import { redactString, safeErrorForLog } from './sensitive-data';
 
 /** Типы событий безопасности для логов */
 export const SecurityEventType = {
@@ -40,17 +41,18 @@ export async function logSecurityEvent(params: LogSecurityEventParams): Promise<
     await prisma.securityEvent.create({
       data: {
         type: params.type,
-        path: params.path?.slice(0, 500) ?? null,
+        path: params.path != null ? redactString(params.path).slice(0, 500) : null,
         method: params.method?.slice(0, 16) ?? null,
         ipAddress: params.ipAddress?.slice(0, 64) ?? null,
         userAgent: params.userAgent?.slice(0, 500) ?? null,
-        details: params.details?.slice(0, 2000) ?? null,
+        // details могут содержать текст ошибки Rocket.Chat/Prisma — секреты вырезаются до записи в БД
+        details: params.details != null ? redactString(params.details).slice(0, 2000) : null,
         blocked: params.blocked ?? true,
         userId: params.userId ?? null,
       },
     });
   } catch (err) {
-    console.error('Failed to log security event:', err);
+    console.error('Failed to log security event:', safeErrorForLog(err));
   }
 }
 
@@ -290,3 +292,76 @@ export function verifyCronRequest(request: Request): { status: number; error: st
   if (result === 'misconfigured') return { status: 503, error: 'Cron is not configured' };
   return { status: 401, error: 'Unauthorized' };
 }
+
+/* ------------------------------------------------------------------ */
+/* Подключение пространства Rocket.Chat (логин/пароль или токен)        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Лимит попыток проверки учётных данных Rocket.Chat (создание/смена кредов/подтверждение назначения):
+ * не более 10 попыток за 15 минут на пользователя и 30 — с одного IP. Иначе приложение можно
+ * использовать как прокси для перебора паролей Rocket.Chat (и для блокировки чужих учёток в LDAP).
+ * Учёт: in-memory по попыткам + в БД по неудачам (события WORKSPACE_AUTH_FAILED пользователя) —
+ * общий для реплик и переживает перезапуск.
+ */
+export const RC_CONNECT_WINDOW_MS = 15 * 60 * 1000;
+export const RC_CONNECT_MAX_PER_USER = 10;
+export const RC_CONNECT_MAX_PER_IP = 30;
+const rcConnectUserLimiter = createFixedWindowLimiter({ windowMs: RC_CONNECT_WINDOW_MS, max: RC_CONNECT_MAX_PER_USER });
+const rcConnectIpLimiter = createFixedWindowLimiter({ windowMs: RC_CONNECT_WINDOW_MS, max: RC_CONNECT_MAX_PER_IP });
+
+export const RC_CONNECT_RATE_LIMIT_MESSAGE =
+  'Слишком много попыток подключения к Rocket.Chat. Подождите 15 минут и повторите.';
+
+/**
+ * Засчитать попытку проверки кредов RC. true — лимит превышен (ответить 429, к Rocket.Chat не обращаться).
+ * Вызывать только когда запрос действительно отправит креды в Rocket.Chat.
+ */
+export async function hitRcConnectRateLimit(userId: string, ip: string | null): Promise<boolean> {
+  const userLimited = rcConnectUserLimiter.hit(`rcconn:u:${userId}`);
+  const ipLimited = rcConnectIpLimiter.hit(ip ? `rcconn:ip:${ip}` : null);
+  if (userLimited || ipLimited) return true;
+  try {
+    const failures = await prisma.securityEvent.count({
+      where: {
+        type: SecurityEventType.WORKSPACE_AUTH_FAILED,
+        userId,
+        createdAt: { gte: new Date(Date.now() - RC_CONNECT_WINDOW_MS) },
+      },
+    });
+    return failures >= RC_CONNECT_MAX_PER_USER;
+  } catch {
+    return false;
+  }
+}
+
+/** Неудачная проверка кредов RC: событие безопасности (без кредов) — учитывается лимитом выше. */
+export async function recordRcConnectFailure(params: {
+  userId: string;
+  request: Request;
+  path: string;
+  method: string;
+  reason: string;
+}): Promise<void> {
+  await logSecurityEvent({
+    type: SecurityEventType.WORKSPACE_AUTH_FAILED,
+    path: params.path,
+    method: params.method,
+    ipAddress: getClientIp(params.request),
+    userAgent: params.request.headers.get('user-agent') ?? undefined,
+    details: params.reason.slice(0, 300),
+    blocked: true,
+    userId: params.userId,
+  });
+}
+
+/** Ошибка сети/недоступности RC (не связана с кредами). */
+export function isRcNetworkErrorMessage(message: string): boolean {
+  return /fetch failed|timeout|ECONNREFUSED|ECONNRESET|UND_ERR_CONNECT_TIMEOUT|ENOTFOUND|ETIMEDOUT|Network error|Cannot connect/i.test(
+    message
+  );
+}
+
+/** Единое сообщение при отказе входа в RC — не раскрывает, существует ли учётная запись. */
+export const RC_LOGIN_FAILED_MESSAGE =
+  'Не удалось войти в Rocket.Chat. Проверьте адрес сервера, логин и пароль (или токен и User ID).';

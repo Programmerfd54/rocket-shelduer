@@ -29,6 +29,10 @@ export interface DashWorkspace {
   isArchived?: boolean
   isActive?: boolean
   lastConnected?: string | null
+  /** Сервер: предлагать ли архивировать (учитывает график интенсивов и «Не предлагать архивировать») */
+  archiveSuggested?: boolean
+  suppressArchivePrompt?: boolean
+  upcomingIntensiveCount?: number
 }
 
 function ListBox({ children }: { children: React.ReactNode }) {

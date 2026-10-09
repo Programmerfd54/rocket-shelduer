@@ -28,6 +28,8 @@ import { toast } from 'sonner'
 import { Settings, Loader2, Archive, CircleHelp, CircleAlert } from 'lucide-react'
 import { ConfirmDialog } from '@/components/common/ConfirmDialog'
 import { checkWorkspaceUrl, checkDateRange } from '@/lib/workspace-validation'
+import { CredentialStorageNote } from '@/components/_components/workspace/CredentialStorageNote'
+import { ArchivePromptSwitch } from '@/components/intensives/workspace/ArchivePromptSwitch'
 
 interface WorkspaceEditDialogProps {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -54,6 +56,8 @@ export function WorkspaceEditDialog({
   const isControlled = openProp !== undefined
   const open = isControlled ? openProp : internalOpen
   const setOpen = (next: boolean) => {
+    // Секреты не держим в состоянии после закрытия диалога
+    if (!next) clearSecrets()
     if (isControlled) onOpenChangeProp?.(next)
     else setInternalOpen(next)
   }
@@ -107,6 +111,11 @@ export function WorkspaceEditDialog({
     workspace.startDate,
     workspace.endDate,
   ])
+
+  function clearSecrets() {
+    setFormData((f) => (f.password || f.personalToken ? { ...f, password: '', personalToken: '' } : f))
+    setTotpCode('')
+  }
 
   const touch = (k: FieldKey) => setTouched((t) => ({ ...t, [k]: true }))
 
@@ -186,8 +195,11 @@ export function WorkspaceEditDialog({
       })
 
       const data = await response.json()
+      // Код 2FA одноразовый — после отправки не храним
+      setTotpCode('')
 
       if (response.status === 400 && data.requiresTotp) {
+        // Пароль остаётся только до ввода кода 2FA (нужен для повторной отправки вместе с кодом)
         setNeedsTotp(true)
         toast.message('Нужен код 2FA', {
           description: 'Введите код из приложения-аутентификатора и снова нажмите «Сохранить».',
@@ -205,6 +217,7 @@ export function WorkspaceEditDialog({
       toast.success('Изменения сохранены', { description: `Пространство «${formData.workspaceName.trim()}» обновлено.` })
       onSuccess()
     } catch (error) {
+      clearSecrets()
       const message = (error instanceof Error && error.message) || 'Ошибка обновления'
       setFormError(message)
       toast.error('Не удалось сохранить изменения', { description: message })
@@ -336,6 +349,15 @@ export function WorkspaceEditDialog({
                   />
                 </Field>
               </div>
+              {/* Lead_SUP: сервер отдаёт canEditArchivePrompt; сохраняется сразу отдельным запросом */}
+              {workspace.canEditArchivePrompt === true && !workspace.isArchived && (
+                <ArchivePromptSwitch
+                  workspaceId={workspace.id}
+                  value={workspace.suppressArchivePrompt === true}
+                  onChanged={() => onSuccess()}
+                  id="edit-suppress-archive-prompt"
+                />
+              )}
             </fieldset>
 
             <fieldset className="space-y-4" disabled={isSubmitting}>
@@ -415,6 +437,7 @@ export function WorkspaceEditDialog({
                       autoComplete="new-password"
                     />
                   </Field>
+                  <CredentialStorageNote method="password" />
                   {(needsTotp || (formData.password.length > 0 && formData.has2FA)) && (
                     <Field label="Код 2FA" htmlFor="edit-totp" hint="Если Rocket.Chat запросит второй фактор.">
                       <Input
@@ -476,6 +499,7 @@ export function WorkspaceEditDialog({
                       autoComplete="off"
                     />
                   </Field>
+                  <CredentialStorageNote method="personal_token" />
                 </TabsContent>
               </Tabs>
 

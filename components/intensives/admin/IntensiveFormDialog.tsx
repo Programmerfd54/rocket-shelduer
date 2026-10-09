@@ -38,6 +38,8 @@ import { TimezonePicker } from './TimezonePicker'
 
 type Form = {
   orgSpaceId: string
+  /** Пространство (подключение) — OrgSpace создаётся сервером автоматически */
+  workspaceId: string
   name: string
   startDate: string
   endDate: string
@@ -47,10 +49,22 @@ type Form = {
 
 export type IntensiveSavedResult = { intensive: IntensiveSummary; overlaps: IntensiveOverlapRef[]; created: boolean }
 
-function formFrom(i: IntensiveSummary | undefined, defaultOrgSpaceId: string | undefined, orgSpaces: OrgSpaceRef[]): Form {
+/** Пространство (подключение) для выбора при создании: OrgSpace подбирается/создаётся сервером. */
+export type WorkspaceTargetRef = { id: string; name: string; orgSpaceId: string | null }
+
+type Target = 'orgSpace' | 'workspace' | 'fixedWorkspace'
+
+function formFrom(
+  i: IntensiveSummary | undefined,
+  defaultOrgSpaceId: string | undefined,
+  orgSpaces: OrgSpaceRef[],
+  defaultWorkspaceId: string | undefined,
+  workspaces: WorkspaceTargetRef[] | undefined,
+): Form {
   if (i) {
     return {
       orgSpaceId: i.orgSpace.id,
+      workspaceId: defaultWorkspaceId ?? '',
       name: i.name,
       startDate: i.startDate,
       endDate: i.endDate,
@@ -60,6 +74,7 @@ function formFrom(i: IntensiveSummary | undefined, defaultOrgSpaceId: string | u
   }
   return {
     orgSpaceId: defaultOrgSpaceId ?? (orgSpaces.length === 1 ? orgSpaces[0].id : ''),
+    workspaceId: defaultWorkspaceId ?? (workspaces && workspaces.length === 1 ? workspaces[0].id : ''),
     name: '',
     startDate: '',
     endDate: '',
@@ -68,9 +83,10 @@ function formFrom(i: IntensiveSummary | undefined, defaultOrgSpaceId: string | u
   }
 }
 
-function validate(f: Form, mode: 'create' | 'edit'): Record<string, string> {
+function validate(f: Form, mode: 'create' | 'edit', target: Target): Record<string, string> {
   const e: Record<string, string> = {}
-  if (mode === 'create' && !f.orgSpaceId) e.orgSpaceId = 'Выберите пространство'
+  if (mode === 'create' && target === 'orgSpace' && !f.orgSpaceId) e.orgSpaceId = 'Выберите пространство'
+  if (mode === 'create' && target !== 'orgSpace' && !f.workspaceId) e.workspaceId = 'Выберите пространство'
   const name = f.name.trim()
   if (!name) e.name = 'Укажите название'
   else if (name.length > 200) e.name = 'Не длиннее 200 символов'
@@ -92,8 +108,10 @@ export function IntensiveFormDialog({
   onOpenChange,
   mode,
   intensive,
-  orgSpaces,
+  orgSpaces = [],
   defaultOrgSpaceId,
+  workspaceId: fixedWorkspaceId,
+  workspaces,
   siblings = [],
   onSaved,
   onStale,
@@ -102,16 +120,23 @@ export function IntensiveFormDialog({
   onOpenChange: (open: boolean) => void
   mode: 'create' | 'edit'
   intensive?: IntensiveSummary
-  orgSpaces: OrgSpaceRef[]
+  /** Старый способ: выбор организационного пространства */
+  orgSpaces?: OrgSpaceRef[]
+  /** Для фиксированного пространства (workspaceId) — его OrgSpace, если уже есть (для мгновенной проверки пересечений) */
   defaultOrgSpaceId?: string
+  /** Интенсив создаётся в этом пространстве (подключении); поле выбора скрыто */
+  workspaceId?: string
+  /** Выбор пространства (подключения) вместо организационного пространства */
+  workspaces?: WorkspaceTargetRef[]
   /** Уже известные интенсивы (для мгновенного предупреждения о пересечении; сервер проверяет окончательно) */
   siblings?: IntensiveSummary[]
   onSaved: (res: IntensiveSavedResult) => void
   /** Версия на сервере изменилась — родитель может обновить свои данные */
   onStale?: (latest: IntensiveDetail) => void
 }) {
+  const target: Target = fixedWorkspaceId ? 'fixedWorkspace' : workspaces ? 'workspace' : 'orgSpace'
   const [prevOpen, setPrevOpen] = useState(false)
-  const [initial, setInitial] = useState<Form>(() => formFrom(intensive, defaultOrgSpaceId, orgSpaces))
+  const [initial, setInitial] = useState<Form>(() => formFrom(intensive, defaultOrgSpaceId, orgSpaces, fixedWorkspaceId, workspaces))
   const [form, setForm] = useState<Form>(initial)
   const [baseVersion, setBaseVersion] = useState(intensive?.version ?? 0)
   const [touched, setTouched] = useState<Record<string, boolean>>({})
@@ -127,7 +152,7 @@ export function IntensiveFormDialog({
   if (open !== prevOpen) {
     setPrevOpen(open)
     if (open) {
-      const f = formFrom(intensive, defaultOrgSpaceId, orgSpaces)
+      const f = formFrom(intensive, defaultOrgSpaceId, orgSpaces, fixedWorkspaceId, workspaces)
       setInitial(f)
       setForm(f)
       setBaseVersion(intensive?.version ?? 0)
@@ -144,7 +169,7 @@ export function IntensiveFormDialog({
   }
 
   const readOnly = mode === 'edit' && (intensive?.status === 'CANCELLED' || intensive?.status === 'ARCHIVED')
-  const clientErrors = useMemo(() => validate(form, mode), [form, mode])
+  const clientErrors = useMemo(() => validate(form, mode, target), [form, mode, target])
   const valid = Object.keys(clientErrors).length === 0
   const dirty = (Object.keys(form) as (keyof Form)[]).some((k) => form[k] !== initial[k])
 
@@ -167,7 +192,15 @@ export function IntensiveFormDialog({
 
   const liveOverlaps = useMemo(() => {
     if (!form.startDate || !form.endDate || form.endDate < form.startDate) return []
-    const spaceId = mode === 'edit' ? intensive?.orgSpace.id : form.orgSpaceId
+    const spaceId =
+      mode === 'edit'
+        ? intensive?.orgSpace.id
+        : target === 'orgSpace'
+          ? form.orgSpaceId
+          : target === 'workspace'
+            ? workspaces?.find((w) => w.id === form.workspaceId)?.orgSpaceId
+            : defaultOrgSpaceId
+    if (!spaceId) return []
     return siblings.filter(
       (s) =>
         s.id !== intensive?.id &&
@@ -175,7 +208,7 @@ export function IntensiveFormDialog({
         (s.status === 'DRAFT' || s.status === 'PUBLISHED') &&
         periodsOverlap(form.startDate, form.endDate, s.startDate, s.endDate),
     )
-  }, [form.startDate, form.endDate, form.orgSpaceId, siblings, mode, intensive])
+  }, [form.startDate, form.endDate, form.orgSpaceId, form.workspaceId, siblings, mode, intensive, target, workspaces, defaultOrgSpaceId])
 
   const pendingOutside = impactState?.impact.messagesOutsideNewRange.filter((m) => m.status === 'PENDING') ?? []
   const impactReady = !!impactState && ack && (pendingOutside.length === 0 || resolution !== '')
@@ -243,7 +276,7 @@ export function IntensiveFormDialog({
   }
 
   const submit = async (extra: { confirmImpact?: boolean; outOfRangeResolution?: OutOfRangeResolution } = {}) => {
-    setTouched({ orgSpaceId: true, name: true, startDate: true, endDate: true, timezone: true, description: true })
+    setTouched({ orgSpaceId: true, workspaceId: true, name: true, startDate: true, endDate: true, timezone: true, description: true })
     if (!valid || submitting) return
     setSubmitting(true)
     setFormError(null)
@@ -254,7 +287,7 @@ export function IntensiveFormDialog({
         const res = await apiFetch<{ intensive: IntensiveSummary; warnings?: { overlaps?: IntensiveOverlapRef[] } }>('/api/intensives', {
           method: 'POST',
           json: {
-            orgSpaceId: form.orgSpaceId,
+            ...(target === 'orgSpace' ? { orgSpaceId: form.orgSpaceId } : { workspaceId: form.workspaceId }),
             name: form.name.trim(),
             startDate: form.startDate,
             endDate: form.endDate,
@@ -462,20 +495,45 @@ export function IntensiveFormDialog({
         </InlineNotice>
       )}
 
-      <Field label="Пространство" htmlFor="intensive-orgspace" required={mode === 'create'} error={errorFor('orgSpaceId')} hint={mode === 'edit' ? 'Пространство интенсива не меняется.' : undefined}>
-        <Select value={form.orgSpaceId} onValueChange={(v) => set('orgSpaceId', v)} disabled={mode === 'edit' || submitting}>
-          <SelectTrigger id="intensive-orgspace" className="w-full" aria-invalid={!!errorFor('orgSpaceId')}>
-            <SelectValue placeholder="Выберите пространство" />
-          </SelectTrigger>
-          <SelectContent>
-            {(mode === 'edit' && intensive ? [intensive.orgSpace] : orgSpaces).map((o) => (
-              <SelectItem key={o.id} value={o.id}>
-                {o.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </Field>
+      {target === 'orgSpace' && (
+        <Field label="Пространство" htmlFor="intensive-orgspace" required={mode === 'create'} error={errorFor('orgSpaceId')} hint={mode === 'edit' ? 'Пространство интенсива не меняется.' : undefined}>
+          <Select value={form.orgSpaceId} onValueChange={(v) => set('orgSpaceId', v)} disabled={mode === 'edit' || submitting}>
+            <SelectTrigger id="intensive-orgspace" className="w-full" aria-invalid={!!errorFor('orgSpaceId')}>
+              <SelectValue placeholder="Выберите пространство" />
+            </SelectTrigger>
+            <SelectContent>
+              {(mode === 'edit' && intensive ? [intensive.orgSpace] : orgSpaces).map((o) => (
+                <SelectItem key={o.id} value={o.id}>
+                  {o.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+      )}
+      {target === 'workspace' && mode === 'create' && (
+        <Field
+          label="Пространство"
+          htmlFor="intensive-workspace"
+          required
+          error={errorFor('workspaceId')}
+          hint="Интенсив попадёт в график этого пространства."
+        >
+          <Select value={form.workspaceId} onValueChange={(v) => set('workspaceId', v)} disabled={submitting}>
+            <SelectTrigger id="intensive-workspace" className="w-full" aria-invalid={!!errorFor('workspaceId')}>
+              <SelectValue placeholder="Выберите пространство" />
+            </SelectTrigger>
+            <SelectContent>
+              {(workspaces ?? []).map((w) => (
+                <SelectItem key={w.id} value={w.id}>
+                  {w.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+      )}
+      {target === 'fixedWorkspace' && errorFor('workspaceId') && <InlineNotice tone="danger">{errorFor('workspaceId')}</InlineNotice>}
 
       <Field label="Название" htmlFor="intensive-name" required error={errorFor('name')}>
         <Input

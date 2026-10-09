@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { AlertTriangle, Archive, Clock, RefreshCw, RotateCcw, Users, XCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
+import { isLegacyPeriodEndingSoon, legacyDaysLeft } from '@/lib/intensives/archive-prompt'
 import { Notice } from './Notice'
 
 function pluralDays(n: number) {
@@ -44,11 +45,12 @@ export function WorkspaceBanners({
   onArchiveRequest: () => void
   onLeaveAssignmentRequest: () => void
 }) {
-  const [now] = useState(() => Date.now())
+  const [now] = useState(() => new Date())
   const endDate = workspace?.endDate ? new Date(workspace.endDate) : null
-  const daysUntilEnd = endDate ? Math.ceil((endDate.getTime() - now) / (1000 * 60 * 60 * 24)) : 0
-  const isEnded = !!endDate && endDate.getTime() < now
-  const isEndingSoon = !!endDate && daysUntilEnd > 0 && daysUntilEnd <= 7
+  const daysUntilEnd = legacyDaysLeft(workspace?.endDate, now) ?? 0
+  // Единый серверный признак: учитывает график интенсивов и «Не предлагать архивировать»
+  const isEnded = workspace?.archiveSuggested === true
+  const isEndingSoon = !!workspace && isLegacyPeriodEndingSoon(workspace, 7, now) && daysUntilEnd > 0
 
   return (
     <div className="space-y-3 empty:hidden">

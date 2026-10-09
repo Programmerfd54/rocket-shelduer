@@ -20,6 +20,7 @@ import {
   setIntensiveArchiveToastDismissed,
 } from '@/lib/intensive-archive-toast';
 import { canSeeAdminPanel, isWorkspaceStaffRole } from '@/lib/roles';
+import { isLegacyPeriodEndingSoon } from '@/lib/intensives/archive-prompt';
 import { WorkspaceDialog } from '@/components/_components/workspace-dialog';
 import WorkspaceForm, { type Workspace } from '@/components/_components/WorkspaceForm';
 import { WorkspaceEditDialog } from '@/components/common/WorkspaceEditDialog';
@@ -35,16 +36,13 @@ const FAVORITES_KEY = 'workspaces_favorites';
 type SortKey = 'name' | 'createdAt' | 'endDate' | 'lastConnected';
 type QuickFilter = 'all' | 'favorites' | 'expiring' | 'ended';
 
-const DAY_MS = 1000 * 60 * 60 * 24;
-
+/** «Завершённые» = сервер предлагает архивировать (учтены график интенсивов и «Не предлагать архивировать»). */
 function isEnded(w: Workspace) {
-  return !!w.endDate && new Date(w.endDate).getTime() < Date.now();
+  return w.archiveSuggested === true;
 }
 
 function isExpiringSoon(w: Workspace) {
-  if (!w.endDate) return false;
-  const days = Math.ceil((new Date(w.endDate).getTime() - Date.now()) / DAY_MS);
-  return days > 0 && days <= 7;
+  return isLegacyPeriodEndingSoon(w, 7);
 }
 
 export function WorkspacesExplorer({ embedded = false }: { embedded?: boolean }) {
@@ -94,9 +92,7 @@ export function WorkspacesExplorer({ embedded = false }: { embedded?: boolean })
 
   useEffect(() => {
     if (isIntensiveArchiveToastDismissed()) return;
-    const ended = workspaces.filter(
-      (ws) => ws.endDate && new Date(ws.endDate) < new Date() && !ws.isArchived,
-    );
+    const ended = workspaces.filter(isEnded);
     if (ended.length > 0) {
       const id = toast.warning('Завершенные интенсивы', {
         description: `${ended.length} ${ended.length === 1 ? 'интенсив завершен' : 'интенсива завершены'}. Рекомендуется заархивировать их.`,

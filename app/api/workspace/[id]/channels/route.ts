@@ -4,6 +4,7 @@ import { getSafeErrorMessage, isUnsafeId } from '@/lib/security';
 import { requireAuth } from '@/lib/api-auth';
 import { RocketChatClient } from '@/lib/rocketchat';
 import { getEffectiveConnectionForRc } from '@/lib/workspace-rc';
+import { withRcSessionRetry } from '@/lib/rc-session-refresh';
 import { rcNotConnectedResponse, rcUnauthorizedResponse } from '@/lib/rc-http';
 import { isRcNetworkFailure, rcUnreachableResponse } from '@/lib/rc-network';
 
@@ -47,9 +48,9 @@ export async function GET(
 
     try {
       const rcClient = new RocketChatClient(effective.workspaceUrl);
-      const channels = await rcClient.getChannels(
-        effective.authToken,
-        effective.userId_RC
+      // При 401 — один повторный вход по сохранённому паролю (lib/rc-session-refresh) и повтор запроса
+      const channels = await withRcSessionRetry(effective, (token, rcUserId) =>
+        rcClient.getChannels(token, rcUserId)
       );
 
       await prisma.workspaceConnection.update({
