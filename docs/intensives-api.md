@@ -47,9 +47,27 @@
 Действия в `lib/permissions.ts`: `intensives:view` (все роли), `intensives:manage`, `intensives:link-messages`,
 `org-spaces:manage` (Lead_SUP).
 
-**Видимость пунктов плана по `audience`:** SUP и Lead_SUP — все; ADM — `ADM` и `ALL`; MEMBER — только `ALL`.
-Если вызывающий видит не все пункты, в ответах `partial: true` → UI пишет **«Доступные вам анонсы»**, а прогресс
-считается только по видимым пунктам.
+**Видимость пунктов плана по области.** Область пункта (`PlanItemDto.scope`, `planItemScope` в
+`lib/intensives/access.ts`) = `sourceScope` (`ADM`|`SUP`), а если его нет — `audience` `ADM`/`SUP`; иначе пункт
+**общий** (`scope: null`, audience `ALL`).
+
+| Роль | Видит |
+|---|---|
+| Lead_SUP | все пункты; `?scope=SUP|ADM|ALL` сужает просмотр (см. ниже) |
+| SUP | область `SUP` + общие (пункты ADM — **нет**; раньше SUP видел всё) |
+| ADM | область `ADM` + общие |
+| MEMBER | только общие |
+
+Если вызывающий по своей роли видит не все пункты, в ответах `partial: true` → UI пишет **«Доступные вам анонсы»**, а
+прогресс считается только по видимым пунктам. Те же правила — в истории (`GET …/history`), при планировании из пункта
+(`403 PLAN_ITEM_NOT_VISIBLE`) и в прогрессе списков/карточек.
+
+**Вкладки Lead_SUP по области.** `GET /api/intensives/[id]/plan`, `GET /api/intensives/[id]`, `GET /api/intensives`
+принимают необязательный `scope=SUP|ADM|ALL` (регистр не важен; по умолчанию `ALL`): `SUP` — пункты области SUP +
+общие (ровно то, что видит SUP), `ADM` — область ADM + общие; прогресс считается сервером ровно по этому набору.
+Для остальных ролей набор задаёт роль, параметр **игнорируется**. Некорректное значение у Lead_SUP → `400 BAD_REQUEST`.
+В ответах: `PlanResponse.viewScope` (`ALL|SUP|ADM|COMMON` — COMMON у MEMBER), `PlanResponse.scopeFiltered`
+(Lead_SUP выбрал не ALL), `IntensiveSummary.viewScope` (когда посчитан прогресс). У Lead_SUP `partial` всегда `false`.
 
 **Приватность отправок:** состояние пункта видят все, кто видит пункт. Текст, автор («кто запланировал»),
 канал и ошибка отправки — только если вызывающий видит само сообщение: SUP/Lead_SUP — все; остальные — свои и в
@@ -63,7 +81,9 @@
   cancelledAt, cancelReason, archivedAt, createdById?, updatedById?, version }`.
 - `IntensivePlanItem { id, intensiveId, position, sourceType, sourceTemplateId?, sourceScope?, sourceVersion?,
   title, body, channel, dayNumber?, time?, audience, categories[], skipped, skipReason?, skippedById?, skippedAt? }` —
-  **снимок** шаблона; изменение/удаление шаблона план не меняет.
+  **снимок** шаблона; изменение/удаление шаблона план не меняет. `sourceScope` — область пункта: у OFFICIAL — набор
+  шаблона (встроенного или созданного Lead_SUP, `sourceTemplateId = 'c_…'`), у CUSTOM/USER_TEMPLATE — выбор Lead_SUP
+  (`null` — для всех). Старые свои пункты без `sourceScope` используют `audience`.
 - `IntensiveEvent { id, intensiveId, planItemId?, messageId?, actorId?, type, details, createdAt }` — неизменяемая история
   (`planItemId`/`messageId` — строки без FK, переживают удаление).
 - `ScheduledMessage` + `intensiveId?`, `planItemId?`, `isPlanRepeat` (false), `clientRequestId?` (unique),
@@ -201,24 +221,35 @@ confirmImpact?, outOfRangeResolution? }` → `{ intensive: IntensiveDetail, impa
 
 ### План
 
-**`GET /api/intensives/templates?intensiveId=`** (Lead_SUP) → `{ templates: OfficialTemplateOption[] }` — официальные
-шаблоны с глобальными переопределениями (`inPlan` при `intensiveId`). Для диалога выбора состава плана.
+**`GET /api/intensives/templates?intensiveId=`** (Lead_SUP) → `{ templates: OfficialTemplateOption[] }` — эффективные
+официальные шаблоны обоих наборов (встроенные с изменениями + созданные Lead_SUP, **без удалённых**;
+`docs/templates-api.md`), `inPlan` при `intensiveId`. Для диалога выбора состава плана. Аддитивные поля опции:
+`source: 'builtin'|'custom'`, `isModified`, `dayLabel`, `timeNote`.
 
-**`GET /api/intensives/[id]/plan`** → `PlanResponse`:
-`{ intensive: IntensiveSummary, items: PlanItemDto[], days: PlanDayGroup[], unscheduledDayItemIds, progress, partial }`.
+**`GET /api/intensives/[id]/plan?scope=`** → `PlanResponse`:
+`{ intensive: IntensiveSummary, items: PlanItemDto[], days: PlanDayGroup[], unscheduledDayItemIds, progress, partial,
+viewScope, scopeFiltered }` (`scope` — только Lead_SUP, см. §1). У пункта есть `scope: 'SUP'|'ADM'|null` (область).
 `items` отсортированы по дню, времени, позиции; `days` — группы «День 1 · Понедельник, 12 октября / 4 анонса · Выполнено 2 из 4»
 (`isoWeekday` 1 = пн). У Lead_SUP `updateAvailable` у пунктов с новой версией источника.
 `hasEverLinkedMessages: true` → снимок не редактируется и пункт не удаляется (только пропуск).
 
 **`POST /api/intensives/[id]/plan/generate`** (Lead_SUP) — `{ templateIds: string[] }` → `201|200 { created: string[], alreadyInPlan: string[] }`.
-Идемпотентно по источнику. `400 UNKNOWN_TEMPLATE`. `409 INTENSIVE_READ_ONLY` для CANCELLED/ARCHIVED.
+Шаблоны любого набора, в т.ч. созданные Lead_SUP (`c_…`); каждый пункт получает `sourceScope` = набор шаблона.
+Идемпотентно по источнику. `400 UNKNOWN_TEMPLATE` (в т.ч. удалённый шаблон). `409 INTENSIVE_READ_ONLY` для CANCELLED/ARCHIVED.
+Изменённые/созданные шаблоны дают «новую версию» так же, как встроенные; удалённые — нет (снимок остаётся).
 
-**`POST /api/intensives/[id]/plan/items`** (Lead_SUP) — свой пункт `{ title?, body, channel, dayNumber?, time?, audience='ALL', categories? }`
-или снимок своего пользовательского шаблона `{ sourceUserTemplateId, audience, …переопределения }` → `201 { item }`.
+**`POST /api/intensives/[id]/plan/items`** (Lead_SUP) — свой пункт `{ title?, body, channel, dayNumber?, time?, audience='ALL', categories?,
+scope?, createChannelIfMissing? }` или снимок своего пользовательского шаблона `{ sourceUserTemplateId, audience, …переопределения }` → `201 { item }`.
+`scope: 'SUP'|'ADM'|null` — область пункта (приоритетнее `audience`; задаёт `audience` = scope или `ALL`; null — для всех).
+Без `scope` область берётся из `audience` (ADM/SUP) или пункт общий. `createChannelIfMissing: true` — добавить канал
+в словарь каналов (`docs/templates-api.md` §4); канал пункта может быть и вне словаря.
 `409 PLAN_ITEM_DUPLICATE_SOURCE` — шаблон уже в плане.
 
 **`PATCH /api/intensives/[id]/plan/items/[itemId]`** (Lead_SUP) — `{ title?, body?, channel?, dayNumber?, time?, audience?,
-categories?, position?, skipped?, skipReason? }` → `{ item }`.
+categories?, position?, skipped?, skipReason?, scope?, createChannelIfMissing? }` → `{ item }`.
+`scope` — только для CUSTOM/USER_TEMPLATE (у OFFICIAL — `400 VALIDATION_ERROR`, область задаёт шаблон); меняет и
+`audience`. Смена `audience` у CUSTOM/USER_TEMPLATE синхронизирует `sourceScope`. Смена области, меняющая `audience`,
+как и другие поля снимка, недоступна после привязки отправок (`409 PLAN_ITEM_HAS_MESSAGES`).
 Поля снимка — только без отправок (`409 PLAN_ITEM_HAS_MESSAGES`). Пропуск — `{ skipped: true, skipReason }`
 (нельзя при активной отправке: `409 PLAN_ITEM_ACTIVE_SEND { existingMessageId }`), вернуть — `{ skipped: false }`.
 

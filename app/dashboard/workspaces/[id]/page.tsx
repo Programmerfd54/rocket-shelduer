@@ -44,7 +44,7 @@ import { WorkspaceBanners } from '@/components/_components/workspace-page/Worksp
 import { WorkspaceHeader } from '@/components/_components/workspace-page/WorkspaceHeader'
 import { WorkspaceStats } from '@/components/_components/workspace-page/WorkspaceStats'
 import { WorkspaceTabsNav, type WorkspaceTabItem } from '@/components/_components/workspace-page/WorkspaceTabsNav'
-import { useIntensiveContext, useIntensivePlan } from '@/components/_components/workspace-page/useIntensiveContext'
+import { useIntensiveContext, useIntensivePlan, useTemplateScope } from '@/components/_components/workspace-page/useIntensiveContext'
 import { planScheduleAvailability } from '@/components/_components/workspace-page/IntensivePlanView'
 import { WorkspaceMessageSheet } from '@/components/_components/workspace-page/WorkspaceMessageSheet'
 import { IntensiveSelector } from '@/components/intensives/shared/IntensiveSelector'
@@ -75,6 +75,8 @@ function WorkspaceDetailContent() {
   const [externalStatuses, setExternalStatuses] = useState<Record<string, ExternalStatus>>({})
   const [activeTab, setActiveTab] = useState<string>('channels')
   const [currentUserRole, setCurrentUserRole] = useState<string>('MEMBER')
+  /** Роль получена из /api/auth/me (до этого набор шаблонов и план интенсива не запрашиваются) */
+  const [roleLoaded, setRoleLoaded] = useState(false)
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [userVolunteerIntensive, setUserVolunteerIntensive] = useState<string | null>(null)
   const [userVolunteerExpiresAt, setUserVolunteerExpiresAt] = useState<string | null>(null)
@@ -127,7 +129,14 @@ function WorkspaceDetailContent() {
 
   /* ── Интенсив: выбор фиксируется в состоянии страницы и в URL (?intensive=) ── */
   const intensiveCtx = useIntensiveContext(workspaceId)
-  const plan = useIntensivePlan(intensiveCtx.selectedId)
+  /** Набор шаблонов на вкладке «Шаблоны»: SUP / ADM по роли, у Lead_SUP — вкладки (?scope=SUP|ADM) */
+  const templateScope = useTemplateScope(roleLoaded ? currentUserRole : null)
+  const plan = useIntensivePlan(intensiveCtx.selectedId, {
+    // Сервер принимает scope только от Lead_SUP; остальным набор задаёт роль
+    scope: templateScope.canSwitch ? templateScope.scope : null,
+    enabled: templateScope.ready,
+    prefetchOtherScope: templateScope.canSwitch,
+  })
   /** Пункт плана, из которого открыта форма планирования */
   const [planSendTarget, setPlanSendTarget] = useState<PlanSendTarget | null>(null)
   /** Пункт плана в панели «Подробности» (берётся из актуальных данных плана) */
@@ -159,8 +168,13 @@ function WorkspaceDetailContent() {
     endDate: workspace?.endDate,
   })
 
-  /** Вкладка «LDAP / SMTP»: Lead_SUP и SUP (доступ к пространству проверяет API). */
+  /**
+   * Вкладка «LDAP / SMTP»: Lead_SUP и SUP (доступ к пространству проверяет API).
+   * Временно скрыта (SHOW_LDAP_SMTP_TAB = false): компонент, API и данные сохранены — чтобы вернуть, достаточно true.
+   */
+  const SHOW_LDAP_SMTP_TAB = false
   const showLdapSmtpTab = useMemo(() => {
+    if (!SHOW_LDAP_SMTP_TAB) return false
     if (currentUserRole !== 'LEAD_SUP' && currentUserRole !== 'SUP') return false
     if (!workspace?.workspaceUrl) return false
     return !isStudentIntensiveWorkspaceUrl(workspace.workspaceUrl)
@@ -176,6 +190,7 @@ function WorkspaceDetailContent() {
         setUserVolunteerExpiresAt(data?.user?.volunteerExpiresAt ?? null)
       })
       .catch(() => {})
+      .finally(() => setRoleLoaded(true))
   }, [])
 
   useEffect(() => {
@@ -1052,6 +1067,7 @@ function WorkspaceDetailContent() {
                       intensive={intensiveCtx.selected}
                       plan={plan}
                       planHandlers={planHandlers}
+                      templateScope={templateScope}
                     />
                   </TabsContent>
                 )}

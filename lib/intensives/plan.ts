@@ -3,118 +3,44 @@
  *
  *  - Снимок фиксирует название, текст, канал, день, время, аудиторию, категории и версию источника.
  *    Изменение/удаление исходного шаблона не меняет план и тексты созданных сообщений.
- *  - Официальные шаблоны берутся из lib/templates-data с глобальными переопределениями — как в GET /api/templates.
+ *  - Официальные шаблоны — эффективный список lib/templates/official-templates (встроенные + переопределения +
+ *    созданные Lead_SUP, без удалённых) — как в GET /api/templates. Созданные работают так же, как встроенные
+ *    (sourceType OFFICIAL, sourceTemplateId 'c_<cuid>', sourceScope — набор шаблона).
  *  - Версия источника — хеш содержимого (не updatedAt): одинаковый текст = одна версия.
  *  - «Применить новую версию» — только для пунктов без когда-либо связанных отправок.
  */
-import crypto from 'crypto';
 import type { Prisma } from '@prisma/client';
 import prisma from '@/lib/prisma';
-import { ADM_TEMPLATES, SUP_TEMPLATES } from '@/lib/templates-data';
-import { GLOBAL_SCOPE } from '@/lib/legacy-scope';
+import { getEffectiveOfficialTemplates } from '@/lib/templates/official-templates';
+import type { EffectiveOfficialTemplate } from '@/lib/templates/types';
+import {
+  MAX_TITLE_LENGTH,
+  computeSourceVersion,
+  fallbackTitle,
+  snapshotFromOfficial,
+  type SnapshotFields,
+} from '@/lib/templates/version';
 import { ApiError } from './http';
 import { appendEvent } from './events';
 import type { OfficialTemplateOption, PlanItemAudience, PlanUpdateDiffField } from './types';
 
+export { MAX_TITLE_LENGTH, computeSourceVersion, fallbackTitle, snapshotFromOfficial, type SnapshotFields };
+
 type Db = Prisma.TransactionClient | typeof prisma;
 
 export const MAX_BODY_LENGTH = 20_000;
-export const MAX_TITLE_LENGTH = 200;
 export const MAX_CHANNEL_LENGTH = 200;
 
-export interface OfficialTemplateResolved {
-  id: string;
-  scope: 'ADM' | 'SUP';
-  title: string;
-  body: string;
-  channel: string;
-  intensiveDay: number;
-  time: string;
-  audience: 'all' | 'mk';
-  version: string;
-}
+/** Эффективный официальный шаблон (встроенный с переопределением или созданный Lead_SUP). */
+export type OfficialTemplateResolved = EffectiveOfficialTemplate;
 
-/** Поля снимка, участвующие в версии и в «отличиях». */
-export interface SnapshotFields {
-  title: string;
-  body: string;
-  channel: string;
-  dayNumber: number | null;
-  time: string | null;
-  audience: PlanItemAudience;
-  categories: string[];
-}
-
-export function computeSourceVersion(s: SnapshotFields): string {
-  const canonical = JSON.stringify([
-    s.title,
-    s.body,
-    s.channel,
-    s.dayNumber,
-    s.time,
-    s.audience,
-    [...s.categories].sort(),
-  ]);
-  return crypto.createHash('sha256').update(canonical).digest('hex').slice(0, 32);
-}
-
-export function fallbackTitle(title: string | null | undefined, body: string): string {
-  const t = (title ?? '').trim();
-  if (t) return t.slice(0, MAX_TITLE_LENGTH);
-  const firstLine = body.split('\n').map((l) => l.trim()).find(Boolean) ?? 'Без названия';
-  return firstLine.replace(/[*_#`]/g, '').slice(0, 120);
-}
-
-type OvRow = { templateId: string; scope: string; body: string; title: string | null; channel: string | null; time: string | null };
-
-export function snapshotFromOfficial(t: Omit<OfficialTemplateResolved, 'version'>): SnapshotFields {
-  return {
-    title: t.title,
-    body: t.body,
-    channel: t.channel,
-    dayNumber: t.intensiveDay,
-    time: t.time,
-    audience: t.scope,
-    categories: t.audience === 'mk' ? ['mk'] : [],
-  };
-}
-
-/** Официальные шаблоны с глобальными переопределениями (самое свежее на шаблон). */
+/**
+ * Официальные шаблоны для плана: встроенные + переопределения + созданные Lead_SUP, БЕЗ удалённых
+ * (lib/templates/official-templates.ts — единый источник). Удалённый шаблон не попадает в новый план
+ * и не даёт «новой версии» существующим пунктам; их снимки не меняются.
+ */
 export async function loadOfficialTemplates(db: Db = prisma): Promise<OfficialTemplateResolved[]> {
-  let overrides: OvRow[] = [];
-  try {
-    overrides = await db.officialTemplateOverride.findMany({
-      where: { ...GLOBAL_SCOPE },
-      orderBy: { updatedAt: 'desc' },
-      select: { templateId: true, scope: true, body: true, title: true, channel: true, time: true },
-    });
-  } catch {
-    overrides = [];
-  }
-  const byKey = new Map<string, OvRow>();
-  for (const o of overrides) {
-    const key = `${o.scope}:${o.templateId}`;
-    if (!byKey.has(key)) byKey.set(key, o);
-  }
-  const resolve = (
-    t: { id: string; title?: string; body: string; channel: string; intensiveDay: number; time: string; audience: 'all' | 'mk' },
-    scope: 'ADM' | 'SUP'
-  ): OfficialTemplateResolved => {
-    const ov = byKey.get(`${scope}:${t.id}`);
-    const body = ov ? ov.body : t.body;
-    const base = {
-      id: t.id,
-      scope,
-      title: fallbackTitle(ov?.title ?? t.title, body),
-      body,
-      channel: (ov?.channel ?? t.channel).trim(),
-      intensiveDay: t.intensiveDay,
-      time: ov?.time ?? t.time,
-      audience: t.audience,
-    };
-    return { ...base, version: computeSourceVersion(snapshotFromOfficial(base)) };
-  };
-  return [...ADM_TEMPLATES.map((t) => resolve(t, 'ADM')), ...SUP_TEMPLATES.map((t) => resolve(t, 'SUP'))];
+  return getEffectiveOfficialTemplates({ db });
 }
 
 /** Набор официальных шаблонов, доступный роли (как GET /api/templates: ADM — только ADM). */
@@ -134,6 +60,10 @@ export function toTemplateOption(t: OfficialTemplateResolved, inPlan?: boolean):
     time: t.time,
     audience: t.audience,
     version: t.version,
+    source: t.source,
+    isModified: t.isModified,
+    dayLabel: t.dayLabel,
+    timeNote: t.timeNote,
     ...(inPlan !== undefined ? { inPlan } : {}),
   };
 }

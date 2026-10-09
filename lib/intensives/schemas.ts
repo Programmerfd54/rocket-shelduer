@@ -127,6 +127,8 @@ const dayNumberSchema = z
   .nullable();
 const timeSchema = z.string().trim().refine(isValidHm, 'Время в формате ЧЧ:ММ').nullable();
 const categoriesSchema = z.array(z.string().trim().min(1).max(40)).max(10);
+/** Область пункта: SUP | ADM | null — для всех (общий пункт). Задаёт и audience. */
+const itemScopeSchema = z.enum(['SUP', 'ADM'], { error: 'Область: SUP, ADM или null (для всех)' }).nullable();
 
 export const createPlanItemSchema = z.object({
   /** Снимок пользовательского шаблона вызывающего (поля ниже тогда необязательны и переопределяют снимок) */
@@ -138,6 +140,10 @@ export const createPlanItemSchema = z.object({
   time: timeSchema.optional(),
   audience: audienceSchema.default('ALL'),
   categories: categoriesSchema.optional(),
+  /** Область пункта (приоритетнее audience): SUP/ADM — видят Lead_SUP и эта роль; null — все */
+  scope: itemScopeSchema.optional(),
+  /** Добавить канал в словарь каналов шаблонов (docs/templates-api.md), если его там нет */
+  createChannelIfMissing: z.boolean().optional(),
 });
 
 export const updatePlanItemSchema = z
@@ -152,6 +158,9 @@ export const updatePlanItemSchema = z
     position: z.number().int().min(0).max(100_000).optional(),
     skipped: z.boolean().optional(),
     skipReason: z.string().trim().max(2000).optional(),
+    /** Только CUSTOM / USER_TEMPLATE: область пункта (SUP|ADM|null — для всех); меняет и audience */
+    scope: itemScopeSchema.optional(),
+    createChannelIfMissing: z.boolean().optional(),
   })
   .superRefine((v, ctx) => {
     if (v.skipped === true && !v.skipReason) {

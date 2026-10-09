@@ -67,9 +67,15 @@ export function PlanItemRow({
   canSchedule = true,
   scheduleBlockedReason,
   handlers,
+  scopeContext,
 }: {
   item: PlanItemDto
   timeZone: string
+  /**
+   * Набор, в котором показан пункт (вкладка Lead_SUP или набор роли SUP/ADM). Тогда общий пункт («для всех»,
+   * `scope: null`) получает метку «Общий», а метка своего набора не повторяется. Не задан — прежняя метка аудитории.
+   */
+  scopeContext?: 'SUP' | 'ADM' | null
   /** План загружается / обновляется для другого интенсива — действия недоступны */
   disabled?: boolean
   /** Интенсив позволяет планировать (опубликован и не завершён) */
@@ -116,7 +122,17 @@ export function PlanItemRow({
           {item.title || '(без названия)'}
         </button>
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-          {item.audience !== 'ALL' && <Badge variant="muted">{AUDIENCE_LABELS[item.audience]}</Badge>}
+          {scopeContext ? (
+            item.scope === null ? (
+              <Badge variant="outline" className="font-normal text-muted-foreground" title="Общий анонс — виден в обоих наборах (SUP и ADM)">
+                Общий
+              </Badge>
+            ) : item.scope !== scopeContext ? (
+              <Badge variant="muted">{AUDIENCE_LABELS[item.scope]}</Badge>
+            ) : null
+          ) : (
+            item.audience !== 'ALL' && <Badge variant="muted">{AUDIENCE_LABELS[item.audience]}</Badge>
+          )}
           {item.needsSetup && (
             <span className="inline-flex items-center gap-1 text-xs text-foreground">
               <TriangleAlert className="size-3.5 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden />

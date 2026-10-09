@@ -114,12 +114,18 @@ export function IntensiveHistorySheet({
   onOpenChange,
   intensive,
   itemTitles,
+  unknownItemLabel = 'Пункт удалён или скрыт',
+  description,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   intensive: { id: string; name: string; timezone: string }
   /** planItemId → название пункта (из загруженного плана) */
   itemTitles: Record<string, string>
+  /** Подпись события пункта, которого нет в itemTitles (например, пункт другого набора у Lead_SUP) */
+  unknownItemLabel?: string
+  /** Пояснение под заголовком (например, «История по всем наборам») */
+  description?: string
 }) {
   const [loaded, setLoaded] = useState<Loaded | null>(null)
   const [error, setError] = useState<{ forId: string; message: string } | null>(null)
@@ -189,6 +195,7 @@ export function IntensiveHistorySheet({
           </SheetTitle>
           <SheetDescription className="text-[13px]">
             {intensive.name} · планирование, отправки и изменения плана. Время — по поясу интенсива.
+            {description && <span className="block">{description}</span>}
           </SheetDescription>
         </SheetHeader>
 
@@ -221,7 +228,7 @@ export function IntensiveHistorySheet({
               <ol className="divide-y">
                 {current.events.map((e) => {
                   const Icon = eventIcon(e.type)
-                  const title = e.planItemId ? (itemTitles[e.planItemId] ?? 'Пункт удалён или скрыт') : null
+                  const title = e.planItemId ? (itemTitles[e.planItemId] ?? unknownItemLabel) : null
                   const details = eventDetails(e, intensive.timezone)
                   const actor = userName(e.actor)
                   return (

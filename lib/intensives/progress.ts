@@ -5,7 +5,7 @@
  * только если вызывающий видит само сообщение (lib/intensives/access.ts → canSeeMessage).
  */
 import prisma from '@/lib/prisma';
-import { canSeeAudience, canSeeMessage, userRef, USER_REF_SELECT, type IntensiveViewer } from './access';
+import { canSeeMessage, canSeePlanItem, itemInViewScope, planItemScope, userRef, USER_REF_SELECT, type IntensiveViewer } from './access';
 import {
   dayDate,
   intensiveDayInfo,
@@ -28,6 +28,7 @@ import type {
   PlanItemSend,
   PlanItemSetupReason,
   PlanProgress,
+  PlanViewScope,
   RecommendedSchedule,
 } from './types';
 
@@ -49,11 +50,28 @@ export interface IntensiveRowForView {
   updatedAt: Date;
 }
 
-/** Прогресс по нескольким интенсивам одним набором агрегирующих запросов (groupBy). */
+/**
+ * Видимые пункты: сначала права роли (partial — роль видит не всё), затем выбор Lead_SUP (viewScope).
+ * Для не-Lead_SUP viewScope совпадает с ролью (resolveViewScope), так что второй фильтр ничего не меняет.
+ */
+function splitVisible<T extends { sourceScope: string | null; audience: string }>(
+  viewer: IntensiveViewer,
+  items: T[],
+  viewScope: PlanViewScope
+): { visible: T[]; partial: boolean } {
+  const byRole = items.filter((i) => canSeePlanItem(viewer.user.role, i));
+  return { visible: byRole.filter((i) => itemInViewScope(viewScope, i)), partial: byRole.length < items.length };
+}
+
+/**
+ * Прогресс по нескольким интенсивам одним набором агрегирующих запросов (groupBy).
+ * viewScope — набор пунктов (Lead_SUP: ALL|SUP|ADM; остальным передавайте resolveViewScope → по роли).
+ */
 export async function computeProgressForIntensives(
   viewer: IntensiveViewer,
   intensiveIds: string[],
-  now: Date = new Date()
+  now: Date = new Date(),
+  viewScope: PlanViewScope = 'ALL'
 ): Promise<Map<string, { progress: PlanProgress; partial: boolean }>> {
   const out = new Map<string, { progress: PlanProgress; partial: boolean }>();
   if (intensiveIds.length === 0) return out;
@@ -61,7 +79,7 @@ export async function computeProgressForIntensives(
   const [items, groups] = await Promise.all([
     prisma.intensivePlanItem.findMany({
       where: { intensiveId: { in: intensiveIds } },
-      select: { id: true, intensiveId: true, audience: true, skipped: true },
+      select: { id: true, intensiveId: true, audience: true, sourceScope: true, skipped: true },
     }),
     prisma.scheduledMessage.groupBy({
       by: ['planItemId', 'status', 'isPlanRepeat'],
@@ -90,10 +108,11 @@ export async function computeProgressForIntensives(
   for (const id of intensiveIds) out.set(id, { progress: emptyProgress(), partial: false });
   for (const item of items) {
     const entry = out.get(item.intensiveId)!;
-    if (!canSeeAudience(viewer.user.role, item.audience)) {
+    if (!canSeePlanItem(viewer.user.role, item)) {
       entry.partial = true;
       continue;
     }
+    if (!itemInViewScope(viewScope, item)) continue;
     const { state, details } = deriveItemState({ skipped: item.skipped, rows: rowsByItem.get(item.id) ?? [], now });
     addToProgress(entry.progress, state, details);
   }
@@ -102,7 +121,7 @@ export async function computeProgressForIntensives(
 
 export function toIntensiveSummary(
   row: IntensiveRowForView,
-  extra: { progress: PlanProgress | null; partial: boolean; overlaps?: IntensiveSummary['overlaps'] },
+  extra: { progress: PlanProgress | null; partial: boolean; overlaps?: IntensiveSummary['overlaps']; viewScope?: PlanViewScope },
   now: Date = new Date()
 ): IntensiveSummary {
   const start = ymdFromDbDate(row.startDate);
@@ -126,6 +145,7 @@ export function toIntensiveSummary(
     updatedAt: row.updatedAt.toISOString(),
     progress: extra.progress,
     partial: extra.partial,
+    ...(extra.viewScope ? { viewScope: extra.viewScope } : {}),
     ...(extra.overlaps ? { overlaps: extra.overlaps } : {}),
   };
 }
@@ -177,17 +197,20 @@ const SEND_SELECT = {
   scheduledBy: { select: USER_REF_SELECT },
 } as const;
 
-/** Полное представление плана для вызывающего. */
+/** Полное представление плана для вызывающего (viewScope — см. computeProgressForIntensives). */
 export async function buildPlanView(
   viewer: IntensiveViewer,
   intensive: IntensiveRowForView,
-  now: Date = new Date()
+  now: Date = new Date(),
+  viewScope: PlanViewScope = 'ALL'
 ): Promise<{
   items: PlanItemDto[];
   days: PlanDayGroup[];
   unscheduledDayItemIds: string[];
   progress: PlanProgress;
   partial: boolean;
+  viewScope: PlanViewScope;
+  scopeFiltered: boolean;
 }> {
   const startYmd = ymdFromDbDate(intensive.startDate);
   const endYmd = ymdFromDbDate(intensive.endDate);
@@ -196,8 +219,7 @@ export async function buildPlanView(
     where: { intensiveId: intensive.id },
     include: { skippedBy: { select: USER_REF_SELECT } },
   });
-  const items = allItems.filter((i) => canSeeAudience(viewer.user.role, i.audience));
-  const partial = items.length < allItems.length;
+  const { visible: items, partial } = splitVisible(viewer, allItems, viewScope);
   const itemIds = items.map((i) => i.id);
 
   const [messages, everLinked, officials] = await Promise.all([
@@ -256,6 +278,7 @@ export async function buildPlanView(
       sourceType: item.sourceType,
       sourceTemplateId: item.sourceTemplateId,
       sourceScope: (item.sourceScope as 'ADM' | 'SUP' | null) ?? null,
+      scope: planItemScope(item),
       sourceVersion: item.sourceVersion,
       title: item.title,
       body: item.body,
@@ -303,5 +326,5 @@ export async function buildPlanView(
     dayMap.set(d.dayNumber, g);
   }
   const days = Array.from(dayMap.values()).sort((a, b) => a.dayNumber - b.dayNumber);
-  return { items: dtos, days, unscheduledDayItemIds, progress, partial };
+  return { items: dtos, days, unscheduledDayItemIds, progress, partial, viewScope, scopeFiltered: viewer.isLead && viewScope !== 'ALL' };
 }

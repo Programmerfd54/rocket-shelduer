@@ -22,7 +22,9 @@ import {
   snapshotOfItem,
   type SnapshotFields,
 } from './plan';
-import type { PlanItemAudience, PlanUpdateEntry } from './types';
+import { createTemplateChannel } from '@/lib/templates/channels';
+import { TemplatesApiError } from '@/lib/templates/http';
+import type { PlanItemAudience, PlanItemScope, PlanUpdateEntry } from './types';
 
 type Tx = Prisma.TransactionClient;
 
@@ -47,6 +49,24 @@ async function loadItem(db: Tx | typeof prisma, intensiveId: string, itemId: str
   return item;
 }
 
+/** Область по audience (для пунктов без явной области): ADM/SUP → область, ALL → null. */
+function scopeFromAudience(audience: PlanItemAudience): PlanItemScope | null {
+  return audience === 'ADM' || audience === 'SUP' ? audience : null;
+}
+
+/** Канал пункта → словарь каналов шаблонов (по запросу createChannelIfMissing). Ошибки — в формате API интенсивов. */
+async function addChannelToDictionary(channel: string | undefined, actorId: string): Promise<void> {
+  if (!channel) return;
+  try {
+    await createTemplateChannel({ name: channel }, actorId);
+  } catch (e) {
+    if (e instanceof TemplatesApiError && e.status === 400) {
+      throw new ApiError(400, 'VALIDATION_ERROR', e.message, { fieldErrors: { channel: e.message } });
+    }
+    throw e;
+  }
+}
+
 function normalizeCategories(list: string[] | undefined | null): string[] {
   return Array.from(new Set((list ?? []).map((s) => s.trim()).filter(Boolean).map((s) => s.slice(0, 40)))).slice(0, 10);
 }
@@ -65,9 +85,15 @@ export async function addPlanItem(
     time?: string | null;
     audience: PlanItemAudience;
     categories?: string[];
+    /** SUP | ADM | null (для всех); если задано — определяет audience */
+    scope?: PlanItemScope | null;
+    createChannelIfMissing?: boolean;
   }
 ) {
   assertPlanEditable(intensive);
+  // Область пункта: явная scope приоритетнее audience (null — общий пункт, audience ALL)
+  if (input.scope !== undefined) input = { ...input, audience: input.scope ?? 'ALL' };
+  const sourceScope = input.scope !== undefined ? input.scope : scopeFromAudience(input.audience);
   let snapshot: SnapshotFields;
   let source: { sourceType: 'USER_TEMPLATE' | 'CUSTOM'; sourceTemplateId: string | null; sourceVersion: string | null };
 
@@ -113,6 +139,8 @@ export async function addPlanItem(
     source = { sourceType: 'CUSTOM', sourceTemplateId: null, sourceVersion: null };
   }
 
+  if (input.createChannelIfMissing) await addChannelToDictionary(snapshot.channel, user.id);
+
   try {
     return await prisma.$transaction(async (tx) => {
       const maxPos = await tx.intensivePlanItem.aggregate({ where: { intensiveId: intensive.id }, _max: { position: true } });
@@ -121,6 +149,7 @@ export async function addPlanItem(
           intensiveId: intensive.id,
           position: (maxPos._max.position ?? -1) + 1,
           ...source,
+          sourceScope,
           ...snapshot,
           createdById: user.id,
           updatedById: user.id,
@@ -131,7 +160,14 @@ export async function addPlanItem(
         type: 'PLAN_ITEM_ADDED',
         actorId: user.id,
         planItemId: item.id,
-        details: { sourceType: item.sourceType, sourceTemplateId: item.sourceTemplateId, title: item.title, dayNumber: item.dayNumber, time: item.time },
+        details: {
+          sourceType: item.sourceType,
+          sourceTemplateId: item.sourceTemplateId,
+          sourceScope: item.sourceScope,
+          title: item.title,
+          dayNumber: item.dayNumber,
+          time: item.time,
+        },
       });
       return item;
     });
@@ -160,20 +196,37 @@ export async function updatePlanItem(
     position?: number;
     skipped?: boolean;
     skipReason?: string;
+    scope?: PlanItemScope | null;
+    createChannelIfMissing?: boolean;
   }
 ) {
   assertPlanEditable(intensive);
+  if (input.createChannelIfMissing && input.channel) await addChannelToDictionary(input.channel, user.id);
   return prisma.$transaction(async (tx) => {
     await lockPlanItem(tx, itemId, 'UPDATE');
     const item = await loadItem(tx, intensive.id, itemId);
     const before = snapshotOfItem(item);
+    // Область: у OFFICIAL задаётся шаблоном; у CUSTOM/USER_TEMPLATE — scope (приоритетнее) или audience
+    let nextScope: PlanItemScope | null | undefined;
+    let nextAudience = input.audience;
+    if (input.scope !== undefined) {
+      if (item.sourceType === 'OFFICIAL') {
+        throw new ApiError(400, 'VALIDATION_ERROR', 'Область официального пункта задаётся шаблоном', {
+          fieldErrors: { scope: 'Только для своих пунктов' },
+        });
+      }
+      nextScope = input.scope;
+      nextAudience = input.scope ?? 'ALL';
+    } else if (input.audience !== undefined && item.sourceType !== 'OFFICIAL') {
+      nextScope = scopeFromAudience(input.audience);
+    }
     const after: SnapshotFields = {
       title: input.title ?? before.title,
       body: input.body ?? before.body,
       channel: input.channel ?? before.channel,
       dayNumber: input.dayNumber !== undefined ? input.dayNumber : before.dayNumber,
       time: input.time !== undefined ? input.time : before.time,
-      audience: input.audience ?? before.audience,
+      audience: nextAudience ?? before.audience,
       categories: input.categories ? normalizeCategories(input.categories) : before.categories,
     };
     const diff = diffSnapshot(before, after);
@@ -186,6 +239,7 @@ export async function updatePlanItem(
 
     const data: Prisma.IntensivePlanItemUpdateInput = {};
     if (diff.length > 0) Object.assign(data, after);
+    if (nextScope !== undefined && nextScope !== item.sourceScope) data.sourceScope = nextScope;
     if (input.position !== undefined && input.position !== item.position) data.position = input.position;
 
     let skipEvent: 'PLAN_ITEM_SKIPPED' | 'PLAN_ITEM_UNSKIPPED' | null = null;
@@ -218,7 +272,7 @@ export async function updatePlanItem(
     data.updatedBy = { connect: { id: user.id } };
     const updated = await tx.intensivePlanItem.update({ where: { id: itemId }, data });
 
-    if (diff.length > 0 || data.position !== undefined) {
+    if (diff.length > 0 || data.position !== undefined || data.sourceScope !== undefined) {
       await appendEvent(tx, {
         intensiveId: intensive.id,
         type: 'PLAN_ITEM_UPDATED',
@@ -226,6 +280,7 @@ export async function updatePlanItem(
         planItemId: itemId,
         details: {
           fields: diff.map((d) => d.field),
+          ...(data.sourceScope !== undefined ? { scope: { from: item.sourceScope, to: nextScope } } : {}),
           ...(data.position !== undefined ? { position: { from: item.position, to: input.position } } : {}),
         },
       });

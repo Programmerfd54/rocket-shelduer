@@ -4,7 +4,9 @@
  *  - Lead_SUP — все OrgSpace и интенсивы, включая черновики.
  *  - Остальные — только OrgSpace, к которым привязано подключение, которым они владеют или на которое назначены
  *    (WorkspaceAdminAssignment). Черновики — никогда. Выбор интенсива доступа к пространству не выдаёт.
- *  - Пункты плана фильтруются по audience: SUP/Lead_SUP — все, ADM — ADM+ALL, MEMBER — ALL.
+ *  - Пункты плана фильтруются по области (planItemScope: sourceScope, иначе audience ADM/SUP, иначе общий):
+ *    Lead_SUP — все (query scope=SUP|ADM|ALL сужает просмотр); SUP — область SUP + общие; ADM — область ADM + общие;
+ *    MEMBER — только общие (audience ALL без области).
  *  - Текст/автор/ошибка сообщения — только если вызывающий видит сообщение по правилам GET /api/messages:
  *    SUP/Lead_SUP — все; остальные — свои и в доступных пространствах.
  */
@@ -13,7 +15,7 @@ import type { CurrentUser } from '@/lib/auth';
 import { canPerformAction, requireAction } from '@/lib/permissions';
 import { getAccessibleWorkspaceIds } from '@/lib/message-scope';
 import { ApiError } from './http';
-import type { IntensiveStatus, PlanItemAudience, UserRef } from './types';
+import type { IntensiveStatus, PlanItemScope, PlanViewScope, UserRef } from './types';
 
 export interface IntensiveViewer {
   user: CurrentUser;
@@ -61,16 +63,44 @@ export function canViewIntensive(
   return canViewOrgSpace(viewer, intensive.orgSpaceId);
 }
 
-/** Аудитории пунктов, видимые роли; null — все. */
-export function visibleAudiences(role: string): PlanItemAudience[] | null {
-  if (role === 'LEAD_SUP' || role === 'SUP') return null;
-  if (role === 'ADM') return ['ADM', 'ALL'];
-  return ['ALL'];
+/** Эффективная область пункта: sourceScope, иначе audience ADM/SUP; null — общий пункт («для всех»). */
+export function planItemScope(item: { sourceScope?: string | null; audience: string }): PlanItemScope | null {
+  if (item.sourceScope === 'SUP' || item.sourceScope === 'ADM') return item.sourceScope;
+  if (item.audience === 'SUP' || item.audience === 'ADM') return item.audience;
+  return null;
 }
 
-export function canSeeAudience(role: string, audience: string): boolean {
-  const list = visibleAudiences(role);
-  return list === null || (list as string[]).includes(audience);
+/** Набор пунктов по роли (для не-Lead_SUP параметр scope игнорируется). */
+export function roleViewScope(role: string): PlanViewScope {
+  if (role === 'LEAD_SUP') return 'ALL';
+  if (role === 'SUP') return 'SUP';
+  if (role === 'ADM') return 'ADM';
+  return 'COMMON';
+}
+
+/** Попадает ли пункт в набор просмотра. */
+export function itemInViewScope(scope: PlanViewScope, item: { sourceScope?: string | null; audience: string }): boolean {
+  if (scope === 'ALL') return true;
+  const s = planItemScope(item);
+  if (s === null) return true; // общий пункт (audience ALL) — виден всем
+  return scope === s;
+}
+
+/** Видит ли роль пункт плана (без учёта выбора Lead_SUP). */
+export function canSeePlanItem(role: string, item: { sourceScope?: string | null; audience: string }): boolean {
+  return itemInViewScope(roleViewScope(role), item);
+}
+
+/**
+ * Набор просмотра для запроса: Lead_SUP — query `scope` (SUP|ADM|ALL, по умолчанию ALL);
+ * остальные — по роли, параметр игнорируется. Некорректное значение у Lead_SUP → 400.
+ */
+export function resolveViewScope(viewer: IntensiveViewer, raw: string | null | undefined): PlanViewScope {
+  if (!viewer.isLead) return roleViewScope(viewer.user.role);
+  if (raw == null || raw === '') return 'ALL';
+  const v = raw.trim().toUpperCase();
+  if (v === 'ALL' || v === 'SUP' || v === 'ADM') return v;
+  throw new ApiError(400, 'BAD_REQUEST', 'scope: SUP, ADM или ALL', { fieldErrors: { scope: 'SUP, ADM или ALL' } });
 }
 
 /** Может ли вызывающий видеть содержимое сообщения (текст, автора, ошибку). */

@@ -5,7 +5,7 @@
  */
 import type { Prisma } from '@prisma/client';
 import prisma from '@/lib/prisma';
-import { canSeeAudience, canSeeMessage, userRef, USER_REF_SELECT, type IntensiveViewer } from './access';
+import { canSeeMessage, canSeePlanItem, userRef, USER_REF_SELECT, type IntensiveViewer } from './access';
 import type { HistoryResponse, IntensiveEventDto, IntensiveEventType } from './types';
 
 const REDACTED_KEEP = new Set(['fromStatus', 'toStatus', 'status', 'scheduledFor', 'sentAt', 'isPlanRepeat', 'source', 'reason']);
@@ -32,17 +32,17 @@ export async function getIntensiveHistory(
   // Аудитории существующих пунктов (для фильтрации)
   const itemIds = Array.from(new Set(page.map((e) => e.planItemId).filter((v): v is string => !!v)));
   const items = itemIds.length
-    ? await prisma.intensivePlanItem.findMany({ where: { id: { in: itemIds } }, select: { id: true, audience: true } })
+    ? await prisma.intensivePlanItem.findMany({ where: { id: { in: itemIds } }, select: { id: true, audience: true, sourceScope: true } })
     : [];
-  const audienceById = new Map(items.map((i) => [i.id, i.audience]));
-  const fullAccess = viewer.user.role === 'LEAD_SUP' || viewer.user.role === 'SUP';
+  const itemById = new Map(items.map((i) => [i.id, i]));
+  const fullAccess = viewer.user.role === 'LEAD_SUP';
 
   const events: IntensiveEventDto[] = [];
   for (const e of page) {
     if (e.planItemId && !fullAccess) {
-      const audience = audienceById.get(e.planItemId);
-      // Пункт удалён (аудитория неизвестна) или скрыт по аудитории — событие не показываем
-      if (!audience || !canSeeAudience(viewer.user.role, audience)) continue;
+      const item = itemById.get(e.planItemId);
+      // Пункт удалён (область неизвестна) или скрыт по области — событие не показываем
+      if (!item || !canSeePlanItem(viewer.user.role, item)) continue;
     }
     let details = (e.details ?? null) as Record<string, unknown> | null;
     let redacted = false;

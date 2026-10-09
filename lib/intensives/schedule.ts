@@ -12,7 +12,7 @@ import prisma from '@/lib/prisma';
 import type { CurrentUser } from '@/lib/auth';
 import { canPerformAction } from '@/lib/permissions';
 import { isUnsafeId } from '@/lib/security';
-import { canSeeAudience } from './access';
+import { canSeePlanItem } from './access';
 import { isInstantWithinIntensive, localYmdOfInstant, ymdFromDbDate } from './dates';
 import { appendEvent } from './events';
 import { ApiError, ensureIntensivesEnabled, prismaErrorCode } from './http';
@@ -113,10 +113,10 @@ export async function resolvePlanContext(params: {
   if (fields.planItemId) {
     const item = await prisma.intensivePlanItem.findFirst({
       where: { id: fields.planItemId, intensiveId: intensive.id },
-      select: { id: true, audience: true, skipped: true, body: true },
+      select: { id: true, audience: true, sourceScope: true, skipped: true, body: true },
     });
     if (!item) throw new ApiError(404, 'PLAN_ITEM_NOT_FOUND', 'Пункт плана не найден');
-    if (!canSeeAudience(user.role, item.audience)) {
+    if (!canSeePlanItem(user.role, item)) {
       throw new ApiError(403, 'PLAN_ITEM_NOT_VISIBLE', 'Этот пункт плана вам недоступен');
     }
     if (item.skipped) throw new ApiError(409, 'PLAN_ITEM_SKIPPED', 'Пункт пропущен — планирование недоступно');

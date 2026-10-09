@@ -18,7 +18,7 @@ import {
   RC_CONNECT_RATE_LIMIT_MESSAGE,
   RC_LOGIN_FAILED_MESSAGE,
 } from '@/lib/security';
-import { ADM_TEMPLATES, SUP_TEMPLATES } from '@/lib/templates-data';
+import { getEffectiveOfficialTemplates } from '@/lib/templates/official-templates';
 import { archiveFieldsFor, getWorkspaceArchiveInfo } from '@/lib/intensives/workspace-schedule';
 
 export async function GET(request: Request) {
@@ -264,6 +264,12 @@ export async function GET(request: Request) {
     // Подсказка «архивировать» и ближайший интенсив графика — одним запросом на все пространства
     const archiveInfo = await getWorkspaceArchiveInfo(workspaces, { includeDrafts: user.role === 'LEAD_SUP' });
 
+    // Официальные шаблоны для «следующего анонса» (эффективные: с изменениями и созданными Lead_SUP, без удалённых)
+    const officialTemplates =
+      user.role === 'ADM' || user.role === 'SUP'
+        ? await getEffectiveOfficialTemplates({ scope: user.role === 'ADM' ? 'ADM' : undefined })
+        : [];
+
     const workspacesWithStats = workspaces.map((w) => {
       let todayIntensiveDay: number | null = null;
       let totalIntensiveDays: number | null = null;
@@ -293,11 +299,7 @@ export async function GET(request: Request) {
           if (!officialByDay.has(t.intensiveDay)) officialByDay.set(t.intensiveDay, new Set());
           officialByDay.get(t.intensiveDay)!.add(t.channel);
         };
-        if (user.role === 'ADM') ADM_TEMPLATES.forEach(addOfficial);
-        if (user.role === 'SUP') {
-          ADM_TEMPLATES.forEach(addOfficial);
-          SUP_TEMPLATES.forEach(addOfficial);
-        }
+        officialTemplates.forEach(addOfficial);
         let nextDay: number | null = null;
         for (let d = todayIntensiveDay; d <= totalIntensiveDays; d++) {
           const userCh = userTemplatesByDay.get(d);

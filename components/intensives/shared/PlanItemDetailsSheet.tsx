@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { MessageStatusBadge } from '@/components/common/MessageStatusBadge'
 import type { IntensiveSummary, PlanItemDto, PlanItemSend } from '@/lib/intensives/types'
-import { AUDIENCE_LABELS, formatTimezone } from '@/lib/intensives/ui'
+import { formatTimezone } from '@/lib/intensives/ui'
 import { sanitizeErrorReason } from '@/lib/message-status'
 import { safeExternalHref } from '@/lib/sanitize'
 
@@ -16,7 +16,7 @@ import { formatInstantInTz, planScheduleLine, setupReasonsText, userName } from 
 import { PlanItemStateBadge } from './PlanItemStateBadge'
 
 const SOURCE_LABELS: Record<PlanItemDto['sourceType'], string> = {
-  OFFICIAL: 'Общий шаблон',
+  OFFICIAL: 'Официальный шаблон',
   USER_TEMPLATE: 'Пользовательский шаблон',
   CUSTOM: 'Свой пункт плана',
 }
@@ -129,7 +129,9 @@ export function PlanItemDetailsSheet({
                   )}
                 </Row>
                 <Row label="Канал">#{item.channel.replace(/^#/, '')}</Row>
-                <Row label="Для кого">{AUDIENCE_LABELS[item.audience]}</Row>
+                <Row label="Набор">
+                  {item.scope === 'SUP' ? 'Шаблоны SUP' : item.scope === 'ADM' ? 'Шаблоны ADM' : 'Общий — для всех ролей'}
+                </Row>
                 <Row label="Источник">{SOURCE_LABELS[item.sourceType]}</Row>
                 <Row label="Часовой пояс">
                   {formatTimezone(tz)} <span className="text-muted-foreground">({tz})</span>

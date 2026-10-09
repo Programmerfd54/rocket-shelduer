@@ -5,14 +5,17 @@ import { createIntensiveSchema } from '@/lib/intensives/schemas';
 import { createIntensive, listIntensives, parseListFilters } from '@/lib/intensives/service';
 import { computeProgressForIntensives, toIntensiveSummary } from '@/lib/intensives/progress';
 import { ensureOrgSpaceForWorkspace } from '@/lib/intensives/workspace-schedule';
+import { resolveViewScope } from '@/lib/intensives/access';
 
 /**
- * GET /api/intensives?year=&orgSpaceId=&workspaceId=&phase=&status=&progress=
+ * GET /api/intensives?year=&orgSpaceId=&workspaceId=&phase=&status=&progress=&scope=
  * Список интенсивов, доступных вызывающему (черновики — только Lead_SUP), с прогрессом (считает сервер).
+ * scope=SUP|ADM|ALL — только Lead_SUP (прогресс по набору пунктов); остальным — по роли.
  */
 export async function GET(request: Request) {
   return withIntensives('list intensives', async ({ viewer }) => {
-    const filters = parseListFilters(new URL(request.url).searchParams);
+    const sp = new URL(request.url).searchParams;
+    const filters = { ...parseListFilters(sp), viewScope: resolveViewScope(viewer, sp.get('scope')) };
     const { intensives, resolvedOrgSpaceId } = await listIntensives(viewer, filters);
     return NextResponse.json({ intensives, orgSpaceId: resolvedOrgSpaceId });
   });

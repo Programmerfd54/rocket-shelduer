@@ -47,6 +47,10 @@ export type Action =
   | 'messages:send-as'
   | 'templates:official'
   | 'templates:mine'
+  // Редактор официальных шаблонов и словарь каналов (docs/templates-api.md)
+  | 'templates:official:manage'
+  | 'templates:channels:view'
+  | 'templates:channels:manage'
   | 'activity:view'
   | 'dashboard:stats'
   | 'queue:status'
@@ -99,6 +103,12 @@ const ACTION_ROLES: Record<Action, string[]> = {
   'messages:send-as': ['LEAD_SUP', 'SUP', 'ADM'],
   'templates:official': ['LEAD_SUP', 'SUP', 'ADM'],
   'templates:mine': ['LEAD_SUP', 'SUP', 'ADM', 'MEMBER'],
+  // Создать/изменить/удалить/восстановить официальные шаблоны SUP и ADM
+  'templates:official:manage': ['LEAD_SUP'],
+  // Список каналов для селекторов (не секретен)
+  'templates:channels:view': ['LEAD_SUP', 'SUP', 'ADM', 'MEMBER'],
+  // Добавить/удалить канал в словаре
+  'templates:channels:manage': ['LEAD_SUP'],
   'activity:view': ['LEAD_SUP', 'SUP', 'ADM'],
   'dashboard:stats': ['LEAD_SUP', 'SUP', 'ADM'],
   'queue:status': ['LEAD_SUP', 'SUP'],

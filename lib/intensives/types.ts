@@ -16,9 +16,25 @@ export type IntensivePhase = (typeof INTENSIVE_PHASES)[number];
 export const PLAN_ITEM_SOURCE_TYPES = ['OFFICIAL', 'USER_TEMPLATE', 'CUSTOM'] as const;
 export type PlanItemSourceType = (typeof PLAN_ITEM_SOURCE_TYPES)[number];
 
-/** Для кого пункт плана. ADM видит ADM+ALL, MEMBER — только ALL, SUP и Lead_SUP — всё. */
+/**
+ * Для кого пункт плана: 'ADM' | 'SUP' | 'ALL'. Видимость определяет область пункта (planItemScope в access.ts):
+ * sourceScope ('ADM'|'SUP'), а без него — audience ADM/SUP; null — общий пункт (audience ALL).
+ */
 export const PLAN_ITEM_AUDIENCES = ['ADM', 'SUP', 'ALL'] as const;
 export type PlanItemAudience = (typeof PLAN_ITEM_AUDIENCES)[number];
+
+/** Область пункта плана: шаблоны SUP, шаблоны ADM или null — общий пункт «для всех». */
+export type PlanItemScope = 'SUP' | 'ADM';
+
+/**
+ * Какие пункты плана показывает ответ (query `scope` для Lead_SUP; остальным — по роли, параметр игнорируется):
+ *  - ALL — все пункты (Lead_SUP по умолчанию);
+ *  - SUP — пункты области SUP + общие (так видит план SUP);
+ *  - ADM — пункты области ADM + общие (так видит план ADM);
+ *  - COMMON — только общие пункты (так видит план MEMBER).
+ */
+export const PLAN_VIEW_SCOPES = ['ALL', 'SUP', 'ADM', 'COMMON'] as const;
+export type PlanViewScope = (typeof PLAN_VIEW_SCOPES)[number];
 
 /** Вычисляемое состояние пункта плана (по связанным сообщениям). */
 export const PLAN_ITEM_STATES = [
@@ -275,6 +291,8 @@ export interface IntensiveSummary {
   progress: PlanProgress | null;
   /** Вызывающий видит не все пункты → UI: «Доступные вам анонсы» */
   partial: boolean;
+  /** Набор пунктов, по которому посчитан прогресс (см. PlanViewScope) */
+  viewScope?: PlanViewScope;
   /** Lead_SUP: пересечения с другими интенсивами того же OrgSpace (черновики — предупреждение) */
   overlaps?: IntensiveOverlapRef[];
 }
@@ -298,6 +316,8 @@ export interface PlanItemDto {
   sourceType: PlanItemSourceType;
   sourceTemplateId: string | null;
   sourceScope: 'ADM' | 'SUP' | null;
+  /** Эффективная область пункта (видимость): sourceScope, иначе audience ADM/SUP; null — общий пункт */
+  scope: PlanItemScope | null;
   sourceVersion: string | null;
   title: string;
   body: string;
@@ -340,7 +360,12 @@ export interface PlanResponse {
   /** Пункты без дня (или вне периода) — «требуют настройки» */
   unscheduledDayItemIds: string[];
   progress: PlanProgress;
+  /** Вызывающий по своей роли видит не все пункты → «Доступные вам анонсы» (для Lead_SUP всегда false) */
   partial: boolean;
+  /** Набор пунктов в ответе (Lead_SUP выбирает query `scope`, остальным — по роли) */
+  viewScope: PlanViewScope;
+  /** Lead_SUP выбрал не ALL — в ответе только пункты выбранной области (+ общие) */
+  scopeFiltered: boolean;
 }
 
 export interface PlanUpdateDiffField {
@@ -370,6 +395,12 @@ export interface OfficialTemplateOption {
   time: string;
   audience: 'all' | 'mk';
   version: string;
+  /** builtin — из lib/templates-data (возможно изменён), custom — создан Lead_SUP (id 'c_…') */
+  source: 'builtin' | 'custom';
+  /** Встроенный шаблон изменён Lead_SUP */
+  isModified: boolean;
+  dayLabel: string;
+  timeNote: string | null;
   /** Уже есть в плане этого интенсива */
   inPlan?: boolean;
 }

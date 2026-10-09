@@ -30,6 +30,7 @@ import type {
   IntensiveSummary,
   MessageStatus,
   OutOfRangeResolution,
+  PlanViewScope,
 } from './types';
 import { INTENSIVE_PHASES, INTENSIVE_STATUSES } from './types';
 
@@ -60,6 +61,8 @@ export interface ListFilters {
   phase?: IntensivePhase;
   statuses?: IntensiveStatus[];
   includeProgress?: boolean;
+  /** Набор пунктов для прогресса (resolveViewScope: Lead_SUP — query scope, остальные — по роли) */
+  viewScope?: PlanViewScope;
 }
 
 export function parseListFilters(searchParams: URLSearchParams): ListFilters {
@@ -146,7 +149,9 @@ export async function listIntensives(
   }
 
   const progressMap =
-    filters.includeProgress !== false ? await computeProgressForIntensives(viewer, rows.map((r) => r.id), now) : null;
+    filters.includeProgress !== false
+      ? await computeProgressForIntensives(viewer, rows.map((r) => r.id), now, filters.viewScope ?? 'ALL')
+      : null;
 
   // Lead_SUP: предупреждения о пересечениях (черновики/опубликованные одного OrgSpace)
   let overlapsById: Map<string, IntensiveOverlapRef[]> | null = null;
@@ -176,6 +181,7 @@ export async function listIntensives(
       {
         progress: pr?.progress ?? null,
         partial: pr?.partial ?? false,
+        ...(pr && filters.viewScope ? { viewScope: filters.viewScope } : {}),
         ...(overlapsById ? { overlaps: overlapsById.get(r.id) ?? [] } : {}),
       },
       now
@@ -186,14 +192,19 @@ export async function listIntensives(
 
 /* ───────────── Карточка ───────────── */
 
-export async function getIntensiveDetail(viewer: IntensiveViewer, id: string, now: Date = new Date()): Promise<IntensiveDetail> {
+export async function getIntensiveDetail(
+  viewer: IntensiveViewer,
+  id: string,
+  now: Date = new Date(),
+  viewScope: PlanViewScope = 'ALL'
+): Promise<IntensiveDetail> {
   const intensive = await loadIntensiveForViewer(viewer, id);
   const [full, progressMap, connections, planItemCount, linkedMessageCount, overlaps] = await Promise.all([
     prisma.intensive.findUnique({
       where: { id },
       select: { createdBy: { select: USER_REF_SELECT }, updatedBy: { select: USER_REF_SELECT }, cancelReason: true },
     }),
-    computeProgressForIntensives(viewer, [id], now),
+    computeProgressForIntensives(viewer, [id], now, viewScope),
     prisma.workspaceConnection.findMany({
       where: {
         orgSpaceId: intensive.orgSpaceId,
@@ -215,7 +226,7 @@ export async function getIntensiveDetail(viewer: IntensiveViewer, id: string, no
   ]);
   const pr = progressMap.get(id);
   return {
-    ...toIntensiveSummary(intensive, { progress: pr?.progress ?? null, partial: pr?.partial ?? false, overlaps }, now),
+    ...toIntensiveSummary(intensive, { progress: pr?.progress ?? null, partial: pr?.partial ?? false, overlaps, viewScope }, now),
     createdBy: userRef(full?.createdBy),
     updatedBy: userRef(full?.updatedBy),
     cancelReason: full?.cancelReason ?? null,

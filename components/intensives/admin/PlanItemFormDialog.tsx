@@ -9,20 +9,35 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { TimePicker } from '@/components/ui/time-picker'
+import { ChannelSelect } from '@/components/common/ChannelSelect'
 import { dayDate } from '@/lib/intensives/dates'
 import { ApiError, AUDIENCE_LABELS, apiFetch, formatDayHeading } from '@/lib/intensives/ui'
 import type { PlanItemAudience, PlanItemDto } from '@/lib/intensives/types'
 import { PLAN_ITEM_AUDIENCES } from '@/lib/intensives/types'
+import { channelNameError, normalizeChannelName } from '@/lib/templates/types'
 import { GuardedDialog, InlineNotice, errText, fieldErrorsOf } from './kit'
 
-type Form = { title: string; body: string; channel: string; day: string; time: string; audience: PlanItemAudience; categories: string }
+/** Область пункта: SUP / ADM / ALL — для всех (в API — scope: 'SUP' | 'ADM' | null). */
+type ScopeChoice = 'ALL' | 'SUP' | 'ADM'
 
-const CHANNEL_RE = /^[\p{L}\p{N}._-]+$/u
+type Form = {
+  title: string
+  body: string
+  channel: string
+  day: string
+  time: string
+  audience: PlanItemAudience
+  scope: ScopeChoice
+  categories: string
+}
+
 const MAX_BODY = 20_000
 
-function normalizeChannel(v: string): string {
-  return v.trim().replace(/^#+/, '').replace(/\s+/g, '_')
-}
+const SCOPE_OPTIONS: { value: ScopeChoice; label: string }[] = [
+  { value: 'ALL', label: 'Для всех' },
+  { value: 'SUP', label: 'Только SUP' },
+  { value: 'ADM', label: 'Только ADM' },
+]
 
 function parseCategories(s: string): string[] {
   return Array.from(new Set(s.split(',').map((x) => x.trim()).filter(Boolean)))
@@ -32,24 +47,27 @@ function formFrom(item?: PlanItemDto): Form {
   return {
     title: item?.title ?? '',
     body: item?.body ?? '',
-    channel: item ? normalizeChannel(item.channel) : '',
+    // Канал как есть: исторические имена (вне словаря) показываются в селекторе и не меняются без выбора
+    channel: item?.channel ?? '',
     day: item?.dayNumber ? String(item.dayNumber) : '',
     time: item?.time ?? '',
     audience: item?.audience ?? 'ALL',
+    scope: item?.scope ?? 'ALL',
     categories: item?.categories.join(', ') ?? '',
   }
 }
 
-function validate(f: Form, mode: 'create' | 'edit'): Record<string, string> {
+function validate(f: Form, mode: 'create' | 'edit', initialChannel: string): Record<string, string> {
   const e: Record<string, string> = {}
   if (mode === 'edit' && !f.title.trim()) e.title = 'Укажите название'
   if (f.title.trim().length > 200) e.title = 'Не длиннее 200 символов'
   if (!f.body.trim()) e.body = 'Введите текст анонса'
   else if (f.body.length > MAX_BODY) e.body = `Текст не длиннее ${MAX_BODY} символов`
-  const ch = normalizeChannel(f.channel)
-  if (!ch) e.channel = 'Укажите канал'
-  else if (!CHANNEL_RE.test(ch)) e.channel = 'Допустимы буквы, цифры, точка, дефис и подчёркивание'
-  else if (ch.length > 200) e.channel = 'Не длиннее 200 символов'
+  if (!f.channel.trim()) e.channel = 'Укажите канал'
+  else if (mode === 'create' || f.channel !== initialChannel) {
+    const err = channelNameError(f.channel)
+    if (err) e.channel = err
+  }
   if (f.day.trim()) {
     const n = Number(f.day)
     if (!Number.isInteger(n) || n < 1) e.day = 'День — целое число от 1'
@@ -102,7 +120,9 @@ export function PlanItemFormDialog({
     }
   }
 
-  const errors = useMemo(() => validate(form, mode), [form, mode])
+  const errors = useMemo(() => validate(form, mode, initial.channel), [form, mode, initial.channel])
+  /** Область задаёт шаблон у OFFICIAL; у своих пунктов (CUSTOM / USER_TEMPLATE) её выбирает Lead_SUP */
+  const scopeEditable = mode === 'create' || (!!item && item.sourceType !== 'OFFICIAL')
   const valid = Object.keys(errors).length === 0
   const dirty = (Object.keys(form) as (keyof Form)[]).some((k) => form[k] !== initial[k])
   const errorFor = (k: string) => serverErrors[k] ?? (touched[k] ? errors[k] : undefined)
@@ -142,10 +162,10 @@ export function PlanItemFormDialog({
           json: {
             ...(form.title.trim() ? { title: form.title.trim() } : {}),
             body: form.body,
-            channel: normalizeChannel(form.channel),
+            channel: normalizeChannelName(form.channel),
             dayNumber: day,
             time: form.time || null,
-            audience: form.audience,
+            scope: form.scope === 'ALL' ? null : form.scope,
             categories: parseCategories(form.categories),
           },
         })
@@ -154,10 +174,12 @@ export function PlanItemFormDialog({
         const body: Record<string, unknown> = {}
         if (form.title.trim() !== initial.title.trim()) body.title = form.title.trim()
         if (form.body !== initial.body) body.body = form.body
-        if (normalizeChannel(form.channel) !== normalizeChannel(initial.channel)) body.channel = normalizeChannel(form.channel)
+        if (form.channel !== initial.channel) body.channel = normalizeChannelName(form.channel)
         if (form.day !== initial.day) body.dayNumber = day
         if (form.time !== initial.time) body.time = form.time || null
-        if (form.audience !== initial.audience) body.audience = form.audience
+        if (scopeEditable) {
+          if (form.scope !== initial.scope) body.scope = form.scope === 'ALL' ? null : form.scope
+        } else if (form.audience !== initial.audience) body.audience = form.audience
         if (form.categories !== initial.categories) body.categories = parseCategories(form.categories)
         await apiFetch(`/api/intensives/${intensiveId}/plan/items/${item.id}`, { method: 'PATCH', json: body })
         toast.success('Пункт обновлён')
@@ -221,23 +243,46 @@ export function PlanItemFormDialog({
           <Textarea id="pi-body" rows={7} value={form.body} onChange={(e) => set('body', e.target.value)} aria-invalid={!!errorFor('body')} disabled={submitting} />
         </Field>
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Канал" htmlFor="pi-channel" required error={errorFor('channel')} hint="Без «#», например support">
-            <Input id="pi-channel" value={form.channel} onChange={(e) => set('channel', e.target.value)} aria-invalid={!!errorFor('channel')} autoComplete="off" disabled={submitting} />
+          <Field label="Канал" htmlFor="pi-channel" required error={errorFor('channel')} hint="Выберите из списка. Нужного нет — добавьте его здесь же." className="sm:col-span-2">
+            <ChannelSelect id="pi-channel" value={form.channel} onChange={(v) => set('channel', v)} invalid={!!errorFor('channel')} disabled={submitting} />
           </Field>
-          <Field label="Аудитория" htmlFor="pi-audience" hint="Кто видит пункт в плане">
-            <Select value={form.audience} onValueChange={(v) => set('audience', v as PlanItemAudience)} disabled={submitting}>
-              <SelectTrigger id="pi-audience" className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {PLAN_ITEM_AUDIENCES.map((a) => (
-                  <SelectItem key={a} value={a}>
-                    {AUDIENCE_LABELS[a]}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
+          {scopeEditable ? (
+            <Field label="Кто видит пункт" htmlFor="pi-scope" className="sm:col-span-2" error={errorFor('scope')} hint="SUP и ADM видят свои пункты и общие; волонтёры — только общие">
+              <Select value={form.scope} onValueChange={(v) => set('scope', v as ScopeChoice)} disabled={submitting}>
+                <SelectTrigger id="pi-scope" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {SCOPE_OPTIONS.map((o) => (
+                    <SelectItem key={o.value} value={o.value}>
+                      {o.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+          ) : (
+            <Field
+              label="Аудитория"
+              htmlFor="pi-audience"
+              className="sm:col-span-2"
+              error={errorFor('audience')}
+              hint={item?.scope ? `Область — ${item.scope}: задаётся шаблоном` : 'Кто видит пункт в плане'}
+            >
+              <Select value={form.audience} onValueChange={(v) => set('audience', v as PlanItemAudience)} disabled={submitting}>
+                <SelectTrigger id="pi-audience" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {PLAN_ITEM_AUDIENCES.map((a) => (
+                    <SelectItem key={a} value={a}>
+                      {AUDIENCE_LABELS[a]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+          )}
           <Field label="День интенсива" htmlFor="pi-day" error={errorFor('dayNumber') ?? errorFor('day')} hint={dayPreview ?? `Номер от 1 до ${totalDays}. Пусто — сотрудник выберет сам.`}>
             <Input
               id="pi-day"

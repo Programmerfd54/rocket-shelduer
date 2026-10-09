@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { ChevronDown, ChevronRight, FileText } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -11,14 +11,24 @@ import { TemplateRow } from '@/components/_components/workspace/TemplateRow'
 import type { TemplateSendTarget } from '@/components/_components/TemplateSendDialog'
 import type { PlanItemRowHandlers } from '@/components/intensives/shared/PlanItemRow'
 import { dayGroupHeading } from '@/components/intensives/shared/format'
+import { LoadErrorBlock } from '@/components/intensives/shared/LoadErrorBlock'
+import {
+  TemplateScopeLabel,
+  TemplateScopeTabs,
+  scopePanelId,
+  scopeTabId,
+} from '@/components/intensives/shared/TemplateScopeTabs'
 import { dayDate, intensiveLengthDays, localYmdOfInstant } from '@/lib/intensives/dates'
 import type { IntensiveSummary } from '@/lib/intensives/types'
+import { apiFetch, ApiError } from '@/lib/intensives/ui'
 import { cn } from '@/lib/utils'
 import { IntensivePlanView } from './IntensivePlanView'
-import type { IntensivePlanState } from './useIntensiveContext'
+import { TEMPLATE_SCOPE_LABELS, type IntensivePlanState, type TemplateScope, type TemplateScopeState } from './useIntensiveContext'
 
 type OfficialTemplate = {
   id: string
+  /** Набор (аддитивное поле GET /api/templates) */
+  scope?: 'SUP' | 'ADM'
   intensiveDay: number
   dayLabel: string
   time: string
@@ -186,30 +196,60 @@ function StatusBadge({ info, emptyTitle }: { info: SendInfo | undefined; emptyTi
   )
 }
 
-function RowsSkeleton({ label }: { label: string }) {
+/** Скелет по форме списка: (чипы дней) + заголовок группы дня + строки шаблонов. */
+function RowsSkeleton({ label, withDays = false }: { label: string; withDays?: boolean }) {
   return (
-    <div className="divide-y rounded-lg border bg-card" role="status" aria-busy="true" aria-label={label}>
-      {Array.from({ length: 4 }).map((_, i) => (
-        <div key={i} className="flex items-center gap-3 px-3 py-3">
-          <Skeleton className="size-6" />
-          <Skeleton className="h-4 w-10" />
-          <Skeleton className="h-5 w-24" />
-          <Skeleton className="h-4 flex-1" />
-          <Skeleton className="h-8 w-28" />
+    <div className="space-y-3" role="status" aria-busy="true" aria-label={label}>
+      {withDays && (
+        <div className="flex flex-wrap gap-1">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <Skeleton key={i} className="h-8 w-16" />
+          ))}
         </div>
-      ))}
+      )}
+      <div className="overflow-hidden rounded-lg border bg-card">
+        {withDays && (
+          <div className="flex items-center gap-2 border-b bg-muted/40 px-3 py-2">
+            <Skeleton className="size-4" />
+            <Skeleton className="h-4 w-48 max-w-[60%]" />
+            <Skeleton className="ml-auto h-3 w-16" />
+          </div>
+        )}
+        <div className="divide-y">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="flex items-center gap-3 px-3 py-3">
+              <Skeleton className="size-6" />
+              <Skeleton className="h-4 w-10" />
+              <Skeleton className="h-5 w-24" />
+              <Skeleton className="h-4 flex-1" />
+              <Skeleton className="hidden h-8 w-28 sm:block" />
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   )
 }
 
+type LoadStatus = { loading: boolean; error: string | null; forbidden: boolean }
+const INITIAL_STATUS: LoadStatus = { loading: true, error: null, forbidden: false }
+
+function loadErrorText(e: unknown): string {
+  if (e instanceof ApiError) return e.message
+  return 'Нет соединения с сервером. Проверьте сеть и повторите.'
+}
+
+const LEGACY_SCOPE_ID_PREFIX = 'legacy-scope'
+
 /**
  * Вкладка «Шаблоны».
- *  - Выбран интенсив → план анонсов интенсива + блок «Мои дополнительные сообщения» (личные шаблоны в план не входят).
+ *  - Выбран интенсив → план анонсов интенсива (набор шаблонов: вкладки Lead_SUP или набор роли) + блок
+ *    «Мои дополнительные сообщения» (личные шаблоны в план не входят).
  *  - «Без привязки к интенсиву» → прежний список общих шаблонов со статусами («История использования вне интенсивов»)
- *    и «Мои шаблоны». Статус здесь считается только по сообщениям без привязки к интенсиву.
+ *    и «Мои шаблоны». Набор: SUP — только «Шаблоны SUP», ADM — только «Шаблоны ADM», Lead_SUP — вкладки с обоими
+ *    (тот же выбор, что и в плане, `?scope=`). Статус считается только по сообщениям без привязки к интенсиву.
  */
 export function TemplatesTab({
-  currentUserRole,
   messages,
   onSend,
   onCopyBody,
@@ -218,8 +258,10 @@ export function TemplatesTab({
   intensive = null,
   plan,
   planHandlers,
+  templateScope,
 }: {
-  currentUserRole: string
+  /** Роль пользователя (набор шаблонов задаёт templateScope) */
+  currentUserRole?: string
   messages: TemplateStatusMessage[]
   onSend: (target: TemplateSendTarget) => void
   onCopyBody: (body: string) => void
@@ -230,34 +272,67 @@ export function TemplatesTab({
   intensive?: IntensiveSummary | null
   plan?: IntensivePlanState
   planHandlers?: PlanItemRowHandlers
+  /** Набор шаблонов: SUP / ADM / вкладки Lead_SUP */
+  templateScope: TemplateScopeState
 }) {
-  const [templates, setTemplates] = useState<OfficialTemplate[]>([])
+  const [supTemplates, setSupTemplates] = useState<OfficialTemplate[]>([])
   const [admTemplates, setAdmTemplates] = useState<OfficialTemplate[]>([])
+  const [officialStatus, setOfficialStatus] = useState<LoadStatus>(INITIAL_STATUS)
   const [myTemplates, setMyTemplates] = useState<MyTemplate[]>([])
-  const [showAdm, setShowAdm] = useState(false)
-  const [loading, setLoading] = useState(true)
+  const [mineStatus, setMineStatus] = useState<LoadStatus>(INITIAL_STATUS)
   const [openIds, setOpenIds] = useState<Set<string>>(new Set())
+  const officialSeq = useRef(0)
+  const mineSeq = useRef(0)
 
-  useEffect(() => {
-    let cancelled = false
-    Promise.all([
-      fetch('/api/templates').then((r) => (r.ok ? r.json() : null)),
-      fetch('/api/templates/mine').then((r) => (r.ok ? r.json() : null)),
-    ])
-      .then(([d, mine]) => {
-        if (cancelled) return
-        if (d) {
-          if (d.templates) setTemplates(d.templates)
-          if (d.admTemplates) setAdmTemplates(d.admTemplates)
-        }
-        if (mine?.templates) setMyTemplates(mine.templates)
-      })
-      .catch(() => {})
-      .finally(() => !cancelled && setLoading(false))
-    return () => {
-      cancelled = true
+  /** GET /api/templates: SUP/Lead_SUP — templates = SUP, admTemplates = ADM; ADM — оба поля = ADM; MEMBER — 403 */
+  const loadOfficial = useCallback(async () => {
+    const seq = ++officialSeq.current
+    setOfficialStatus((s) => ({ ...s, loading: true }))
+    try {
+      const d = await apiFetch<{ templates?: OfficialTemplate[]; admTemplates?: OfficialTemplate[]; role?: string }>('/api/templates')
+      if (seq !== officialSeq.current) return
+      const adm = (d.admTemplates ?? (d.role === 'ADM' ? d.templates : undefined) ?? []).filter((t) => !t.scope || t.scope === 'ADM')
+      const sup = d.role === 'ADM' ? [] : (d.templates ?? []).filter((t) => !t.scope || t.scope === 'SUP')
+      setSupTemplates(sup)
+      setAdmTemplates(adm)
+      setOfficialStatus({ loading: false, error: null, forbidden: false })
+    } catch (e) {
+      if (seq !== officialSeq.current) return
+      if (e instanceof ApiError && e.status === 403) {
+        setOfficialStatus({ loading: false, error: null, forbidden: true })
+        return
+      }
+      setOfficialStatus({ loading: false, error: loadErrorText(e), forbidden: false })
     }
   }, [])
+
+  const loadMine = useCallback(async () => {
+    const seq = ++mineSeq.current
+    setMineStatus((s) => ({ ...s, loading: true }))
+    try {
+      const mine = await apiFetch<{ templates?: MyTemplate[] }>('/api/templates/mine')
+      if (seq !== mineSeq.current) return
+      setMyTemplates(mine.templates ?? [])
+      setMineStatus({ loading: false, error: null, forbidden: false })
+    } catch (e) {
+      if (seq !== mineSeq.current) return
+      if (e instanceof ApiError && (e.status === 403 || e.status === 401)) {
+        // Роли без личных шаблонов — просто пустой список
+        setMyTemplates([])
+        setMineStatus({ loading: false, error: null, forbidden: true })
+        return
+      }
+      setMineStatus({ loading: false, error: loadErrorText(e), forbidden: false })
+    }
+  }, [])
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      void loadOfficial()
+      void loadMine()
+    }, 0)
+    return () => clearTimeout(t)
+  }, [loadOfficial, loadMine])
 
   const planMode = !!intensive && !!plan && !!planHandlers
 
@@ -292,7 +367,9 @@ export function TemplatesTab({
       return next
     })
 
-  const officialList = currentUserRole === 'SUP' && showAdm ? admTemplates : templates
+  /** Набор общего списка: вкладка Lead_SUP или набор роли (SUP — только SUP, ADM — только ADM) */
+  const scope: TemplateScope | null = templateScope.scope
+  const officialList = scope === 'SUP' ? supTemplates : scope === 'ADM' ? admTemplates : []
 
   const officialGroups: DayGroup[] = (() => {
     const byDay = new Map<number, OfficialTemplate[]>()
@@ -373,15 +450,15 @@ export function TemplatesTab({
     </Link>
   )
 
-  // Пока не известно, выбран ли интенсив, не показываем прежний список (чтобы он не «мигал» перед планом)
-  if (!contextReady) {
-    return <RowsSkeleton label="Загрузка интенсива" />
+  // Пока не известно, выбран ли интенсив и какая роль, не показываем прежний список (чтобы он не «мигал» перед планом)
+  if (!contextReady || !templateScope.ready) {
+    return <RowsSkeleton label="Загрузка шаблонов" withDays />
   }
 
   if (planMode && intensive && plan && planHandlers) {
     return (
       <div className="space-y-8">
-        <IntensivePlanView intensive={intensive} plan={plan} handlers={planHandlers} />
+        <IntensivePlanView intensive={intensive} plan={plan} handlers={planHandlers} scope={templateScope} />
 
         <Section
           bare
@@ -389,8 +466,10 @@ export function TemplatesTab({
           description="Личные шаблоны не входят в план интенсива и не влияют на его прогресс."
           actions={editLink}
         >
-          {loading ? (
+          {mineStatus.loading && myTemplates.length === 0 && !mineStatus.error ? (
             <RowsSkeleton label="Загрузка личных шаблонов" />
+          ) : mineStatus.error && myTemplates.length === 0 ? (
+            <LoadErrorBlock title="Не удалось загрузить личные шаблоны" message={mineStatus.error} onRetry={() => void loadMine()} retrying={mineStatus.loading} />
           ) : myGroups.length === 0 ? (
             <p className="rounded-lg border border-dashed px-4 py-6 text-center text-[13px] text-muted-foreground">
               Личных шаблонов нет. Их можно создать на странице{' '}
@@ -407,55 +486,72 @@ export function TemplatesTab({
     )
   }
 
-  const legacyTitle = featureEnabled
-    ? 'История использования вне интенсивов'
-    : currentUserRole === 'SUP' && showAdm
-      ? 'Шаблоны ADM'
-      : 'Шаблоны анонсов'
+  const scopeLabel = scope ? TEMPLATE_SCOPE_LABELS[scope] : null
+  const tabs = templateScope.canSwitch && !!scope
+  const legacyTitle: ReactNode = featureEnabled ? (
+    <span className="inline-flex flex-wrap items-center gap-2">
+      История использования вне интенсивов
+      {!tabs && scope && <TemplateScopeLabel scope={scope} />}
+    </span>
+  ) : (
+    scopeLabel ?? 'Шаблоны анонсов'
+  )
   const legacyDescription = featureEnabled
-    ? `${currentUserRole === 'SUP' && showAdm ? 'Шаблоны ADM' : 'Шаблоны анонсов'}: статус считается по сообщениям этого пространства без привязки к интенсиву. Копирование текста статус не меняет.`
+    ? `${tabs || !scopeLabel ? 'Общие шаблоны' : scopeLabel}: статус считается по сообщениям этого пространства без привязки к интенсиву. Копирование текста статус не меняет.`
     : 'Статус считается по сообщениям с привязкой к шаблону в этом пространстве. Копирование текста статус не меняет.'
+
+  const officialBody = officialStatus.loading && supTemplates.length === 0 && admTemplates.length === 0 && !officialStatus.error ? (
+    <RowsSkeleton label={scopeLabel ? `Загрузка: ${scopeLabel}` : 'Загрузка шаблонов'} withDays />
+  ) : officialStatus.forbidden || !scope ? (
+    <EmptyState
+      icon={<FileText />}
+      title="Общие шаблоны недоступны"
+      description="Шаблоны анонсов доступны ролям SUP, ADM и Lead_SUP. Личные шаблоны и сообщения работают как обычно."
+    />
+  ) : officialStatus.error && supTemplates.length === 0 && admTemplates.length === 0 ? (
+    <LoadErrorBlock
+      title={scopeLabel ? `Не удалось загрузить «${scopeLabel}»` : 'Не удалось загрузить шаблоны'}
+      message={officialStatus.error}
+      onRetry={() => void loadOfficial()}
+      retrying={officialStatus.loading}
+    />
+  ) : officialGroups.length === 0 ? (
+    <EmptyState
+      icon={<FileText />}
+      title={scopeLabel ? `В наборе «${scopeLabel}» шаблонов пока нет` : 'Шаблонов пока нет'}
+      description="Когда руководитель добавит шаблоны анонсов, они появятся здесь."
+    />
+  ) : (
+    <DayGroupedList key={`official:${scope}`} groups={officialGroups} tabLabel={(day) => `День ${day}`} />
+  )
 
   return (
     <div className="space-y-6">
-      {currentUserRole === 'SUP' && admTemplates.length > 0 && (
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="text-[13px] text-muted-foreground">Источник списка</span>
-          <div className="inline-flex rounded-md border bg-muted/50 p-0.5" role="group" aria-label="Источник списка шаблонов">
-            {[
-              { value: false, label: 'Свои (SUP)' },
-              { value: true, label: 'Шаблоны ADM' },
-            ].map((o) => (
-              <button
-                key={String(o.value)}
-                type="button"
-                aria-pressed={showAdm === o.value}
-                onClick={() => setShowAdm(o.value)}
-                className={cn(
-                  'h-7 rounded-sm px-2.5 text-[13px] font-medium transition-colors',
-                  showAdm === o.value ? 'bg-background text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground',
-                )}
-              >
-                {o.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {myGroups.length > 0 && (
+      {myGroups.length > 0 ? (
         <Section bare title="Мои шаблоны" actions={editLink}>
           <DayGroupedList groups={myGroups} tabLabel={myDayLabel} />
         </Section>
-      )}
+      ) : mineStatus.error ? (
+        <LoadErrorBlock title="Не удалось загрузить личные шаблоны" message={mineStatus.error} onRetry={() => void loadMine()} retrying={mineStatus.loading} />
+      ) : null}
 
       <Section bare title={legacyTitle} description={legacyDescription}>
-        {loading ? (
-          <RowsSkeleton label="Загрузка шаблонов" />
-        ) : officialGroups.length === 0 ? (
-          <EmptyState icon={<FileText />} title="Шаблонов пока нет" description="Когда администратор добавит шаблоны анонсов, они появятся здесь." />
+        {tabs && scope ? (
+          <div className="space-y-3">
+            <TemplateScopeTabs
+              idPrefix={LEGACY_SCOPE_ID_PREFIX}
+              label="Набор общих шаблонов"
+              value={scope}
+              onChange={templateScope.setScope}
+              counts={officialStatus.loading || officialStatus.error ? undefined : { SUP: supTemplates.length, ADM: admTemplates.length }}
+              loadingScope={officialStatus.loading ? scope : null}
+            />
+            <div role="tabpanel" id={scopePanelId(LEGACY_SCOPE_ID_PREFIX)} aria-labelledby={scopeTabId(LEGACY_SCOPE_ID_PREFIX, scope)}>
+              {officialBody}
+            </div>
+          </div>
         ) : (
-          <DayGroupedList key={showAdm ? 'adm' : 'own'} groups={officialGroups} tabLabel={(day) => `День ${day}`} />
+          officialBody
         )}
       </Section>
     </div>

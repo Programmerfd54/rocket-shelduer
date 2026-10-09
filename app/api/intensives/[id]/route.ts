@@ -3,12 +3,17 @@ import { withIntensives, type RouteParams } from '@/lib/intensives/route-context
 import { assertSafeId, parseOrThrow, readJsonBody } from '@/lib/intensives/http';
 import { updateIntensiveSchema } from '@/lib/intensives/schemas';
 import { getIntensiveDetail, updateIntensive } from '@/lib/intensives/service';
+import { resolveViewScope } from '@/lib/intensives/access';
 
-/** GET /api/intensives/[id] — карточка интенсива + сводка плана (прогресс). */
-export async function GET(_request: Request, { params }: RouteParams<{ id: string }>) {
+/**
+ * GET /api/intensives/[id]?scope= — карточка интенсива + сводка плана (прогресс).
+ * scope=SUP|ADM|ALL — только Lead_SUP (прогресс по набору пунктов); остальным — по роли.
+ */
+export async function GET(request: Request, { params }: RouteParams<{ id: string }>) {
   return withIntensives('get intensive', async ({ viewer }) => {
     const id = assertSafeId((await params).id);
-    const intensive = await getIntensiveDetail(viewer, id);
+    const viewScope = resolveViewScope(viewer, new URL(request.url).searchParams.get('scope'));
+    const intensive = await getIntensiveDetail(viewer, id, new Date(), viewScope);
     return NextResponse.json({ intensive });
   });
 }

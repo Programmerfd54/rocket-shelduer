@@ -7,7 +7,7 @@ import type { PlanProgress } from '@/lib/intensives/types'
 import { cn } from '@/lib/utils'
 
 /** Подсказка «Как считается прогресс» — вместо длинного абзаца над списком. */
-export function ProgressHelp({ partial, className }: { partial?: boolean; className?: string }) {
+export function ProgressHelp({ partial, scopeNote, className }: { partial?: boolean; scopeNote?: string; className?: string }) {
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -44,6 +44,7 @@ export function ProgressHelp({ partial, className }: { partial?: boolean; classN
           <li>Копирование текста прогресс не меняет — учитываются только сообщения, запланированные из плана.</li>
           <li>Прогресс считает сервер по всем отправкам этого интенсива во всех подключениях пространства.</li>
           {partial && <li>Вы видите только доступные вам анонсы — прогресс посчитан по ним.</li>}
+          {scopeNote && <li>{scopeNote}</li>}
         </ul>
       </PopoverContent>
     </Popover>
@@ -57,11 +58,14 @@ export function ProgressHelp({ partial, className }: { partial?: boolean; classN
 export function PlanProgressSummary({
   progress,
   partial,
+  scopeNote,
   showHelp = true,
   className,
 }: {
   progress: PlanProgress
   partial: boolean
+  /** Пояснение в подсказке: по какому набору посчитан прогресс (вкладки Lead_SUP) */
+  scopeNote?: string
   showHelp?: boolean
   className?: string
 }) {
@@ -93,7 +97,7 @@ export function PlanProgressSummary({
           </span>
         ))}
       </p>
-      {showHelp && <ProgressHelp partial={partial} />}
+      {showHelp && <ProgressHelp partial={partial} scopeNote={scopeNote} />}
     </div>
   )
 }

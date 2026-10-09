@@ -64,6 +64,11 @@ model User {
   planItemsUpdated       IntensivePlanItem[] @relation("PlanItemUpdatedBy")
   planItemsSkipped       IntensivePlanItem[] @relation("PlanItemSkippedBy")
   intensiveEventsAsActor IntensiveEvent[]    @relation("IntensiveEventActor")
+
+  // Редактор официальных шаблонов (docs/templates-api.md). onDelete: SetNull.
+  customOfficialTemplatesCreated CustomOfficialTemplate[] @relation("CustomOfficialTemplateCreatedBy")
+  customOfficialTemplatesUpdated CustomOfficialTemplate[] @relation("CustomOfficialTemplateUpdatedBy")
+  templateChannelsCreated        TemplateChannel[]        @relation("TemplateChannelCreatedBy")
 }
 
 // Сессии пользователя: одна запись на каждое устройство/вход. Используется для списка активных сессий и «Выйти на всех».
@@ -176,11 +181,11 @@ model WorkspaceConnection {
   endDate   DateTime? // Дата окончания интенсива
 
   // NEW: Архивирование
-  isArchived      Boolean   @default(false)
-  archivedAt      DateTime? // Когда заархивирован
-  archiveDeleteAt DateTime? // Когда удалить (через 2 недели после архивации)
+  isArchived            Boolean   @default(false)
+  archivedAt            DateTime? // Когда заархивирован
+  archiveDeleteAt       DateTime? // Когда удалить (через 2 недели после архивации)
   /// Lead_SUP: «Не предлагать архивировать это пространство» (баннеры/тосты/фильтры «Завершённые»). Ручная архивация доступна.
-  suppressArchivePrompt Boolean @default(false)
+  suppressArchivePrompt Boolean   @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -560,17 +565,25 @@ model UserTemplateVersion {
 }
 
 // Переопределения официальных шаблонов. Приложение использует только глобальные строки (cityId null — LEGACY-колонка).
+// Любое поле = null → значение из lib/templates-data. isDeleted = встроенный шаблон скрыт (обратимо).
+// Сборка эффективного списка — lib/templates/official-templates.ts.
 model OfficialTemplateOverride {
-  id          String   @id @default(cuid())
-  templateId  String // id из lib/templates-data (например d1-09)
-  scope       String // "SUP" | "ADM"
-  cityId      String?
-  body        String   @db.Text
-  title       String?
-  channel     String? // переопределение канала (adm, announcements, general, support, services и т.д.)
-  time        String? // переопределение времени "HH:mm"
-  updatedById String
-  updatedAt   DateTime @updatedAt
+  id           String   @id @default(cuid())
+  templateId   String // id из lib/templates-data (например d1-09)
+  scope        String // "SUP" | "ADM"
+  cityId       String?
+  /// null — текст по умолчанию (до 20261009120000 колонка была NOT NULL)
+  body         String?  @db.Text
+  title        String?
+  channel      String? // переопределение канала (adm, announcements, general, support, services и т.д.)
+  time         String? // переопределение времени "HH:mm"
+  intensiveDay Int? // переопределение дня интенсива (1..366)
+  dayLabel     String? // переопределение подписи дня
+  audience     String? // 'all' | 'mk'
+  timeNote     String? // переопределение подсказки к времени
+  isDeleted    Boolean  @default(false) // встроенный шаблон удалён Lead_SUP для этой области (можно восстановить)
+  updatedById  String
+  updatedAt    DateTime @updatedAt
 
   updatedBy User  @relation(fields: [updatedById], references: [id], onDelete: Cascade)
   city      City? @relation(fields: [cityId], references: [id], onDelete: Cascade)
@@ -579,6 +592,44 @@ model OfficialTemplateOverride {
   @@index([templateId])
   @@index([scope])
   @@index([cityId])
+}
+
+/// Официальный шаблон, созданный Lead_SUP (дополняет статичные lib/templates-data). В API id = 'c_' + id.
+/// CHECK-ограничения (scope, день, время, audience) — в SQL миграции 20261009120000_templates_custom.
+model CustomOfficialTemplate {
+  id           String   @id @default(cuid())
+  scope        String // 'SUP' | 'ADM'
+  title        String
+  body         String   @db.Text
+  channel      String // имя канала (из словаря TemplateChannel, в нижнем регистре)
+  intensiveDay Int // 1..366
+  dayLabel     String?
+  time         String // 'HH:mm'
+  audience     String   @default("all") // 'all' | 'mk'
+  timeNote     String?
+  position     Int      @default(0)
+  createdById  String?
+  updatedById  String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  createdBy User? @relation("CustomOfficialTemplateCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy User? @relation("CustomOfficialTemplateUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([scope, intensiveDay, time])
+  @@index([channel])
+}
+
+/// Словарь каналов для шаблонов (селекторы каналов). name — нормализованное имя без '#', в нижнем регистре
+/// (CHECK name = lower(name) в SQL), поэтому обычный UNIQUE равен уникальности без учёта регистра.
+model TemplateChannel {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  label       String?
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  createdBy User? @relation("TemplateChannelCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
 }
 
 // Настройки системы (SUPER): ключ-значение для включения/отключения возможностей SUP/ADM
@@ -861,7 +912,8 @@ model IntensivePlanItem {
   sourceType       PlanItemSourceType
   /// id официального шаблона (d1-09) или UserTemplate.id — не FK: удаление шаблона не меняет план
   sourceTemplateId String?
-  /// Для OFFICIAL: 'ADM' | 'SUP' (набор официальных шаблонов)
+  /// Область пункта: 'ADM' | 'SUP' | null. OFFICIAL — из шаблона; CUSTOM/USER_TEMPLATE — выбирает Lead_SUP (null — для всех).
+  /// Видимость: lib/intensives/access.ts → planItemScope / canSeePlanItem.
   sourceScope      String?
   /// Хеш содержимого источника на момент снимка (для «Доступна новая версия»)
   sourceVersion    String?
